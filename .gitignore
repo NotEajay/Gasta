@@ -15,9 +15,11 @@ web-build/
 .DS_Store
 Thumbs.db
 *.log
+.idea/
 
 # Python (ETL)
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+etl/data/

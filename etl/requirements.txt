@@ -1,0 +1,4 @@
+# GasTa ETL dependencies — pin versions when implementing
+# supabase
+# pdfplumber or pymupdf
+# python-dotenv

@@ -1,67 +1,70 @@
 import { SymbolView } from 'expo-symbols';
 import { Link, Tabs } from 'expo-router';
-import { Platform, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
-import { useClientOnlyValue } from '@/components/useClientOnlyValue';
+import { useAuth } from '@/lib/auth';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const { user, signOut } = useAuth();
 
   return (
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme].tint,
-        // Disable the static render of the header on web
-        // to prevent a hydration error in React Navigation v6.
-        headerShown: useClientOnlyValue(false, true),
+        headerShown: true,
+        headerRight: () =>
+          user ? (
+            <Pressable onPress={() => signOut()} style={{ marginRight: 16 }}>
+              <SymbolView name={{ android: 'logout' }} size={22} tintColor={Colors[colorScheme].text} />
+            </Pressable>
+          ) : (
+            <Link href="/login" asChild>
+              <Pressable style={{ marginRight: 16 }}>
+                <SymbolView name={{ android: 'login' }} size={22} tintColor={Colors[colorScheme].tint} />
+              </Pressable>
+            </Link>
+          ),
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Tab One',
+          title: 'Fuel Prices',
+          tabBarLabel: 'Prices',
           tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
-              }}
-              tintColor={color}
-              size={28}
-            />
-          ),
-          headerRight: () => (
-            <Link href="/modal" asChild>
-              <Pressable style={{ marginRight: 15 }}>
-                {({ pressed }) => (
-                  <SymbolView
-                    name={{ ios: 'info.circle', android: 'info', web: 'info' }}
-                    size={25}
-                    tintColor={Colors[colorScheme].text}
-                    style={{ opacity: pressed ? 0.5 : 1 }}
-                  />
-                )}
-              </Pressable>
-            </Link>
+            <SymbolView name={{ android: 'local_gas_station' }} tintColor={color} size={24} />
           ),
         }}
       />
       <Tabs.Screen
-        name="two"
+        name="trip"
         options={{
-          title: 'Tab Two',
+          title: 'Trip Optimizer',
+          tabBarLabel: 'Trip',
           tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
-              }}
-              tintColor={color}
-              size={28}
-            />
+            <SymbolView name={{ android: 'route' }} tintColor={color} size={24} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="vehicles"
+        options={{
+          title: 'My Vehicles',
+          tabBarLabel: 'Vehicles',
+          tabBarIcon: ({ color }) => (
+            <SymbolView name={{ android: 'directions_car' }} tintColor={color} size={24} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="budget"
+        options={{
+          title: 'Fuel Budget',
+          tabBarLabel: 'Budget',
+          tabBarIcon: ({ color }) => (
+            <SymbolView name={{ android: 'account_balance_wallet' }} tintColor={color} size={24} />
           ),
         }}
       />
