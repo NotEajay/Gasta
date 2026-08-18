@@ -1,29 +1,44 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
+import AnimatedPressable from '@/components/auth/AnimatedPressable';
 import AuthButton from '@/components/auth/AuthButton';
 import AuthTextField from '@/components/auth/AuthTextField';
 import GlassSurface, { AuthBackground } from '@/components/ui/GlassSurface';
+import { useAuth } from '@/context/AuthProvider';
+import { validateSignInForm, validateSignUpForm } from '@/lib/auth';
+import { goToSignIn, goToSignUp, goToVerifyEmail } from '@/lib/navigation';
 import { GasTaColors, GasTaRadius, GasTaSpacing } from '@/constants/Theme';
 import { useResponsive } from '@/hooks/useResponsive';
 
 type AuthMode = 'signin' | 'signup';
 
 export default function AuthScreen() {
+  const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
+  const { signIn, signUp } = useAuth();
+
   const [mode, setMode] = useState<AuthMode>('signin');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   const {
     isCompact,
+    isDesktop,
     isLandscape,
     scale,
     contentMaxWidth,
@@ -32,11 +47,87 @@ export default function AuthScreen() {
     verticalPadding,
   } = useResponsive();
 
+  useEffect(() => {
+    if (modeParam === 'signin' || modeParam === 'signup') {
+      setMode(modeParam);
+      setError(null);
+    }
+  }, [modeParam]);
+
   const isSignIn = mode === 'signin';
   const titleSize = scale(isCompact ? 24 : 28);
   const subtitleSize = scale(isCompact ? 13 : 14);
   const labelSize = scale(isCompact ? 14 : 15);
   const bodySize = scale(isCompact ? 13 : 14);
+
+  const switchMode = (nextMode: AuthMode) => {
+    setMode(nextMode);
+    setError(null);
+
+    if (nextMode === 'signin') {
+      goToSignIn();
+      return;
+    }
+
+    goToSignUp();
+  };
+
+  const handleSubmit = async () => {
+    setError(null);
+
+    if (isSignIn) {
+      const validationError = validateSignInForm({ email, password });
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+
+      setLoading(true);
+      const result = await signIn(email, password);
+      setLoading(false);
+
+      if (result.error) {
+        if (result.error.includes('verify your email')) {
+          goToVerifyEmail(email.trim());
+          return;
+        }
+
+        setError(result.error);
+        return;
+      }
+
+      router.replace('/(tabs)');
+      return;
+    }
+
+    const validationError = validateSignUpForm({
+      fullName,
+      email,
+      password,
+      confirmPassword,
+    });
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
+    const result = await signUp(email, password, fullName);
+    setLoading(false);
+
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+
+    if (result.needsVerification) {
+      goToVerifyEmail(email.trim());
+      return;
+    }
+
+    router.replace('/(tabs)');
+  };
 
   return (
     <AuthBackground>
@@ -58,7 +149,12 @@ export default function AuthScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
             <View style={[styles.inner, { maxWidth: contentMaxWidth }]}>
-              <View style={[styles.hero, isLandscape && styles.heroLandscape]}>
+              <View
+                style={[
+                  styles.hero,
+                  isLandscape && styles.heroLandscape,
+                  isDesktop && styles.heroDesktop,
+                ]}>
                 <Image
                   accessibilityLabel="GasTa! logo"
                   resizeMode="contain"
@@ -72,11 +168,13 @@ export default function AuthScreen() {
 
               <GlassSurface style={styles.card} variant="strong">
                 <View style={styles.toggleRow}>
-                  <Pressable
+                  <AnimatedPressable
                     accessibilityRole="button"
                     accessibilityState={{ selected: isSignIn }}
-                    onPress={() => setMode('signin')}
-                    style={[styles.toggle, isSignIn && styles.toggleActive]}>
+                    hoverScale={1.01}
+                    pressScale={0.98}
+                    style={[styles.toggle, isSignIn && styles.toggleActive]}
+                    onPress={() => switchMode('signin')}>
                     <Text
                       style={[
                         styles.toggleText,
@@ -85,12 +183,14 @@ export default function AuthScreen() {
                       ]}>
                       Sign In
                     </Text>
-                  </Pressable>
-                  <Pressable
+                  </AnimatedPressable>
+                  <AnimatedPressable
                     accessibilityRole="button"
                     accessibilityState={{ selected: !isSignIn }}
-                    onPress={() => setMode('signup')}
-                    style={[styles.toggle, !isSignIn && styles.toggleActive]}>
+                    hoverScale={1.01}
+                    pressScale={0.98}
+                    style={[styles.toggle, !isSignIn && styles.toggleActive]}
+                    onPress={() => switchMode('signup')}>
                     <Text
                       style={[
                         styles.toggleText,
@@ -99,17 +199,25 @@ export default function AuthScreen() {
                       ]}>
                       Sign Up
                     </Text>
-                  </Pressable>
+                  </AnimatedPressable>
                 </View>
 
-                <Text style={[styles.cardTitle, { fontSize: titleSize }]}>
-                  {isSignIn ? 'Welcome back' : 'Create account'}
-                </Text>
-                <Text style={[styles.cardSubtitle, { fontSize: subtitleSize }]}>
-                  {isSignIn
-                    ? 'Track fuel prices and optimize every trip.'
-                    : 'Start making smarter, lower-cost travel choices.'}
-                </Text>
+                <View style={styles.header}>
+                  <Text style={[styles.cardTitle, { fontSize: titleSize }]}>
+                    {isSignIn ? 'Welcome back' : 'Create account'}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.cardSubtitle,
+                      { fontSize: subtitleSize, lineHeight: subtitleSize * 1.6 },
+                    ]}>
+                    {isSignIn
+                      ? 'Track fuel prices and optimize every trip.'
+                      : 'Start making smarter, lower-cost travel choices.'}
+                  </Text>
+                </View>
+
+                {error && <Text style={[styles.errorText, { fontSize: bodySize }]}>{error}</Text>}
 
                 <View style={styles.form}>
                   {!isSignIn && (
@@ -119,6 +227,8 @@ export default function AuthScreen() {
                       fontSize={bodySize}
                       label="Full name"
                       textContentType="name"
+                      value={fullName}
+                      onChangeText={setFullName}
                     />
                   )}
 
@@ -129,6 +239,8 @@ export default function AuthScreen() {
                     keyboardType="email-address"
                     label="Email address"
                     textContentType="emailAddress"
+                    value={email}
+                    onChangeText={setEmail}
                   />
 
                   <AuthTextField
@@ -137,6 +249,8 @@ export default function AuthScreen() {
                     label="Password"
                     secureTextEntry
                     textContentType={isSignIn ? 'password' : 'newPassword'}
+                    value={password}
+                    onChangeText={setPassword}
                   />
 
                   {!isSignIn && (
@@ -146,21 +260,29 @@ export default function AuthScreen() {
                       label="Confirm password"
                       secureTextEntry
                       textContentType="newPassword"
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
                     />
                   )}
 
                   {isSignIn && (
-                    <Pressable accessibilityRole="button" style={styles.forgotRow}>
+                    <AnimatedPressable
+                      accessibilityRole="button"
+                      hoverScale={1}
+                      pressScale={0.98}
+                      style={styles.forgotRow}
+                      onPress={() => router.push('/(auth)/forgot-password')}>
                       <Text style={[styles.forgotText, { fontSize: bodySize }]}>
                         Forgot password?
                       </Text>
-                    </Pressable>
+                    </AnimatedPressable>
                   )}
 
                   <AuthButton
                     fontSize={labelSize}
                     label={isSignIn ? 'Sign In' : 'Create Account'}
-                    onPress={() => undefined}
+                    loading={loading}
+                    onPress={handleSubmit}
                   />
 
                   <View style={styles.dividerRow}>
@@ -170,6 +292,7 @@ export default function AuthScreen() {
                   </View>
 
                   <AuthButton
+                    disabled
                     fontSize={labelSize}
                     label={isSignIn ? 'Continue with Google' : 'Sign up with Google'}
                     variant="secondary"
@@ -182,13 +305,15 @@ export default function AuthScreen() {
                 <Text style={[styles.footerText, { fontSize: bodySize }]}>
                   {isSignIn ? "Don't have an account? " : 'Already have an account? '}
                 </Text>
-                <Pressable
+                <AnimatedPressable
                   accessibilityRole="button"
-                  onPress={() => setMode(isSignIn ? 'signup' : 'signin')}>
+                  hoverScale={1}
+                  pressScale={0.98}
+                  onPress={() => switchMode(isSignIn ? 'signup' : 'signin')}>
                   <Text style={[styles.footerLink, { fontSize: bodySize }]}>
                     {isSignIn ? 'Sign Up' : 'Sign In'}
                   </Text>
-                </Pressable>
+                </AnimatedPressable>
               </View>
             </View>
           </ScrollView>
@@ -222,22 +347,25 @@ const styles = StyleSheet.create({
   heroLandscape: {
     marginBottom: GasTaSpacing.md,
   },
+  heroDesktop: {
+    marginBottom: GasTaSpacing.lg,
+  },
   card: {
-    padding: GasTaSpacing.lg,
-    gap: GasTaSpacing.md,
+    padding: GasTaSpacing.xl,
+    gap: GasTaSpacing.lg,
   },
   toggleRow: {
     flexDirection: 'row',
     backgroundColor: 'rgba(1, 68, 33, 0.06)',
     borderRadius: GasTaRadius.sm,
-    padding: 4,
-    gap: 4,
+    padding: 5,
+    gap: 6,
     borderWidth: 1,
     borderColor: GasTaColors.glassBorderSubtle,
   },
   toggle: {
     flex: 1,
-    paddingVertical: 11,
+    paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
   },
@@ -252,10 +380,15 @@ const styles = StyleSheet.create({
   toggleText: {
     color: GasTaColors.textSoft,
     fontWeight: '600',
+    letterSpacing: 0.2,
   },
   toggleTextActive: {
     color: GasTaColors.textOnForest,
     fontWeight: '800',
+  },
+  header: {
+    gap: GasTaSpacing.sm,
+    marginTop: GasTaSpacing.xs,
   },
   cardTitle: {
     color: GasTaColors.textPrimary,
@@ -264,16 +397,18 @@ const styles = StyleSheet.create({
   },
   cardSubtitle: {
     color: GasTaColors.textMuted,
-    lineHeight: 22,
-    marginTop: -4,
+  },
+  errorText: {
+    color: GasTaColors.error,
+    fontWeight: '600',
   },
   form: {
-    gap: GasTaSpacing.md,
-    marginTop: GasTaSpacing.xs,
+    gap: GasTaSpacing.lg,
+    marginTop: GasTaSpacing.sm,
   },
   forgotRow: {
     alignSelf: 'flex-end',
-    marginTop: -4,
+    paddingVertical: GasTaSpacing.xs,
   },
   forgotText: {
     color: GasTaColors.forestDark,
@@ -282,7 +417,8 @@ const styles = StyleSheet.create({
   dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: GasTaSpacing.sm,
+    gap: GasTaSpacing.md,
+    marginVertical: GasTaSpacing.xs,
   },
   dividerLine: {
     flex: 1,
@@ -293,13 +429,15 @@ const styles = StyleSheet.create({
     color: GasTaColors.textSoft,
     fontWeight: '500',
     textTransform: 'lowercase',
+    letterSpacing: 0.3,
   },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
     flexWrap: 'wrap',
-    marginTop: GasTaSpacing.lg,
+    marginTop: GasTaSpacing.xl,
     paddingBottom: GasTaSpacing.sm,
+    gap: GasTaSpacing.xs,
   },
   footerText: {
     color: GasTaColors.textMuted,

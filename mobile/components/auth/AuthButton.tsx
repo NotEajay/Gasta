@@ -1,5 +1,12 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
+import AnimatedPressable from '@/components/auth/AnimatedPressable';
 import { GasTaColors, GasTaRadius } from '@/constants/Theme';
 
 type AuthButtonProps = {
@@ -11,6 +18,8 @@ type AuthButtonProps = {
   fontSize?: number;
 };
 
+const HOVER_DURATION = 180;
+
 export default function AuthButton({
   label,
   onPress,
@@ -21,35 +30,89 @@ export default function AuthButton({
 }: AuthButtonProps) {
   const isPrimary = variant === 'primary';
   const isSecondary = variant === 'secondary';
+  const hoverProgress = useSharedValue(0);
+
+  const animatedSurfaceStyle = useAnimatedStyle(() => {
+    if (!isPrimary && !isSecondary) {
+      return {};
+    }
+
+    if (isPrimary) {
+      return {
+        backgroundColor: interpolateColor(
+          hoverProgress.value,
+          [0, 1],
+          [GasTaColors.forest, GasTaColors.forestDark],
+        ),
+      };
+    }
+
+    return {
+      backgroundColor: interpolateColor(
+        hoverProgress.value,
+        [0, 1],
+        ['rgba(248, 240, 229, 0.55)', 'rgba(1, 68, 33, 0.08)'],
+      ),
+    };
+  });
+
+  const handleHoverIn = () => {
+    if (!disabled && !loading && Platform.OS === 'web') {
+      hoverProgress.value = withTiming(1, { duration: HOVER_DURATION });
+    }
+  };
+
+  const handleHoverOut = () => {
+    if (Platform.OS === 'web') {
+      hoverProgress.value = withTiming(0, { duration: HOVER_DURATION });
+    }
+  };
 
   return (
-    <Pressable
+    <AnimatedPressable
       accessibilityRole="button"
       disabled={disabled || loading}
+      hoverScale={1.01}
+      pressScale={0.975}
+      onHoverIn={handleHoverIn}
+      onHoverOut={handleHoverOut}
       onPress={onPress}
-      style={({ pressed }) => [
+      style={[
         styles.base,
         isPrimary && styles.primary,
         isSecondary && styles.secondary,
         variant === 'ghost' && styles.ghost,
         (disabled || loading) && styles.disabled,
-        pressed && !disabled && styles.pressed,
       ]}>
-      {loading ? (
-        <ActivityIndicator color={isPrimary ? GasTaColors.textOnForest : GasTaColors.forest} />
-      ) : (
-        <Text
+      {(isPrimary || isSecondary) && (
+        <Animated.View
+          pointerEvents="none"
           style={[
-            styles.label,
-            { fontSize },
-            isPrimary && styles.primaryLabel,
-            isSecondary && styles.secondaryLabel,
-            variant === 'ghost' && styles.ghostLabel,
-          ]}>
-          {label}
-        </Text>
+            StyleSheet.absoluteFill,
+            styles.surface,
+            isPrimary && styles.primary,
+            isSecondary && styles.secondary,
+            animatedSurfaceStyle,
+          ]}
+        />
       )}
-    </Pressable>
+      <View style={styles.content}>
+        {loading ? (
+          <ActivityIndicator color={isPrimary ? GasTaColors.textOnForest : GasTaColors.forest} />
+        ) : (
+          <Text
+            style={[
+              styles.label,
+              { fontSize },
+              isPrimary && styles.primaryLabel,
+              isSecondary && styles.secondaryLabel,
+              variant === 'ghost' && styles.ghostLabel,
+            ]}>
+            {label}
+          </Text>
+        )}
+      </View>
+    </AnimatedPressable>
   );
 }
 
@@ -57,10 +120,17 @@ const styles = StyleSheet.create({
   base: {
     width: '100%',
     borderRadius: GasTaRadius.sm,
+    minHeight: 52,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  surface: {
+    borderRadius: GasTaRadius.sm,
+  },
+  content: {
     paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 52,
   },
   primary: {
     backgroundColor: GasTaColors.forest,
@@ -80,10 +150,6 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
-  },
-  pressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.985 }],
   },
   label: {
     fontWeight: '700',
