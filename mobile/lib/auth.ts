@@ -27,6 +27,16 @@ function isExistingUserSignUp(user: User | null) {
   return Boolean(user && Array.isArray(user.identities) && user.identities.length === 0);
 }
 
+export async function isEmailTaken(email: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('email_exists', { p_email: normalizeEmail(email) });
+
+  if (error) {
+    return false;
+  }
+
+  return data === true;
+}
+
 function mapAuthError(error: AuthError | null): string | null {
   if (!error) {
     return null;
@@ -89,6 +99,10 @@ export async function signUpWithEmail(
       error: 'Supabase is not configured. Add your env keys in mobile/.env.',
       needsVerification: false,
     };
+  }
+
+  if (await isEmailTaken(email)) {
+    return { error: DUPLICATE_EMAIL_ERROR, needsVerification: false };
   }
 
   const { data, error } = await supabase.auth.signUp({

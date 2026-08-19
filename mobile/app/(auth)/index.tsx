@@ -17,7 +17,7 @@ import AuthButton from '@/components/auth/AuthButton';
 import AuthTextField from '@/components/auth/AuthTextField';
 import GlassSurface, { AuthBackground } from '@/components/ui/GlassSurface';
 import { useAuth } from '@/context/AuthProvider';
-import { validateSignInForm, validateSignUpForm } from '@/lib/auth';
+import { isEmailTaken, validateSignInForm, validateSignUpForm } from '@/lib/auth';
 import { goToSignIn, goToSignUp, goToVerifyEmail } from '@/lib/navigation';
 import { GasTaColors, GasTaRadius, GasTaSpacing } from '@/constants/Theme';
 import { useResponsive } from '@/hooks/useResponsive';
@@ -34,6 +34,7 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [emailWarning, setEmailWarning] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const {
@@ -60,9 +61,20 @@ export default function AuthScreen() {
   const labelSize = scale(isCompact ? 14 : 15);
   const bodySize = scale(isCompact ? 13 : 14);
 
+  const checkEmailAvailability = async () => {
+    if (isSignIn || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setEmailWarning(null);
+      return;
+    }
+
+    const taken = await isEmailTaken(email);
+    setEmailWarning(taken ? 'An account with this email already exists.' : null);
+  };
+
   const switchMode = (nextMode: AuthMode) => {
     setMode(nextMode);
     setError(null);
+    setEmailWarning(null);
 
     if (nextMode === 'signin') {
       goToSignIn();
@@ -240,8 +252,16 @@ export default function AuthScreen() {
                     label="Email address"
                     textContentType="emailAddress"
                     value={email}
-                    onChangeText={setEmail}
+                    onBlur={checkEmailAvailability}
+                    onChangeText={(value) => {
+                      setEmail(value);
+                      setEmailWarning(null);
+                    }}
                   />
+
+                  {!isSignIn && emailWarning && (
+                    <Text style={[styles.errorText, { fontSize: bodySize }]}>{emailWarning}</Text>
+                  )}
 
                   <AuthTextField
                     autoComplete={isSignIn ? 'password' : 'new-password'}
