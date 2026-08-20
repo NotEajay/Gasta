@@ -10,15 +10,19 @@ import {
 } from 'react';
 
 import {
+  createSessionFromUrl,
   getSession,
   isEmailVerified,
   resendVerificationEmail,
   resetPasswordForEmail,
+  signInWithGoogle as authSignInWithGoogle,
   signInWithPassword,
   signOut as authSignOut,
   signUpWithEmail,
 } from '@/lib/auth';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { ensureProfile } from '@/lib/profile';
+import * as Linking from 'expo-linking';
 
 type AuthContextValue = {
   session: Session | null;
@@ -31,6 +35,7 @@ type AuthContextValue = {
     password: string,
     fullName: string,
   ) => Promise<{ error: string | null; needsVerification: boolean }>;
+  signInWithGoogle: () => Promise<{ error: string | null }>;
   signOut: () => Promise<{ error: string | null }>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
   resendVerification: (email: string) => Promise<{ error: string | null }>;
@@ -51,15 +56,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     getSession().then((currentSession) => {
       setSession(currentSession);
       setIsLoading(false);
+      if (currentSession?.user) {
+        void ensureProfile(currentSession.user);
+      }
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
       setIsLoading(false);
+
+      if (nextSession?.user && event !== 'TOKEN_REFRESHED') {
+        setTimeout(() => {
+          void ensureProfile(nextSession.user);
+        }, 0);
+      }
     });
+
+    const handleUrl = ({ url }: { url: string }) => {
+      void createSessionFromUrl(url);
+    };
+
+    const linking = Linking.addEventListener('url', handleUrl);
+
+    if (typeof window === 'undefined' || !window.location.pathname.includes('/auth/callback')) {
+      void Linking.getInitialURL().then((url) => {
+        void createSessionFromUrl(url);
+      });
+    }
 
     return () => {
       data.subscription.unsubscribe();
+      linking.remove();
     };
   }, []);
 
@@ -70,6 +97,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = useCallback(async (email: string, password: string, fullName: string) => {
     return signUpWithEmail(email, password, fullName);
+  }, []);
+
+  const signInWithGoogle = useCallback(async () => {
+    return authSignInWithGoogle();
   }, []);
 
   const signOut = useCallback(async () => {
@@ -92,11 +123,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isEmailVerified: isEmailVerified(session?.user ?? null),
       signIn,
       signUp,
+      signInWithGoogle,
       signOut,
       resetPassword,
       resendVerification,
     }),
-    [session, isLoading, signIn, signUp, signOut, resetPassword, resendVerification],
+    [session, isLoading, signIn, signUp, signInWithGoogle, signOut, resetPassword, resendVerification],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

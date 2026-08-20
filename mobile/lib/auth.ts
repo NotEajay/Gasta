@@ -1,10 +1,20 @@
+import { makeRedirectUri } from 'expo-auth-session';
 import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import type { AuthError, Session, User } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 
+WebBrowser.maybeCompleteAuthSession();
+
+const initialWebHref = typeof window !== 'undefined' ? window.location.href : null;
+const usedAuthCodes = new Set<string>();
+let oauthCompletion: Promise<AuthResult> | null = null;
+
 export type AuthResult = {
   error: string | null;
+  pendingRedirect?: boolean;
 };
 
 export type SignUpResult = AuthResult & {
@@ -13,6 +23,171 @@ export type SignUpResult = AuthResult & {
 
 function getRedirectUrl() {
   return Linking.createURL('/');
+}
+
+export function getOAuthRedirectUrl() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return new URL('/auth/callback', window.location.origin).toString();
+  }
+
+  return makeRedirectUri({
+    scheme: 'gasta',
+    path: 'auth/callback',
+  });
+}
+
+function parseAuthParams(url: string) {
+  const params = new URLSearchParams();
+  const queryIndex = url.indexOf('?');
+  const hashIndex = url.indexOf('#');
+
+  if (queryIndex >= 0) {
+    const queryEnd = hashIndex > queryIndex ? hashIndex : url.length;
+    new URLSearchParams(url.slice(queryIndex + 1, queryEnd)).forEach((value, key) => {
+      params.set(key, value);
+    });
+  }
+
+  if (hashIndex >= 0) {
+    new URLSearchParams(url.slice(hashIndex + 1)).forEach((value, key) => {
+      params.set(key, value);
+    });
+  }
+
+  return params;
+}
+
+export async function createSessionFromUrl(url: string | null): Promise<AuthResult> {
+  if (!isSupabaseConfigured) {
+    return { error: null };
+  }
+
+  const existing = await supabase.auth.getSession();
+  if (existing.data.session) {
+    return { error: null };
+  }
+
+  const href = url || initialWebHref;
+  if (!href) {
+    return { error: null };
+  }
+
+  const params = parseAuthParams(href);
+  const errorDescription = params.get('error_description') ?? params.get('error');
+
+  if (errorDescription && errorDescription !== 'null') {
+    return { error: decodeURIComponent(errorDescription.replace(/\+/g, ' ')) };
+  }
+
+  const code = params.get('code');
+  if (code) {
+    if (oauthCompletion) {
+      return oauthCompletion;
+    }
+
+    oauthCompletion = (async () => {
+      if (!usedAuthCodes.has(code)) {
+        usedAuthCodes.add(code);
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          const afterError = await supabase.auth.getSession();
+          if (afterError.data.session) {
+            return { error: null };
+          }
+          return { error: mapAuthError(error) };
+        }
+      }
+
+      return { error: null };
+    })();
+
+    return oauthCompletion;
+  }
+
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+  if (accessToken && refreshToken) {
+    const { error } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    return { error: mapAuthError(error) };
+  }
+
+  return { error: null };
+}
+
+export async function waitForSession(timeoutMs = 8000) {
+  const current = await supabase.auth.getSession();
+  if (current.data.session) {
+    return current.data.session;
+  }
+
+  return new Promise<Session | null>((resolve) => {
+    const timeout = setTimeout(() => {
+      subscription.unsubscribe();
+      resolve(null);
+    }, timeoutMs);
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        return;
+      }
+
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+      resolve(session);
+    });
+  });
+}
+
+export async function signInWithGoogle(): Promise<AuthResult> {
+  if (!isSupabaseConfigured) {
+    return { error: 'Supabase is not configured. Add your env keys in mobile/.env.' };
+  }
+
+  const redirectTo = getOAuthRedirectUrl();
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+      skipBrowserRedirect: true,
+      queryParams: {
+        prompt: 'select_account',
+      },
+    },
+  });
+
+  if (error || !data.url) {
+    return { error: mapAuthError(error) ?? 'Unable to start Google sign-in.' };
+  }
+
+  if (__DEV__) {
+    console.log('[auth] Google redirect URL (add this in Supabase Auth URL config):', redirectTo);
+  }
+
+  // Mobile browsers block popups if window.open() runs after an await.
+  // Stay in this tab on web so Google can return to /auth/callback.
+  if (Platform.OS === 'web') {
+    window.location.assign(data.url);
+    return { error: null, pendingRedirect: true };
+  }
+
+  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, {
+    showInRecents: true,
+  });
+
+  if (result.type === 'success' && result.url) {
+    return createSessionFromUrl(result.url);
+  }
+
+  if (result.type === 'cancel' || result.type === 'dismiss') {
+    return { error: null };
+  }
+
+  return { error: 'Google sign-in did not complete.' };
 }
 
 const DUPLICATE_EMAIL_MESSAGE =
@@ -27,6 +202,10 @@ function mapAuthError(error: AuthError | null): string | null {
 
   if (error.message === 'Invalid login credentials') {
     return 'Incorrect email or password.';
+  }
+
+  if (message.includes('provider is not enabled') || message.includes('unsupported provider')) {
+    return 'Google sign-in is not enabled. Turn on the Google provider in Supabase Auth.';
   }
 
   if (
@@ -53,7 +232,21 @@ function looksLikeExistingAccount(user: User | null): boolean {
 }
 
 export function isEmailVerified(user: User | null) {
-  return Boolean(user?.email_confirmed_at);
+  if (!user) {
+    return false;
+  }
+
+  if (user.email_confirmed_at) {
+    return true;
+  }
+
+  const provider = user.app_metadata?.provider;
+  const providers = user.app_metadata?.providers;
+  if (provider === 'google' || (Array.isArray(providers) && providers.includes('google'))) {
+    return true;
+  }
+
+  return (user.identities ?? []).some((identity) => identity.provider === 'google');
 }
 
 export async function getSession(): Promise<Session | null> {

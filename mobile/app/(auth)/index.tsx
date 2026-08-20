@@ -26,7 +26,7 @@ type AuthMode = 'signin' | 'signup';
 
 export default function AuthScreen() {
   const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, signInWithGoogle } = useAuth();
 
   const [mode, setMode] = useState<AuthMode>('signin');
   const [fullName, setFullName] = useState('');
@@ -35,6 +35,7 @@ export default function AuthScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const {
     isCompact,
@@ -123,6 +124,24 @@ export default function AuthScreen() {
 
     if (result.needsVerification) {
       goToVerifyEmail(email.trim());
+      return;
+    }
+
+    router.replace('/(tabs)');
+  };
+
+  const handleGoogleAuth = async () => {
+    setError(null);
+    setGoogleLoading(true);
+    const result = await signInWithGoogle();
+    setGoogleLoading(false);
+
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+
+    if (result.pendingRedirect) {
       return;
     }
 
@@ -279,6 +298,7 @@ export default function AuthScreen() {
                   )}
 
                   <AuthButton
+                    disabled={googleLoading}
                     fontSize={labelSize}
                     label={isSignIn ? 'Sign In' : 'Create Account'}
                     loading={loading}
@@ -292,11 +312,12 @@ export default function AuthScreen() {
                   </View>
 
                   <AuthButton
-                    disabled
+                    disabled={loading}
                     fontSize={labelSize}
                     label={isSignIn ? 'Continue with Google' : 'Sign up with Google'}
+                    loading={googleLoading}
                     variant="secondary"
-                    onPress={() => undefined}
+                    onPress={handleGoogleAuth}
                   />
                 </View>
               </GlassSurface>

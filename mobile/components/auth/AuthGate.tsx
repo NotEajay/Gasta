@@ -11,13 +11,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }
 
   const inAuthGroup = segments[0] === '(auth)';
+  const inOAuthCallback = segments[0] === 'auth';
   const onVerifyEmail = (segments as string[]).includes('verify-email');
 
-  if (session && isEmailVerified && inAuthGroup) {
+  if (session && isEmailVerified && (inAuthGroup || inOAuthCallback)) {
     return <Redirect href="/(tabs)" />;
   }
 
-  if (session && !isEmailVerified && inAuthGroup && !onVerifyEmail) {
+  if (session && !isEmailVerified && (inAuthGroup || inOAuthCallback) && !onVerifyEmail) {
     return (
       <Redirect
         href={
@@ -27,7 +28,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!session && !inAuthGroup) {
+  if (!session && !inAuthGroup && !inOAuthCallback) {
     return <Redirect href="/(auth)" />;
   }
 
@@ -46,6 +47,7 @@ export function RootStack() {
   return (
     <Stack>
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+      <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
     </Stack>
