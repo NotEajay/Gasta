@@ -15,19 +15,41 @@ function getRedirectUrl() {
   return Linking.createURL('/');
 }
 
+const DUPLICATE_EMAIL_MESSAGE =
+  'An account with this email already exists. Try signing in instead.';
+
 function mapAuthError(error: AuthError | null): string | null {
   if (!error) {
     return null;
   }
 
-  switch (error.message) {
-    case 'Invalid login credentials':
-      return 'Incorrect email or password.';
-    case 'User already registered':
-      return 'An account with this email already exists. Try signing in instead.';
-    default:
-      return error.message;
+  const message = error.message.toLowerCase();
+
+  if (error.message === 'Invalid login credentials') {
+    return 'Incorrect email or password.';
   }
+
+  if (
+    message.includes('already registered') ||
+    message.includes('already been registered') ||
+    message.includes('user already exists') ||
+    message.includes('duplicate key') ||
+    message.includes('already exists')
+  ) {
+    return DUPLICATE_EMAIL_MESSAGE;
+  }
+
+  return error.message;
+}
+
+function looksLikeExistingAccount(user: User | null): boolean {
+  if (!user) {
+    return false;
+  }
+
+  // With email confirmation enabled, Supabase returns a user with no identities
+  // instead of an error when the email is already registered.
+  return Array.isArray(user.identities) && user.identities.length === 0;
 }
 
 export function isEmailVerified(user: User | null) {
@@ -49,7 +71,7 @@ export async function signInWithPassword(email: string, password: string): Promi
   }
 
   const { data, error } = await supabase.auth.signInWithPassword({
-    email: email.trim(),
+    email: email.trim().toLowerCase(),
     password,
   });
 
@@ -78,7 +100,7 @@ export async function signUpWithEmail(
   }
 
   const { data, error } = await supabase.auth.signUp({
-    email: email.trim(),
+    email: email.trim().toLowerCase(),
     password,
     options: {
       data: {
@@ -90,6 +112,10 @@ export async function signUpWithEmail(
 
   if (error) {
     return { error: mapAuthError(error), needsVerification: false };
+  }
+
+  if (looksLikeExistingAccount(data.user)) {
+    return { error: DUPLICATE_EMAIL_MESSAGE, needsVerification: false };
   }
 
   const needsVerification = !isEmailVerified(data.user);
@@ -106,7 +132,7 @@ export async function resetPasswordForEmail(email: string): Promise<AuthResult> 
     return { error: 'Supabase is not configured. Add your env keys in mobile/.env.' };
   }
 
-  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
     redirectTo: getRedirectUrl(),
   });
 
@@ -119,7 +145,7 @@ export async function sendPasswordResetCode(email: string): Promise<AuthResult> 
   }
 
   const { error } = await supabase.auth.signInWithOtp({
-    email: email.trim(),
+    email: email.trim().toLowerCase(),
     options: {
       shouldCreateUser: false,
     },
@@ -134,7 +160,7 @@ export async function verifyPasswordResetCode(email: string, token: string): Pro
   }
 
   const { error } = await supabase.auth.verifyOtp({
-    email: email.trim(),
+    email: email.trim().toLowerCase(),
     token: token.trim(),
     type: 'email',
   });
@@ -158,7 +184,7 @@ export async function resendVerificationEmail(email: string): Promise<AuthResult
 
   const { error } = await supabase.auth.resend({
     type: 'signup',
-    email: email.trim(),
+    email: email.trim().toLowerCase(),
     options: {
       emailRedirectTo: getRedirectUrl(),
     },
