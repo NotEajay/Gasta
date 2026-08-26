@@ -1,18 +1,27 @@
 import { StyleSheet, View, type ViewProps } from 'react-native';
 
-import { useColorScheme } from '@/components/useColorScheme';
+import { radii, shadow, spacing } from '@/constants/theme';
+import { useTheme } from '@/lib/useTheme';
 
-export default function Card({ style, ...props }: ViewProps) {
-  const scheme = useColorScheme();
+interface CardProps extends ViewProps {
+  elevated?: boolean;
+  compact?: boolean;
+}
+
+export default function Card({ style, elevated, compact, ...props }: CardProps) {
+  const theme = useTheme();
+
   return (
     <View
       {...props}
       style={[
         styles.card,
         {
-          backgroundColor: scheme === 'dark' ? '#1a1a1a' : '#f7f9fc',
-          borderColor: scheme === 'dark' ? '#333' : '#e2e8f0',
+          backgroundColor: theme.surface,
+          borderColor: theme.border,
         },
+        elevated && shadow(theme.scheme, 'md'),
+        compact && styles.compact,
         style,
       ]}
     />
@@ -21,9 +30,13 @@ export default function Card({ style, ...props }: ViewProps) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 12,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    padding: 16,
-    marginBottom: 12,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  compact: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
 });

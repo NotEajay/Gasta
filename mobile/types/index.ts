@@ -63,6 +63,8 @@ export interface Vehicle {
   fuel_type_id: string;
   fuel_efficiency_km_per_liter: number;
   nickname: string | null;
+  last_refill_price: number | null;
+  last_refill_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -83,6 +85,19 @@ export interface FuelBudget {
   month: number;
   limit_amount: number;
   alert_threshold_percent: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedTrip {
+  id: string;
+  user_id: string;
+  name: string;
+  origin_label: string | null;
+  destination_label: string | null;
+  vehicle_id: string | null;
+  distance_km: number;
+  mcda_weights: import('./mcda').MCDAWeights;
   created_at: string;
   updated_at: string;
 }

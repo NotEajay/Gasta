@@ -1,73 +1,120 @@
 import { SymbolView } from 'expo-symbols';
-import { Link, Tabs } from 'expo-router';
-import { Pressable } from 'react-native';
+import { Tabs } from 'expo-router';
+import { StyleSheet, View, type ColorValue } from 'react-native';
 
-import Colors from '@/constants/Colors';
+import { moduleColors, tabConfig } from '@/constants/moduleColors';
+import { radii, spacing } from '@/constants/theme';
 import { useColorScheme } from '@/components/useColorScheme';
-import { useAuth } from '@/lib/auth';
+
+function TabIcon({
+  name,
+  module,
+  focused,
+  color,
+}: {
+  name: 'local_gas_station' | 'route' | 'directions_car' | 'account_balance_wallet';
+  module: keyof typeof moduleColors;
+  focused: boolean;
+  color: ColorValue;
+}) {
+  const scheme = useColorScheme();
+  const accent = moduleColors[module];
+  const inactive = typeof color === 'string' ? color : '#94A3B8';
+
+  return (
+    <View
+      style={[
+        styles.iconWrap,
+        focused && {
+          backgroundColor: scheme === 'dark' ? accent.gradientTop : accent.soft,
+        },
+      ]}>
+      <SymbolView
+        name={{ android: name }}
+        tintColor={focused ? accent.main : inactive}
+        size={22}
+      />
+    </View>
+  );
+}
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
-  const { user, signOut } = useAuth();
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme].tint,
-        headerShown: true,
-        headerRight: () =>
-          user ? (
-            <Pressable onPress={() => signOut()} style={{ marginRight: 16 }}>
-              <SymbolView name={{ android: 'logout' }} size={22} tintColor={Colors[colorScheme].text} />
-            </Pressable>
-          ) : (
-            <Link href="/login" asChild>
-              <Pressable style={{ marginRight: 16 }}>
-                <SymbolView name={{ android: 'login' }} size={22} tintColor={Colors[colorScheme].tint} />
-              </Pressable>
-            </Link>
-          ),
+        headerShown: false,
+        tabBarActiveTintColor: moduleColors.prices.main,
+        tabBarInactiveTintColor: colorScheme === 'dark' ? '#64748B' : '#94A3B8',
+        tabBarStyle: {
+          backgroundColor: colorScheme === 'dark' ? '#0F172A' : '#FFFFFF',
+          borderTopColor: colorScheme === 'dark' ? '#1E293B' : '#E2E8F0',
+          borderTopWidth: 1,
+          paddingTop: spacing.sm,
+          height: 64,
+          elevation: 12,
+          shadowColor: '#0F172A',
+          shadowOffset: { width: 0, height: -4 },
+          shadowOpacity: 0.06,
+          shadowRadius: 8,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '700',
+          marginBottom: spacing.xs,
+        },
       }}>
       <Tabs.Screen
-        name="index"
+        name="prices"
         options={{
-          title: 'Fuel Prices',
-          tabBarLabel: 'Prices',
-          tabBarIcon: ({ color }) => (
-            <SymbolView name={{ android: 'local_gas_station' }} tintColor={color} size={24} />
+          title: tabConfig.prices.label,
+          tabBarActiveTintColor: moduleColors.prices.main,
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="local_gas_station" module="prices" focused={focused} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="trip"
         options={{
-          title: 'Trip Optimizer',
-          tabBarLabel: 'Trip',
-          tabBarIcon: ({ color }) => (
-            <SymbolView name={{ android: 'route' }} tintColor={color} size={24} />
+          title: tabConfig.trip.label,
+          tabBarActiveTintColor: moduleColors.trip.main,
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="route" module="trip" focused={focused} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="vehicles"
         options={{
-          title: 'My Vehicles',
-          tabBarLabel: 'Vehicles',
-          tabBarIcon: ({ color }) => (
-            <SymbolView name={{ android: 'directions_car' }} tintColor={color} size={24} />
+          title: tabConfig.vehicles.label,
+          tabBarActiveTintColor: moduleColors.vehicles.main,
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="directions_car" module="vehicles" focused={focused} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="budget"
         options={{
-          title: 'Fuel Budget',
-          tabBarLabel: 'Budget',
-          tabBarIcon: ({ color }) => (
-            <SymbolView name={{ android: 'account_balance_wallet' }} tintColor={color} size={24} />
+          title: tabConfig.budget.label,
+          tabBarActiveTintColor: moduleColors.budget.main,
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="account_balance_wallet" module="budget" focused={focused} color={color} />
           ),
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  iconWrap: {
+    width: 44,
+    height: 28,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

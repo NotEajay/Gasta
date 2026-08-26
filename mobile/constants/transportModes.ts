@@ -1,4 +1,4 @@
-/** Transport modes evaluated by the Trip Cost Optimizer MCDA engine. */
+/** Transport modes evaluated by the Trip Cost Optimizer SAW engine. */
 
 export const TRANSPORT_MODES = [
   { code: 'OWN_VEHICLE', name: 'Own Vehicle' },

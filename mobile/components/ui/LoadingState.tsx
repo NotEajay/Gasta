@@ -1,12 +1,16 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
+import { palette, spacing, typography } from '@/constants/theme';
+import { useTheme } from '@/lib/useTheme';
 
 export default function LoadingState({ message = 'Loading…' }: { message?: string }) {
+  const theme = useTheme();
+
   return (
-    <View style={styles.container}>
-      <ActivityIndicator size="large" />
-      <Text style={styles.text}>{message}</Text>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
+      <ActivityIndicator size="large" color={palette.primary} />
+      <Text style={[styles.text, { color: theme.textSecondary }]}>{message}</Text>
     </View>
   );
 }
@@ -16,10 +20,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    padding: spacing.xxl,
   },
   text: {
-    marginTop: 12,
-    opacity: 0.7,
+    marginTop: spacing.md,
+    ...typography.body,
   },
 });

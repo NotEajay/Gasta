@@ -1,30 +1,31 @@
 import { StyleSheet, TextInput as RNTextInput, View, type TextInputProps } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { useColorScheme } from '@/components/useColorScheme';
+import { radii, spacing, typography } from '@/constants/theme';
+import { useTheme } from '@/lib/useTheme';
 
 interface LabeledInputProps extends TextInputProps {
   label: string;
 }
 
 export default function LabeledInput({ label, style, ...props }: LabeledInputProps) {
-  const scheme = useColorScheme();
+  const theme = useTheme();
 
   return (
     <View style={styles.container}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, { color: theme.textSecondary }]}>{label}</Text>
       <RNTextInput
         {...props}
         style={[
           styles.input,
           {
-            color: scheme === 'dark' ? '#fff' : '#000',
-            borderColor: scheme === 'dark' ? '#444' : '#ccc',
-            backgroundColor: scheme === 'dark' ? '#111' : '#fff',
+            color: theme.text,
+            borderColor: theme.border,
+            backgroundColor: theme.scheme === 'dark' ? theme.background : '#FAFBFC',
           },
           style,
         ]}
-        placeholderTextColor={scheme === 'dark' ? '#888' : '#999'}
+        placeholderTextColor={theme.textMuted}
       />
     </View>
   );
@@ -32,18 +33,17 @@ export default function LabeledInput({ label, style, ...props }: LabeledInputPro
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 6,
+    ...typography.label,
+    marginBottom: spacing.sm,
   },
   input: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderWidth: 1.5,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
     fontSize: 16,
   },
 });

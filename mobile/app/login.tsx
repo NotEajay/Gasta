@@ -65,7 +65,7 @@ export default function LoginScreen() {
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>GasTa Account</Text>
         <Text style={styles.subtitle}>
-          Sign in to save vehicles, trip records, and fuel budgets.
+          Sign in to save vehicles, trip templates, trip history, and fuel budgets.
         </Text>
         <LabeledInput
           label="Email"

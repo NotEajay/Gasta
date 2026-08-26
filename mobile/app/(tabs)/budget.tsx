@@ -2,13 +2,18 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
-import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import Card from '@/components/ui/Card';
+import EmptyState from '@/components/ui/EmptyState';
+import FormSection from '@/components/ui/FormSection';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
+import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
+import ProgressBar from '@/components/ui/ProgressBar';
+import SectionHeader from '@/components/ui/SectionHeader';
+import { palette, radii, spacing } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 import { formatCurrency, monthName } from '@/lib/format';
 import {
@@ -19,7 +24,9 @@ import {
   upsertBudget,
 } from '@/lib/services/budgets';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { useTheme } from '@/lib/useTheme';
 import type { FuelBudget } from '@/types';
+import { Text } from '@/components/Themed';
 
 interface BudgetWithSpend extends FuelBudget {
   spent: number;
@@ -28,6 +35,7 @@ interface BudgetWithSpend extends FuelBudget {
 
 export default function BudgetScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
   const [budgets, setBudgets] = useState<BudgetWithSpend[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,16 +116,14 @@ export default function BudgetScreen() {
     ]);
   };
 
-  const statusLabel = (status: BudgetWithSpend['status']) => {
-    if (status === 'exceeded') return 'Budget exceeded';
-    if (status === 'warning') return 'Approaching limit';
-    return 'Within budget';
-  };
-
-  const statusColor = (status: BudgetWithSpend['status']) => {
-    if (status === 'exceeded') return '#c0392b';
-    if (status === 'warning') return '#d68910';
-    return '#1a7f37';
+  const statusConfig = (status: BudgetWithSpend['status']) => {
+    if (status === 'exceeded') {
+      return { label: 'Over budget', color: palette.danger, bg: palette.dangerSoft };
+    }
+    if (status === 'warning') {
+      return { label: 'Nearing limit', color: palette.warning, bg: palette.warningSoft };
+    }
+    return { label: 'On track', color: palette.success, bg: palette.successSoft };
   };
 
   if (!isSupabaseConfigured) {
@@ -140,58 +146,85 @@ export default function BudgetScreen() {
   }
 
   return (
-    <ScrollView style={styles.flex} contentContainerStyle={styles.padding}>
-      <Text style={styles.heading}>Fuel Budget Planner</Text>
-      <Text style={styles.subheading}>
-        Spending is estimated from saved trip records (own-vehicle fuel cost).
-      </Text>
-
-      <Text style={styles.sectionTitle}>Set monthly budget</Text>
-      <LabeledInput label="Year" value={year} onChangeText={setYear} keyboardType="number-pad" />
-      <LabeledInput label="Month (1–12)" value={month} onChangeText={setMonth} keyboardType="number-pad" />
-      <LabeledInput
-        label="Monthly limit (₱)"
-        value={limit}
-        onChangeText={setLimit}
-        keyboardType="decimal-pad"
-      />
-      <LabeledInput
-        label="Alert threshold (%)"
-        value={threshold}
-        onChangeText={setThreshold}
-        keyboardType="number-pad"
-      />
-      <PrimaryButton
-        label={saving ? 'Saving…' : 'Save budget'}
-        onPress={handleSave}
-        disabled={saving}
+    <ScrollView
+      style={[styles.flex, { backgroundColor: theme.background }]}
+      contentContainerStyle={styles.padding}>
+      <PageHero
+        module="budget"
+        title="Fuel Budget"
+        subtitle="Track monthly fuel spend from logged trip history."
       />
 
-      <Text style={styles.sectionTitle}>Your budgets</Text>
+      <FormSection title="New budget" subtitle="Set limit and alert threshold" module="budget">
+        <View style={styles.rowInputs}>
+          <View style={styles.halfInput}>
+            <LabeledInput label="Year" value={year} onChangeText={setYear} keyboardType="number-pad" />
+          </View>
+          <View style={styles.halfInput}>
+            <LabeledInput label="Month" value={month} onChangeText={setMonth} keyboardType="number-pad" />
+          </View>
+        </View>
+        <LabeledInput
+          label="Monthly limit (₱)"
+          value={limit}
+          onChangeText={setLimit}
+          keyboardType="decimal-pad"
+        />
+        <LabeledInput
+          label="Alert at (%)"
+          value={threshold}
+          onChangeText={setThreshold}
+          keyboardType="number-pad"
+        />
+        <PrimaryButton
+          label={saving ? 'Saving…' : 'Save budget'}
+          onPress={handleSave}
+          disabled={saving}
+        />
+      </FormSection>
+
+      <SectionHeader title="Your budgets" subtitle={`${budgets.length} active`} module="budget" />
       {budgets.length === 0 ? (
-        <Card>
-          <Text>No budgets yet. Create one above.</Text>
-        </Card>
+        <EmptyState
+          title="No budgets yet"
+          message="Create a monthly limit above to start tracking fuel spending."
+        />
       ) : (
-        budgets.map((b) => (
-          <Card key={b.id}>
-            <Text style={styles.budgetTitle}>
-              {monthName(b.month)} {b.year}
-            </Text>
-            <Text>
-              Spent: {formatCurrency(b.spent)} / {formatCurrency(b.limit_amount)}
-            </Text>
-            <Text style={[styles.status, { color: statusColor(b.status) }]}>
-              {statusLabel(b.status)} (alert at {b.alert_threshold_percent}%)
-            </Text>
-            <PrimaryButton
-              label="Delete"
-              variant="danger"
-              onPress={() => handleDelete(b.id)}
-              style={styles.deleteBtn}
-            />
-          </Card>
-        ))
+        budgets.map((b) => {
+          const progress = b.limit_amount > 0 ? Math.min(b.spent / b.limit_amount, 1) : 0;
+          const status = statusConfig(b.status);
+
+          return (
+            <Card key={b.id} elevated>
+              <View style={styles.budgetHeader}>
+                <Text style={[styles.budgetTitle, { color: theme.text }]}>
+                  {monthName(b.month)} {b.year}
+                </Text>
+                <View style={[styles.statusPill, { backgroundColor: status.bg }]}>
+                  <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+                </View>
+              </View>
+              <Text style={[styles.amountRow, { color: theme.text }]}>
+                {formatCurrency(b.spent)}
+                <Text style={[styles.amountLimit, { color: theme.textSecondary }]}>
+                  {' '}
+                  / {formatCurrency(b.limit_amount)}
+                </Text>
+              </Text>
+              <ProgressBar progress={progress} color={status.color} trackColor={theme.borderLight} />
+              <Text style={[styles.progressMeta, { color: theme.textSecondary }]}>
+                {Math.round(progress * 100)}% used · alert at {b.alert_threshold_percent}%
+              </Text>
+              <PrimaryButton
+                label="Delete"
+                variant="danger"
+                size="sm"
+                onPress={() => handleDelete(b.id)}
+                style={styles.deleteBtn}
+              />
+            </Card>
+          );
+        })
       )}
     </ScrollView>
   );
@@ -199,11 +232,24 @@ export default function BudgetScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: 16, paddingBottom: 32 },
-  heading: { fontSize: 22, fontWeight: 'bold' },
-  subheading: { opacity: 0.7, marginBottom: 16, lineHeight: 20 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', marginVertical: 12 },
-  budgetTitle: { fontSize: 17, fontWeight: '700', marginBottom: 4 },
-  status: { marginTop: 6, fontWeight: '600' },
-  deleteBtn: { marginTop: 12 },
+  padding: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+  rowInputs: { flexDirection: 'row', gap: spacing.sm },
+  halfInput: { flex: 1 },
+  budgetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  budgetTitle: { fontSize: 18, fontWeight: '800' },
+  statusPill: {
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.pill,
+  },
+  statusText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
+  amountRow: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, marginBottom: spacing.md },
+  amountLimit: { fontSize: 16, fontWeight: '600' },
+  progressMeta: { fontSize: 12, marginTop: spacing.sm, marginBottom: spacing.md },
+  deleteBtn: { alignSelf: 'flex-start' },
 });

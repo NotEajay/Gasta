@@ -38,6 +38,46 @@ export async function fetchLatestBulletin(): Promise<FuelPriceBulletin | null> {
   return data;
 }
 
+/** Latest bulletin that actually has prices for a macro-region (DOE weeks differ by region). */
+export async function fetchLatestBulletinForRegion(
+  regionCode: string
+): Promise<FuelPriceBulletin | null> {
+  const regionId = await resolveRegionId(regionCode);
+  const { data, error } = await supabase
+    .from('fuel_price_bulletins')
+    .select('*, fuel_prices!inner(region_id)')
+    .eq('fuel_prices.region_id', regionId)
+    .order('bulletin_date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+
+  const { fuel_prices: _ignored, ...bulletin } = data as FuelPriceBulletin & {
+    fuel_prices: unknown;
+  };
+  return bulletin;
+}
+
+/** Distinct DOE bulletin weeks that have price rows for this region (oldest → newest). */
+export async function fetchRegionBulletinWeeks(regionCode: string): Promise<string[]> {
+  const regionId = await resolveRegionId(regionCode);
+  const { data, error } = await supabase
+    .from('fuel_prices')
+    .select('bulletin:fuel_price_bulletins ( bulletin_date )')
+    .eq('region_id', regionId);
+
+  if (error) throw error;
+
+  type WeekRow = { bulletin: { bulletin_date: string } | null };
+  const dates = new Set<string>();
+  for (const row of (data ?? []) as unknown as WeekRow[]) {
+    if (row.bulletin?.bulletin_date) dates.add(row.bulletin.bulletin_date);
+  }
+  return [...dates].sort((a, b) => a.localeCompare(b));
+}
+
 export async function fetchBulletins(limit = 8): Promise<FuelPriceBulletin[]> {
   const { data, error } = await supabase
     .from('fuel_price_bulletins')
@@ -107,17 +147,27 @@ export async function fetchPriceTrend(
     )
     .eq('region_id', regionId)
     .eq('fuel_type_id', fuelTypeId)
-    .eq('oil_company_id', company.id)
-    .order('bulletin(bulletin_date)', { ascending: true });
+    .eq('oil_company_id', company.id);
 
   if (error) throw error;
 
   type TrendRow = { price_per_liter: number; bulletin: { bulletin_date: string } | null };
 
-  return ((data ?? []) as TrendRow[]).map((row) => ({
-    bulletin_date: row.bulletin?.bulletin_date ?? '',
-    price_per_liter: row.price_per_liter,
-  })).filter((row) => row.bulletin_date);
+  const rows = ((data ?? []) as unknown as TrendRow[])
+    .map((row) => ({
+      bulletin_date: row.bulletin?.bulletin_date ?? '',
+      price_per_liter: row.price_per_liter,
+    }))
+    .filter((row) => row.bulletin_date);
+
+  // One point per bulletin week for this region + company + fuel (newest last).
+  const byWeek = new Map<string, number>();
+  for (const row of rows) {
+    byWeek.set(row.bulletin_date, row.price_per_liter);
+  }
+  return [...byWeek.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([bulletin_date, price_per_liter]) => ({ bulletin_date, price_per_liter }));
 }
 
 export async function fetchLowestPrice(

@@ -94,7 +94,7 @@ create table public.vehicles (
 create index vehicles_user_id_idx on public.vehicles (user_id);
 
 -- ---------------------------------------------------------------------------
--- Trip records — full MCDA breakdown stored for auditability
+-- Trip records — full SAW breakdown stored for auditability (JSONB column: mcda_weights)
 -- ---------------------------------------------------------------------------
 
 create table public.trip_records (

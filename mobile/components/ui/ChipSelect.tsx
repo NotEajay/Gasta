@@ -1,8 +1,9 @@
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
+import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
+import { radii, spacing, typography } from '@/constants/theme';
+import { useTheme } from '@/lib/useTheme';
 
 interface ChipOption<T extends string> {
   value: T;
@@ -14,6 +15,8 @@ interface ChipSelectProps<T extends string> {
   options: readonly ChipOption<T>[];
   value: T;
   onChange: (value: T) => void;
+  hideLabel?: boolean;
+  module?: ModuleKey;
 }
 
 export default function ChipSelect<T extends string>({
@@ -21,28 +24,47 @@ export default function ChipSelect<T extends string>({
   options,
   value,
   onChange,
+  hideLabel,
+  module = 'prices',
 }: ChipSelectProps<T>) {
-  const scheme = useColorScheme();
-  const tint = Colors[scheme].tint;
+  const theme = useTheme();
+  const accent = moduleColors[module];
 
   return (
     <View style={styles.container}>
-      <Text style={styles.label}>{label}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+      {!hideLabel ? (
+        <Text style={[styles.label, { color: theme.textSecondary }]}>{label}</Text>
+      ) : null}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}>
         {options.map((option) => {
           const selected = option.value === value;
           return (
             <Pressable
               key={option.value}
               onPress={() => onChange(option.value)}
-              style={[
+              style={({ pressed }) => [
                 styles.chip,
                 {
-                  borderColor: selected ? tint : scheme === 'dark' ? '#444' : '#ccc',
-                  backgroundColor: selected ? tint : 'transparent',
+                  borderColor: selected ? accent.main : theme.border,
+                  backgroundColor: selected
+                    ? theme.scheme === 'dark'
+                      ? accent.gradientTop
+                      : accent.soft
+                    : theme.surface,
+                  opacity: pressed ? 0.88 : 1,
                 },
               ]}>
-              <Text style={[styles.chipText, { color: selected ? '#fff' : undefined }]}>
+              <Text
+                style={[
+                  styles.chipText,
+                  {
+                    color: selected ? accent.main : theme.text,
+                    fontWeight: selected ? '700' : '500',
+                  },
+                ]}>
                 {option.label}
               </Text>
             </Pressable>
@@ -55,21 +77,23 @@ export default function ChipSelect<T extends string>({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 16,
+    marginBottom: spacing.md,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
+    ...typography.label,
+    marginBottom: spacing.sm,
+  },
+  scroll: {
+    gap: spacing.sm,
+    paddingRight: spacing.sm,
   },
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    marginRight: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radii.pill,
+    borderWidth: 1.5,
   },
   chipText: {
-    fontSize: 13,
+    fontSize: 14,
   },
 });
