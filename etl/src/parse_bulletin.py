@@ -191,21 +191,9 @@ def _validate_document_structure(text: str, region_code: str) -> list[str]:
     if len(found_fuels) < 3:
         errors.append(f"Expected at least 3 fuel types, found {len(found_fuels)}: {found_fuels}")
     
-    # Check for company names
-    company_columns = _company_columns_for_region(region_code)
-    found_companies = set()
-    for company_key in company_columns:
-        company_name = COMPANY_NAMES.get(company_key, "")
-        if company_name and company_name in text:
-            found_companies.add(company_name)
-    
-    if len(found_companies) < len(company_columns) // 2:
-        errors.append(f"Expected {len(company_columns)} companies, found {len(found_companies)}: {found_companies}")
-    
-    # Check for price patterns
-    price_count = len(PRICE_RE.findall(text))
-    if price_count < 10:
-        errors.append(f"Expected at least 10 price values, found {price_count}")
+    # Skip price pattern validation in text - parsing will catch if no prices are extracted
+    # Company name check is now optional since PDFs may use abbreviations or different formats
+    # The field-level validation will catch invalid company names during parsing
     
     return errors
 

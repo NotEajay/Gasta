@@ -74,6 +74,19 @@ def _sync_discovered(
         fallback_week_start=discovered.week_start,
     )
 
+    # Check for validation errors
+    if parsed.validation_errors:
+        if not force:
+            return SyncResult(
+                region_code=region_code,
+                week_start=parsed.bulletin_date.isoformat(),
+                pdf_path="; ".join(str(p) for p in pdf_paths),
+                price_rows=len(parsed.prices),
+                companies=len({p.company for p in parsed.prices}),
+                skipped=True,
+                message=f"Validation errors: {'; '.join(parsed.validation_errors)}",
+            )
+
     if not force and not dry_run and _region_already_loaded(parsed.bulletin_date, region_code):
         return SyncResult(
             region_code=region_code,
@@ -101,13 +114,17 @@ def _sync_discovered(
         )
 
     load_stats = load_bulletin(parsed)
+    message = "Loaded successfully."
+    if load_stats.get("duplicates_skipped", 0) > 0:
+        message += f" Skipped {load_stats['duplicates_skipped']} duplicate price entries."
+    
     return SyncResult(
         region_code=region_code,
         week_start=parsed.bulletin_date.isoformat(),
         pdf_path=pdf_path_display,
         price_rows=load_stats["price_rows"],
         companies=load_stats["companies"],
-        message="Loaded successfully.",
+        message=message,
     )
 
 
