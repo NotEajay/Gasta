@@ -1,8 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing, typography } from '@/constants/theme';
-import { useTheme } from '@/lib/useTheme';
+import { palette, radii, spacing, typography } from '@/constants/Theme';
 
 type Source = 'doe' | 'community';
 
@@ -15,23 +14,18 @@ const LABELS: Record<Source, string> = {
   community: 'Community Verified',
 };
 
-const COLORS: Record<Source, { bg: string; bgDark: string; text: string; textDark: string }> = {
+const COLORS: Record<Source, { bg: string; text: string }> = {
   doe: {
     bg: palette.primarySoft,
-    bgDark: '#172554',
     text: palette.primaryDark,
-    textDark: '#93C5FD',
   },
   community: {
     bg: palette.successSoft,
-    bgDark: '#064E3B',
     text: palette.success,
-    textDark: '#6EE7B7',
   },
 };
 
 export default function SourceBadge({ source }: SourceBadgeProps) {
-  const theme = useTheme();
   const colors = COLORS[source];
 
   return (
@@ -39,19 +33,19 @@ export default function SourceBadge({ source }: SourceBadgeProps) {
       style={[
         styles.badge,
         {
-          backgroundColor: theme.scheme === 'dark' ? colors.bgDark : colors.bg,
+          backgroundColor: colors.bg,
         },
       ]}>
       <View
         style={[
           styles.dot,
-          { backgroundColor: theme.scheme === 'dark' ? colors.textDark : colors.text },
+          { backgroundColor: colors.text },
         ]}
       />
       <Text
         style={[
           styles.text,
-          { color: theme.scheme === 'dark' ? colors.textDark : colors.text },
+          { color: colors.text },
         ]}>
         {LABELS[source]}
       </Text>

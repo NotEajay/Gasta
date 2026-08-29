@@ -1,7 +1,7 @@
-import { StyleSheet, View, type ViewProps } from 'react-native';
+import { StyleSheet, type ViewProps } from 'react-native';
 
-import { radii, shadow, spacing } from '@/constants/theme';
-import { useTheme } from '@/lib/useTheme';
+import GlassSurface from '@/components/ui/GlassSurface';
+import { radii, spacing } from '@/constants/Theme';
 
 interface CardProps extends ViewProps {
   elevated?: boolean;
@@ -9,21 +9,11 @@ interface CardProps extends ViewProps {
 }
 
 export default function Card({ style, elevated, compact, ...props }: CardProps) {
-  const theme = useTheme();
-
   return (
-    <View
+    <GlassSurface
+      variant={elevated ? 'strong' : 'default'}
+      style={[styles.card, compact && styles.compact, style]}
       {...props}
-      style={[
-        styles.card,
-        {
-          backgroundColor: theme.surface,
-          borderColor: theme.border,
-        },
-        elevated && shadow(theme.scheme, 'md'),
-        compact && styles.compact,
-        style,
-      ]}
     />
   );
 }
@@ -31,7 +21,6 @@ export default function Card({ style, elevated, compact, ...props }: CardProps) 
 const styles = StyleSheet.create({
   card: {
     borderRadius: radii.lg,
-    borderWidth: 1,
     padding: spacing.lg,
     marginBottom: spacing.md,
   },

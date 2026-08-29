@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import Card from '@/components/ui/Card';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import { spacing, typography } from '@/constants/theme';
+import { spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface AuthPromptProps {

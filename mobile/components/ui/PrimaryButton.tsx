@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, type ViewStyle } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing } from '@/constants/theme';
+import { palette, radii, spacing } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface PrimaryButtonProps {
@@ -31,7 +31,7 @@ export default function PrimaryButton({
         : palette.primary;
 
   const textColor =
-    variant === 'secondary' ? palette.primary : '#FFFFFF';
+    variant === 'secondary' ? palette.primary : '#F8F0E5';
 
   return (
     <Pressable

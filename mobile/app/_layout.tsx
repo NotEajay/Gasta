@@ -6,7 +6,6 @@ import 'react-native-reanimated';
 
 import { AppProviders, RootStack } from '@/components/auth/AuthGate';
 import { useColorScheme } from '@/components/useColorScheme';
-import { AuthProvider } from '@/lib/auth';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -38,11 +37,7 @@ export default function RootLayout() {
     return null;
   }
 
-  return (
-    <AuthProvider>
-      <RootLayoutNav />
-    </AuthProvider>
-  );
+  return <RootLayoutNav />;
 }
 
 function RootLayoutNav() {

@@ -4,8 +4,7 @@ import { useGlobalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
-import { createSessionFromUrl, waitForSession } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { createSessionFromUrl } from '@/lib/auth';
 import { GasTaColors } from '@/constants/Theme';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -37,19 +36,8 @@ export default function AuthCallbackScreen() {
         return;
       }
 
-      if (result.error && !params.code) {
-        router.replace('/(auth)');
-        return;
-      }
-
-      const session = (await supabase.auth.getSession()).data.session ?? (await waitForSession());
-
-      if (cancelled) {
-        return;
-      }
-
-      if (session) {
-        router.replace('/(tabs)');
+      if (result.session) {
+        router.replace('/(tabs)/prices');
         return;
       }
 

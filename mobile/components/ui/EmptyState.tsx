@@ -1,7 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface EmptyStateProps {

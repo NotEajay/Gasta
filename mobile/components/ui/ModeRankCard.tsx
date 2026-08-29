@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import Card from '@/components/ui/Card';
 import ProgressBar from '@/components/ui/ProgressBar';
-import { palette, radii, spacing, typography } from '@/constants/theme';
+import { palette, radii, spacing, typography } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
 import { useTheme } from '@/lib/useTheme';
 import type { ModeEvaluation } from '@/types/mcda';
@@ -32,8 +32,7 @@ export default function ModeRankCard({
       style={
         recommended
           ? {
-              backgroundColor: theme.scheme === 'dark' ? '#064E3B33' : palette.successSoft,
-              borderColor: theme.scheme === 'dark' ? '#059669' : '#A7F3D0',
+              borderColor: 'rgba(1, 68, 33, 0.32)',
             }
           : undefined
       }>
@@ -45,7 +44,7 @@ export default function ModeRankCard({
               backgroundColor: recommended ? palette.success : theme.overlay,
             },
           ]}>
-          <Text style={[styles.rankText, { color: recommended ? '#FFF' : theme.text }]}>
+          <Text style={[styles.rankText, { color: recommended ? '#F8F0E5' : theme.text }]}>
             {rank}
           </Text>
         </View>

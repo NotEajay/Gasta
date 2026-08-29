@@ -1,7 +1,7 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, spacing, typography } from '@/constants/theme';
+import { palette, spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 export default function LoadingState({ message = 'Loading…' }: { message?: string }) {

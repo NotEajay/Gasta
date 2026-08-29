@@ -19,6 +19,7 @@ import {
   signInWithPassword,
   signOut as authSignOut,
   signUpWithEmail,
+  validateSessionInBackground,
 } from '@/lib/auth';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import { ensureProfile } from '@/lib/profile';
@@ -28,6 +29,7 @@ type AuthContextValue = {
   session: Session | null;
   user: User | null;
   isLoading: boolean;
+  loading: boolean;
   isEmailVerified: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (
@@ -58,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
       if (currentSession?.user) {
         void ensureProfile(currentSession.user);
+        void validateSessionInBackground();
       }
     });
 
@@ -120,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       user: session?.user ?? null,
       isLoading,
+      loading: isLoading,
       isEmailVerified: isEmailVerified(session?.user ?? null),
       signIn,
       signUp,

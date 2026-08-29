@@ -1,7 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { spacing, typography } from '@/constants/theme';
+import { spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface ListRowProps {
@@ -20,7 +20,7 @@ export default function ListRow({ title, value, subtitle, highlight, isLast }: L
       style={[
         styles.row,
         !isLast && { borderBottomColor: theme.borderLight, borderBottomWidth: StyleSheet.hairlineWidth },
-        highlight && { backgroundColor: theme.scheme === 'dark' ? '#064E3B33' : '#ECFDF5' },
+        highlight && { backgroundColor: 'rgba(1, 68, 33, 0.08)' },
       ]}>
       <View style={styles.left}>
         <Text style={[styles.title, { color: theme.text }]} numberOfLines={2}>
@@ -30,7 +30,7 @@ export default function ListRow({ title, value, subtitle, highlight, isLast }: L
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>{subtitle}</Text>
         ) : null}
       </View>
-      <Text style={[styles.value, { color: highlight ? '#059669' : theme.text }]}>{value}</Text>
+      <Text style={[styles.value, { color: highlight ? '#014421' : theme.text }]}>{value}</Text>
     </View>
   );
 }

@@ -3,8 +3,8 @@ import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
-import { radii, spacing, typography } from '@/constants/theme';
+import { GasTaColors, spacing, typography } from '@/constants/Theme';
+import type { ModuleKey } from '@/constants/moduleColors';
 
 interface SubPageHeaderProps {
   module: ModuleKey;
@@ -13,13 +13,11 @@ interface SubPageHeaderProps {
   children?: ReactNode;
 }
 
-export default function SubPageHeader({ module, title, subtitle, children }: SubPageHeaderProps) {
+export default function SubPageHeader({ title, subtitle, children }: SubPageHeaderProps) {
   const router = useRouter();
-  const colors = moduleColors[module];
 
   return (
-    <View style={[styles.wrap, { backgroundColor: colors.gradientTop }]}>
-      <View style={[styles.glow, { backgroundColor: colors.gradientBottom }]} />
+    <View style={styles.wrap}>
       <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
@@ -38,18 +36,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.lg,
-    borderBottomLeftRadius: radii.xl,
-    borderBottomRightRadius: radii.xl,
-    overflow: 'hidden',
-  },
-  glow: {
-    position: 'absolute',
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    top: -30,
-    right: -20,
-    opacity: 0.4,
   },
   backBtn: {
     alignSelf: 'flex-start',
@@ -57,18 +43,18 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   backText: {
-    color: 'rgba(255,255,255,0.9)',
+    color: GasTaColors.forestDark,
     fontSize: 15,
     fontWeight: '600',
   },
   title: {
     ...typography.title,
-    color: '#FFFFFF',
+    color: GasTaColors.textPrimary,
     fontSize: 24,
   },
   subtitle: {
     ...typography.subtitle,
-    color: 'rgba(255,255,255,0.88)',
+    color: GasTaColors.textMuted,
     marginTop: spacing.xs,
   },
 });

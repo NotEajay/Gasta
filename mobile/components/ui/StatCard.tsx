@@ -2,7 +2,7 @@ import { StyleSheet, View, type ViewStyle } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
-import { radii, spacing, shadow, typography } from '@/constants/theme';
+import { radii, spacing, shadow, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface StatCardProps {
@@ -43,7 +43,7 @@ export default function StatCard({
         style,
       ]}>
       <View style={[styles.iconBadge, { backgroundColor: mod.main }]}>
-        <Text style={styles.iconText}>₱</Text>
+        <Text style={[styles.iconText, { color: '#F8F0E5' }]}>₱</Text>
       </View>
       <Text style={[styles.label, { color: theme.textSecondary }]}>{label}</Text>
       <Text style={[styles.value, { color: isPrimary ? mod.dark : theme.text }]}>{value}</Text>
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   iconText: {
-    color: '#FFFFFF',
+    color: '#F8F0E5',
     fontSize: 18,
     fontWeight: '800',
   },

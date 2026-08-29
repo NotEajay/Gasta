@@ -3,26 +3,22 @@ import { Link } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
-import { radii, spacing, typography } from '@/constants/theme';
-import { useAuth } from '@/lib/auth';
+import { GasTaColors, radii, spacing, typography } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
 
 interface PageHeroProps {
-  module: ModuleKey;
+  module?: string;
   title: string;
   subtitle?: string;
-  /** Quick nav chips below subtitle */
   navItems?: { href: string; label: string }[];
   children?: ReactNode;
 }
 
-export default function PageHero({ module, title, subtitle, navItems, children }: PageHeroProps) {
-  const colors = moduleColors[module];
+export default function PageHero({ title, subtitle, navItems, children }: PageHeroProps) {
   const { user, signOut } = useAuth();
 
   return (
-    <View style={[styles.wrap, { backgroundColor: colors.gradientTop }]}>
-      <View style={[styles.glow, { backgroundColor: colors.gradientBottom }]} />
+    <View style={styles.wrap}>
       <View style={styles.topRow}>
         <View style={styles.titleBlock}>
           <Text style={styles.title}>{title}</Text>
@@ -31,13 +27,7 @@ export default function PageHero({ module, title, subtitle, navItems, children }
           <Pressable onPress={() => signOut()} style={styles.authBtn} hitSlop={8}>
             <Text style={styles.authText}>Sign out</Text>
           </Pressable>
-        ) : (
-          <Link href="/login" asChild>
-            <Pressable style={styles.authBtn} hitSlop={8}>
-              <Text style={styles.authText}>Sign in</Text>
-            </Pressable>
-          </Link>
-        )}
+        ) : null}
       </View>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {navItems && navItems.length > 0 ? (
@@ -63,19 +53,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.xl,
-    borderBottomLeftRadius: radii.xl,
-    borderBottomRightRadius: radii.xl,
-    overflow: 'hidden',
-  },
-  glow: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    top: -40,
-    right: -30,
-    opacity: 0.45,
+    paddingBottom: spacing.lg,
   },
   topRow: {
     flexDirection: 'row',
@@ -86,25 +64,25 @@ const styles = StyleSheet.create({
   titleBlock: { flex: 1 },
   title: {
     ...typography.title,
-    color: '#FFFFFF',
+    color: GasTaColors.textPrimary,
     fontSize: 26,
   },
   subtitle: {
     ...typography.subtitle,
-    color: 'rgba(255,255,255,0.88)',
+    color: GasTaColors.textMuted,
     marginTop: spacing.sm,
     lineHeight: 22,
   },
   authBtn: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
+    borderColor: GasTaColors.forestBorder,
   },
   authText: {
-    color: '#FFFFFF',
+    color: GasTaColors.forestDark,
     fontSize: 13,
     fontWeight: '700',
   },
@@ -115,15 +93,17 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   navChip: {
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
   },
   navChipPressed: { opacity: 0.88 },
   navChipText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#1E293B',
+    color: GasTaColors.forestDark,
   },
 });

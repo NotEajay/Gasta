@@ -1,7 +1,7 @@
 import { StyleSheet, TextInput as RNTextInput, View, type TextInputProps } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface LabeledInputProps extends TextInputProps {
@@ -21,7 +21,7 @@ export default function LabeledInput({ label, style, ...props }: LabeledInputPro
           {
             color: theme.text,
             borderColor: theme.border,
-            backgroundColor: theme.scheme === 'dark' ? theme.background : '#FAFBFC',
+            backgroundColor: '#FFFFFF',
           },
           style,
         ]}

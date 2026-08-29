@@ -13,8 +13,8 @@ import SectionHeader from '@/components/ui/SectionHeader';
 import SourceBadge from '@/components/ui/SourceBadge';
 import StatCard from '@/components/ui/StatCard';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
-import { palette, spacing } from '@/constants/theme';
-import { useAuth } from '@/lib/auth';
+import { palette, spacing } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   confirmationsLabel,

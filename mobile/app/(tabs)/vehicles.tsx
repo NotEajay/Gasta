@@ -15,8 +15,8 @@ import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import SectionHeader from '@/components/ui/SectionHeader';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { palette, spacing } from '@/constants/theme';
-import { useAuth } from '@/lib/auth';
+import { palette, spacing } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   createVehicle,

@@ -13,8 +13,8 @@ import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import { DOE_REGIONS, type DoeRegionCode } from '@/constants/regions';
-import { palette, spacing } from '@/constants/theme';
-import { useAuth } from '@/lib/auth';
+import { palette, spacing } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
 import {
   fetchFuelStationsByRegion,
   submitCommunityReport,

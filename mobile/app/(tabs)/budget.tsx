@@ -13,8 +13,8 @@ import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import ProgressBar from '@/components/ui/ProgressBar';
 import SectionHeader from '@/components/ui/SectionHeader';
-import { palette, radii, spacing } from '@/constants/theme';
-import { useAuth } from '@/lib/auth';
+import { palette, radii, spacing } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency, monthName } from '@/lib/format';
 import {
   budgetAlertStatus,

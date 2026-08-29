@@ -10,25 +10,29 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  const inAuthGroup = segments[0] === '(auth)';
-  const inOAuthCallback = segments[0] === 'auth';
-  const onVerifyEmail = (segments as string[]).includes('verify-email');
+  const root = segments[0];
+  const inAuthGroup = root === '(auth)';
+  const inOAuthCallback = root === 'auth';
+  const onLogin = root === 'login';
+  const onIndex = root === 'index' || root === undefined;
+  const isAuthSurface = inAuthGroup || inOAuthCallback || onLogin || onIndex;
+  const isAuthenticated = Boolean(session && isEmailVerified);
 
-  if (session && isEmailVerified && (inAuthGroup || inOAuthCallback)) {
-    return <Redirect href="/(tabs)" />;
+  if (isAuthenticated && (inOAuthCallback || isAuthSurface)) {
+    return <Redirect href="/(tabs)/prices" />;
   }
 
-  if (session && !isEmailVerified && (inAuthGroup || inOAuthCallback) && !onVerifyEmail) {
-    return (
-      <Redirect
-        href={
-          `/(auth)/verify-email?email=${encodeURIComponent(session.user.email ?? '')}` as Href
-        }
-      />
-    );
-  }
+  if (!isAuthenticated && !isAuthSurface) {
+    if (session && !isEmailVerified) {
+      return (
+        <Redirect
+          href={
+            `/(auth)/verify-email?email=${encodeURIComponent(session.user.email ?? '')}` as Href
+          }
+        />
+      );
+    }
 
-  if (!session && !inAuthGroup && !inOAuthCallback) {
     return <Redirect href="/(auth)" />;
   }
 
@@ -45,8 +49,10 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 
 export function RootStack() {
   return (
-    <Stack>
+    <Stack screenOptions={{ contentStyle: { backgroundColor: 'transparent' } }}>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+      <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="modal" options={{ presentation: 'modal' }} />

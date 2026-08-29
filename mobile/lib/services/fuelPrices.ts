@@ -62,20 +62,37 @@ export async function fetchLatestBulletinForRegion(
 
 /** Distinct DOE bulletin weeks that have price rows for this region (oldest → newest). */
 export async function fetchRegionBulletinWeeks(regionCode: string): Promise<string[]> {
+  const bulletins = await fetchBulletinsForRegion(regionCode, 24);
+  return [...bulletins].reverse().map((b) => b.bulletin_date);
+}
+
+/** Newest first. Bulletins that actually have prices for this region. */
+export async function fetchBulletinsForRegion(
+  regionCode: string,
+  limit = 12
+): Promise<FuelPriceBulletin[]> {
   const regionId = await resolveRegionId(regionCode);
   const { data, error } = await supabase
-    .from('fuel_prices')
-    .select('bulletin:fuel_price_bulletins ( bulletin_date )')
-    .eq('region_id', regionId);
+    .from('fuel_price_bulletins')
+    .select('id, bulletin_date, source_pdf_url, notes, created_at, fuel_prices!inner(region_id)')
+    .eq('fuel_prices.region_id', regionId)
+    .order('bulletin_date', { ascending: false })
+    .limit(limit);
 
   if (error) throw error;
 
-  type WeekRow = { bulletin: { bulletin_date: string } | null };
-  const dates = new Set<string>();
-  for (const row of (data ?? []) as unknown as WeekRow[]) {
-    if (row.bulletin?.bulletin_date) dates.add(row.bulletin.bulletin_date);
+  const seen = new Set<string>();
+  const bulletins: FuelPriceBulletin[] = [];
+  for (const row of data ?? []) {
+    const { fuel_prices: _ignored, ...bulletin } = row as FuelPriceBulletin & {
+      fuel_prices: unknown;
+    };
+    if (!seen.has(bulletin.id)) {
+      seen.add(bulletin.id);
+      bulletins.push(bulletin);
+    }
   }
-  return [...dates].sort((a, b) => a.localeCompare(b));
+  return bulletins;
 }
 
 export async function fetchBulletins(limit = 8): Promise<FuelPriceBulletin[]> {

@@ -18,7 +18,7 @@ import AuthTextField from '@/components/auth/AuthTextField';
 import GlassSurface, { AuthBackground } from '@/components/ui/GlassSurface';
 import { useAuth } from '@/context/AuthProvider';
 import { validateSignInForm, validateSignUpForm } from '@/lib/auth';
-import { goToSignIn, goToSignUp, goToVerifyEmail } from '@/lib/navigation';
+import { goToVerifyEmail } from '@/lib/navigation';
 import { GasTaColors, GasTaRadius, GasTaSpacing } from '@/constants/Theme';
 import { useResponsive } from '@/hooks/useResponsive';
 
@@ -51,9 +51,19 @@ export default function AuthScreen() {
   useEffect(() => {
     if (modeParam === 'signin' || modeParam === 'signup') {
       setMode(modeParam);
-      setError(null);
     }
   }, [modeParam]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const code = new URLSearchParams(window.location.search).get('code');
+    if (code) {
+      router.replace(`/auth/callback?code=${encodeURIComponent(code)}`);
+    }
+  }, [router]);
 
   const isSignIn = mode === 'signin';
   const titleSize = scale(isCompact ? 24 : 28);
@@ -64,13 +74,6 @@ export default function AuthScreen() {
   const switchMode = (nextMode: AuthMode) => {
     setMode(nextMode);
     setError(null);
-
-    if (nextMode === 'signin') {
-      goToSignIn();
-      return;
-    }
-
-    goToSignUp();
   };
 
   const handleSubmit = async () => {

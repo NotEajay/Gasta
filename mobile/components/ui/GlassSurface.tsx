@@ -23,7 +23,7 @@ export default function GlassSurface({
     variant === 'strong'
       ? GasTaColors.glassFillStrong
       : variant === 'input'
-        ? 'rgba(248, 240, 229, 0.5)'
+        ? 'rgba(255, 255, 255, 0.7)'
         : GasTaColors.glassFill;
 
   if (Platform.OS === 'web') {
@@ -76,6 +76,7 @@ const styles = StyleSheet.create({
   content: {
     position: 'relative',
     zIndex: 1,
+    width: '100%',
   },
   topHighlight: {
     position: 'absolute',
@@ -90,23 +91,41 @@ const styles = StyleSheet.create({
 
 type AuthBackgroundProps = {
   children: ReactNode;
+  /** Cream is used on sign-in. White is used on the app dashboard. */
+  canvas?: 'cream' | 'white';
 };
 
-export function AuthBackground({ children }: AuthBackgroundProps) {
+export function AuthBackground({ children, canvas = 'cream' }: AuthBackgroundProps) {
+  const isWhite = canvas === 'white';
+
   return (
-    <View style={bgStyles.root}>
+    <View style={[bgStyles.root, isWhite && { backgroundColor: GasTaColors.white }]}>
       <LinearGradient
-        colors={[GasTaColors.creamLight, GasTaColors.cream, GasTaColors.creamDark]}
+        colors={
+          isWhite
+            ? [GasTaColors.white, GasTaColors.white, GasTaColors.white]
+            : [GasTaColors.creamLight, GasTaColors.cream, GasTaColors.creamDark]
+        }
         locations={[0, 0.5, 1]}
         style={StyleSheet.absoluteFill}
       />
 
       <View style={[bgStyles.orb, bgStyles.orbForestTop]} />
       <View style={[bgStyles.orb, bgStyles.orbForestBottom]} />
-      <View style={[bgStyles.orb, bgStyles.orbPomelo]} />
+      <View
+        style={[
+          bgStyles.orb,
+          bgStyles.orbPomelo,
+          isWhite && { backgroundColor: 'rgba(255, 255, 255, 0.9)' },
+        ]}
+      />
 
       <LinearGradient
-        colors={['rgba(248,240,229,0)', 'rgba(248,240,229,0.35)', GasTaColors.cream]}
+        colors={
+          isWhite
+            ? ['rgba(255,255,255,0)', 'rgba(255,255,255,0.4)', GasTaColors.white]
+            : ['rgba(248,240,229,0)', 'rgba(248,240,229,0.35)', GasTaColors.cream]
+        }
         locations={[0, 0.7, 1]}
         style={bgStyles.vignette}
       />

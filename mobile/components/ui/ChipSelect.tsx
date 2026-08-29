@@ -2,7 +2,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
-import { radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface ChipOption<T extends string> {
@@ -49,11 +49,7 @@ export default function ChipSelect<T extends string>({
                 styles.chip,
                 {
                   borderColor: selected ? accent.main : theme.border,
-                  backgroundColor: selected
-                    ? theme.scheme === 'dark'
-                      ? accent.gradientTop
-                      : accent.soft
-                    : theme.surface,
+                  backgroundColor: selected ? accent.main : theme.surface,
                   opacity: pressed ? 0.88 : 1,
                 },
               ]}>
@@ -61,7 +57,7 @@ export default function ChipSelect<T extends string>({
                 style={[
                   styles.chipText,
                   {
-                    color: selected ? accent.main : theme.text,
+                    color: selected ? '#F8F0E5' : theme.text,
                     fontWeight: selected ? '700' : '500',
                   },
                 ]}>

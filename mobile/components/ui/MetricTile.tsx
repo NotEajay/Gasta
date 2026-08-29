@@ -1,7 +1,7 @@
 import { StyleSheet, View, type ViewStyle } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing } from '@/constants/theme';
+import { palette, radii, spacing } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 type MetricTone = 'neutral' | 'success' | 'warning' | 'danger' | 'primary';
@@ -15,34 +15,34 @@ interface MetricTileProps {
 
 const TONE = {
   neutral: {
-    bg: { light: '#FFFFFF', dark: '#1E293B' },
-    border: { light: '#E2E8F0', dark: '#334155' },
-    value: { light: '#0F172A', dark: '#F8FAFC' },
-    label: { light: '#64748B', dark: '#94A3B8' },
+    bg: { light: '#FFFFFF', dark: '#FFFFFF' },
+    border: { light: 'rgba(1, 68, 33, 0.1)', dark: 'rgba(1, 68, 33, 0.1)' },
+    value: { light: '#014421', dark: '#014421' },
+    label: { light: 'rgba(1, 68, 33, 0.62)', dark: 'rgba(1, 68, 33, 0.62)' },
   },
   primary: {
-    bg: { light: palette.primarySoft, dark: '#172554' },
-    border: { light: '#BFDBFE', dark: '#1E40AF' },
-    value: { light: palette.primaryDark, dark: '#93C5FD' },
-    label: { light: palette.primary, dark: '#93C5FD' },
+    bg: { light: palette.primarySoft, dark: palette.primarySoft },
+    border: { light: 'rgba(1, 68, 33, 0.32)', dark: 'rgba(1, 68, 33, 0.32)' },
+    value: { light: palette.primaryDark, dark: palette.primaryDark },
+    label: { light: palette.primary, dark: palette.primary },
   },
   success: {
-    bg: { light: palette.successSoft, dark: '#064E3B' },
-    border: { light: '#A7F3D0', dark: '#047857' },
-    value: { light: palette.success, dark: '#6EE7B7' },
-    label: { light: '#047857', dark: '#6EE7B7' },
+    bg: { light: palette.successSoft, dark: palette.successSoft },
+    border: { light: 'rgba(1, 68, 33, 0.2)', dark: 'rgba(1, 68, 33, 0.2)' },
+    value: { light: palette.success, dark: palette.success },
+    label: { light: palette.success, dark: palette.success },
   },
   warning: {
-    bg: { light: palette.warningSoft, dark: '#78350F' },
-    border: { light: '#FDE68A', dark: '#B45309' },
-    value: { light: palette.warning, dark: '#FCD34D' },
-    label: { light: '#B45309', dark: '#FCD34D' },
+    bg: { light: palette.warningSoft, dark: palette.warningSoft },
+    border: { light: 'rgba(180, 83, 9, 0.28)', dark: 'rgba(180, 83, 9, 0.28)' },
+    value: { light: palette.warning, dark: palette.warning },
+    label: { light: '#B45309', dark: '#B45309' },
   },
   danger: {
-    bg: { light: palette.dangerSoft, dark: '#7F1D1D' },
-    border: { light: '#FECACA', dark: '#B91C1C' },
-    value: { light: palette.danger, dark: '#FCA5A5' },
-    label: { light: '#B91C1C', dark: '#FCA5A5' },
+    bg: { light: palette.dangerSoft, dark: palette.dangerSoft },
+    border: { light: '#FECACA', dark: '#FECACA' },
+    value: { light: palette.danger, dark: palette.danger },
+    label: { light: '#B91C1C', dark: '#B91C1C' },
   },
 } as const;
 

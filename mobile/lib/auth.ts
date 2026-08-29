@@ -15,6 +15,7 @@ let oauthCompletion: Promise<AuthResult> | null = null;
 export type AuthResult = {
   error: string | null;
   pendingRedirect?: boolean;
+  session?: Session | null;
 };
 
 export type SignUpResult = AuthResult & {
@@ -62,14 +63,10 @@ export async function createSessionFromUrl(url: string | null): Promise<AuthResu
     return { error: null };
   }
 
-  const existing = await supabase.auth.getSession();
-  if (existing.data.session) {
-    return { error: null };
-  }
-
   const href = url || initialWebHref;
   if (!href) {
-    return { error: null };
+    const { data } = await supabase.auth.getSession();
+    return { error: null, session: data.session };
   }
 
   const params = parseAuthParams(href);
@@ -86,19 +83,27 @@ export async function createSessionFromUrl(url: string | null): Promise<AuthResu
     }
 
     oauthCompletion = (async () => {
-      if (!usedAuthCodes.has(code)) {
-        usedAuthCodes.add(code);
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) {
-          const afterError = await supabase.auth.getSession();
-          if (afterError.data.session) {
-            return { error: null };
-          }
-          return { error: mapAuthError(error) };
-        }
+      const existing = await supabase.auth.getSession();
+      if (existing.data.session) {
+        return { error: null, session: existing.data.session };
       }
 
-      return { error: null };
+      if (usedAuthCodes.has(code)) {
+        const { data } = await supabase.auth.getSession();
+        return { error: null, session: data.session };
+      }
+
+      usedAuthCodes.add(code);
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) {
+        const afterError = await supabase.auth.getSession();
+        if (afterError.data.session) {
+          return { error: null, session: afterError.data.session };
+        }
+        return { error: mapAuthError(error) };
+      }
+
+      return { error: null, session: data.session };
     })();
 
     return oauthCompletion;
@@ -107,14 +112,15 @@ export async function createSessionFromUrl(url: string | null): Promise<AuthResu
   const accessToken = params.get('access_token');
   const refreshToken = params.get('refresh_token');
   if (accessToken && refreshToken) {
-    const { error } = await supabase.auth.setSession({
+    const { data, error } = await supabase.auth.setSession({
       access_token: accessToken,
       refresh_token: refreshToken,
     });
-    return { error: mapAuthError(error) };
+    return { error: mapAuthError(error), session: data.session };
   }
 
-  return { error: null };
+  const { data } = await supabase.auth.getSession();
+  return { error: null, session: data.session };
 }
 
 export async function waitForSession(timeoutMs = 8000) {
@@ -148,46 +154,48 @@ export async function signInWithGoogle(): Promise<AuthResult> {
     return { error: 'Supabase is not configured. Add your env keys in mobile/.env.' };
   }
 
-  const redirectTo = getOAuthRedirectUrl();
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: {
-      redirectTo,
-      skipBrowserRedirect: true,
-      queryParams: {
-        prompt: 'select_account',
+  try {
+    const redirectTo = getOAuthRedirectUrl();
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo,
+        skipBrowserRedirect: true,
+        queryParams: {
+          prompt: 'select_account',
+        },
       },
-    },
-  });
+    });
 
-  if (error || !data.url) {
-    return { error: mapAuthError(error) ?? 'Unable to start Google sign-in.' };
+    if (error || !data.url) {
+      return { error: mapAuthError(error) ?? 'Unable to start Google sign-in.' };
+    }
+
+    if (Platform.OS === 'web') {
+      window.location.assign(data.url);
+      return { error: null, pendingRedirect: true };
+    }
+
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, {
+      showInRecents: true,
+    });
+
+    if (result.type === 'success' && result.url) {
+      return createSessionFromUrl(result.url);
+    }
+
+    if (result.type === 'cancel' || result.type === 'dismiss') {
+      return { error: null };
+    }
+
+    return { error: 'Google sign-in did not complete.' };
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : 'Unable to start Google sign-in.';
+    if (message.toLowerCase().includes('popup') || message.toLowerCase().includes('blocked')) {
+      return { error: 'Google sign-in could not open. Try again, or use email and password.' };
+    }
+    return { error: message };
   }
-
-  if (__DEV__) {
-    console.log('[auth] Google redirect URL (add this in Supabase Auth URL config):', redirectTo);
-  }
-
-  // Mobile browsers block popups if window.open() runs after an await.
-  // Stay in this tab on web so Google can return to /auth/callback.
-  if (Platform.OS === 'web') {
-    window.location.assign(data.url);
-    return { error: null, pendingRedirect: true };
-  }
-
-  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, {
-    showInRecents: true,
-  });
-
-  if (result.type === 'success' && result.url) {
-    return createSessionFromUrl(result.url);
-  }
-
-  if (result.type === 'cancel' || result.type === 'dismiss') {
-    return { error: null };
-  }
-
-  return { error: 'Google sign-in did not complete.' };
 }
 
 const DUPLICATE_EMAIL_MESSAGE =
@@ -256,6 +264,22 @@ export async function getSession(): Promise<Session | null> {
 
   const { data } = await supabase.auth.getSession();
   return data.session;
+}
+
+export async function validateSessionInBackground() {
+  if (!isSupabaseConfigured) {
+    return;
+  }
+
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) {
+    return;
+  }
+
+  const { error } = await supabase.auth.getUser();
+  if (error) {
+    await supabase.auth.signOut();
+  }
 }
 
 export async function signInWithPassword(email: string, password: string): Promise<AuthResult> {

@@ -10,8 +10,8 @@ interface ProgressBarProps {
 
 export default function ProgressBar({
   progress,
-  color = '#2563eb',
-  trackColor = '#e2e8f0',
+  color = '#014421',
+  trackColor = 'rgba(1, 68, 33, 0.08)',
   height = 8,
 }: ProgressBarProps) {
   const clamped = Math.min(1, Math.max(0, progress));

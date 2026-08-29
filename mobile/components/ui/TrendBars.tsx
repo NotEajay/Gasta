@@ -1,7 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing, typography } from '@/constants/theme';
+import { palette, radii, spacing, typography } from '@/constants/Theme';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { useTheme } from '@/lib/useTheme';
 
@@ -62,7 +62,7 @@ export default function TrendBars({ points }: TrendBarsProps) {
                   styles.barFill,
                   {
                     flex: ratio,
-                    backgroundColor: isLatest ? palette.primary : '#94A3B8',
+                    backgroundColor: isLatest ? palette.primary : 'rgba(1, 68, 33, 0.28)',
                   },
                 ]}
               />

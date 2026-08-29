@@ -2,7 +2,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import ProgressBar from '@/components/ui/ProgressBar';
-import { palette, radii, spacing, typography } from '@/constants/theme';
+import { palette, radii, spacing, typography } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
 import { useTheme } from '@/lib/useTheme';
 
@@ -51,7 +51,7 @@ export default function PriceCompareRow({
         <Text
           style={[
             styles.rank,
-            { color: isLowest ? '#FFFFFF' : theme.textSecondary },
+            { color: isLowest ? '#F8F0E5' : theme.textSecondary },
           ]}>
           {rank}
         </Text>
