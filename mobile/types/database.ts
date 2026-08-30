@@ -458,6 +458,24 @@ export interface Database {
         };
         Returns: undefined;
       };
+      create_fuel_station: {
+        Args: {
+          p_name: string;
+          p_oil_company_id: string;
+          p_region_id: string;
+          p_latitude: number;
+          p_longitude: number;
+          p_address?: string | null;
+          p_brand_label?: string | null;
+        };
+        Returns: string;
+      };
+      ensure_oil_company: {
+        Args: {
+          p_name: string;
+        };
+        Returns: string;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

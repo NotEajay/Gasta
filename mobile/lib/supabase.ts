@@ -42,7 +42,9 @@ export const supabase = createClient<Database>(
       storage: ExpoSupabaseStorage,
       autoRefreshToken: true,
       persistSession: true,
-      detectSessionInUrl: Platform.OS === 'web',
+      // We exchange the OAuth code on /auth/callback. Auto-detect races that
+      // exchange and can hang on "Signing you in…".
+      detectSessionInUrl: false,
       flowType: 'pkce',
     },
   }

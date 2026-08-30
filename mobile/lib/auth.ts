@@ -28,13 +28,23 @@ function getRedirectUrl() {
 
 export function getOAuthRedirectUrl() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return new URL('/auth/callback', window.location.origin).toString();
+    return `${window.location.origin}/auth/callback`;
   }
 
   return makeRedirectUri({
     scheme: 'gasta',
     path: 'auth/callback',
   });
+}
+
+function withRedirectTo(oauthUrl: string, redirectTo: string) {
+  try {
+    const url = new URL(oauthUrl);
+    url.searchParams.set('redirect_to', redirectTo);
+    return url.toString();
+  } catch {
+    return oauthUrl;
+  }
 }
 
 function parseAuthParams(url: string) {
@@ -56,6 +66,16 @@ function parseAuthParams(url: string) {
   }
 
   return params;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    void promise.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
 }
 
 export async function createSessionFromUrl(url: string | null): Promise<AuthResult> {
@@ -89,24 +109,31 @@ export async function createSessionFromUrl(url: string | null): Promise<AuthResu
       }
 
       if (usedAuthCodes.has(code)) {
-        const { data } = await supabase.auth.getSession();
-        return { error: null, session: data.session };
+        const waited = await waitForSession(2500);
+        return { error: waited ? null : 'Sign-in did not finish. Try again.', session: waited };
       }
 
       usedAuthCodes.add(code);
       const { data, error } = await supabase.auth.exchangeCodeForSession(code);
       if (error) {
-        const afterError = await supabase.auth.getSession();
-        if (afterError.data.session) {
-          return { error: null, session: afterError.data.session };
+        const waited = await waitForSession(2500);
+        if (waited) {
+          return { error: null, session: waited };
         }
         return { error: mapAuthError(error) };
       }
 
       return { error: null, session: data.session };
-    })();
+    })().finally(() => {
+      setTimeout(() => {
+        oauthCompletion = null;
+      }, 1000);
+    });
 
-    return oauthCompletion;
+    return withTimeout(oauthCompletion, 8000, {
+      error: 'Sign-in is taking too long. Try again.',
+      session: null,
+    });
   }
 
   const accessToken = params.get('access_token');
@@ -161,9 +188,6 @@ export async function signInWithGoogle(): Promise<AuthResult> {
       options: {
         redirectTo,
         skipBrowserRedirect: true,
-        queryParams: {
-          prompt: 'select_account',
-        },
       },
     });
 
@@ -171,12 +195,14 @@ export async function signInWithGoogle(): Promise<AuthResult> {
       return { error: mapAuthError(error) ?? 'Unable to start Google sign-in.' };
     }
 
+    const oauthUrl = withRedirectTo(data.url, redirectTo);
+
     if (Platform.OS === 'web') {
-      window.location.assign(data.url);
+      window.location.assign(oauthUrl);
       return { error: null, pendingRedirect: true };
     }
 
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, {
+    const result = await WebBrowser.openAuthSessionAsync(oauthUrl, redirectTo, {
       showInRecents: true,
     });
 

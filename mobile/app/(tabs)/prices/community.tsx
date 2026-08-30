@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import AuthPrompt from '@/components/AuthPrompt';
@@ -56,9 +56,11 @@ export default function CommunityPricesScreen() {
     }
   }, [user]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const handleConfirm = async (report: PendingCommunityReport) => {
     if (!user) {
@@ -154,7 +156,7 @@ export default function CommunityPricesScreen() {
             </Text>
             <View style={[styles.confirmRow, { backgroundColor: theme.overlay }]}>
               <Text style={[styles.meta, { color: theme.textSecondary }]}>
-                {confirmationsLabel(report.confirmation_count)}
+                Unverified · {confirmationsLabel(report.confirmation_count)}
               </Text>
               <Text style={[styles.meta, { color: theme.textSecondary }]}>
                 {formatDate(report.created_at)}
