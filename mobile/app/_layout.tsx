@@ -1,11 +1,11 @@
 import { useFonts } from 'expo-font';
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
+import { AppProviders, RootStack } from '@/components/auth/AuthGate';
 import { useColorScheme } from '@/components/useColorScheme';
-import { AuthProvider } from '@/lib/auth';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -13,7 +13,7 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-  initialRouteName: '(tabs)',
+  initialRouteName: '(auth)',
 };
 
 SplashScreen.preventAutoHideAsync();
@@ -37,11 +37,7 @@ export default function RootLayout() {
     return null;
   }
 
-  return (
-    <AuthProvider>
-      <RootLayoutNav />
-    </AuthProvider>
-  );
+  return <RootLayoutNav />;
 }
 
 function RootLayoutNav() {
@@ -49,10 +45,9 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="login" options={{ title: 'Sign in', presentation: 'modal' }} />
-      </Stack>
+      <AppProviders>
+        <RootStack />
+      </AppProviders>
     </ThemeProvider>
   );
 }

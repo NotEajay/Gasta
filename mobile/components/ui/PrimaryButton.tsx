@@ -1,8 +1,8 @@
-import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, type ViewStyle } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
+import { palette, radii, spacing } from '@/constants/Theme';
+import { useTheme } from '@/lib/useTheme';
 
 interface PrimaryButtonProps {
   label: string;
@@ -10,6 +10,7 @@ interface PrimaryButtonProps {
   disabled?: boolean;
   variant?: 'primary' | 'danger' | 'secondary';
   style?: ViewStyle;
+  size?: 'md' | 'sm';
 }
 
 export default function PrimaryButton({
@@ -18,12 +19,19 @@ export default function PrimaryButton({
   disabled,
   variant = 'primary',
   style,
+  size = 'md',
 }: PrimaryButtonProps) {
-  const scheme = useColorScheme();
-  const tint = Colors[scheme].tint;
+  const theme = useTheme();
 
   const backgroundColor =
-    variant === 'danger' ? '#c0392b' : variant === 'secondary' ? 'transparent' : tint;
+    variant === 'danger'
+      ? palette.danger
+      : variant === 'secondary'
+        ? 'transparent'
+        : palette.primary;
+
+  const textColor =
+    variant === 'secondary' ? palette.primary : '#F8F0E5';
 
   return (
     <Pressable
@@ -31,20 +39,16 @@ export default function PrimaryButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
+        size === 'sm' && styles.buttonSm,
         {
           backgroundColor,
-          borderColor: tint,
-          opacity: disabled ? 0.5 : pressed ? 0.85 : 1,
+          borderColor: variant === 'secondary' ? palette.primary : backgroundColor,
+          opacity: disabled ? 0.45 : pressed ? 0.88 : 1,
         },
-        variant === 'secondary' && styles.secondary,
+        variant === 'secondary' && { backgroundColor: theme.surface },
         style,
       ]}>
-      <Text
-        style={[
-          styles.label,
-          variant === 'secondary' && { color: tint },
-          variant !== 'secondary' && { color: '#fff' },
-        ]}>
+      <Text style={[styles.label, size === 'sm' && styles.labelSm, { color: textColor }]}>
         {label}
       </Text>
     </Pressable>
@@ -53,16 +57,22 @@ export default function PrimaryButton({
 
 const styles = StyleSheet.create({
   button: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.md,
     alignItems: 'center',
+    borderWidth: 1.5,
   },
-  secondary: {
-    borderWidth: 1,
+  buttonSm: {
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
   },
   label: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  labelSm: {
+    fontSize: 14,
   },
 });

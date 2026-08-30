@@ -25,7 +25,6 @@ export function buildModeRawScores(input: TripCalculationInput): ModeRawScores[]
       modeCode: 'OWN_VEHICLE',
       fuelCost: ownFuelCost,
       travelTime: travelTimeMinutes(distanceKm, OWN_VEHICLE_DEFAULTS.avgSpeedKmh),
-      depreciation: distanceKm * OWN_VEHICLE_DEFAULTS.depreciationPerKm,
     },
   ];
 
@@ -36,7 +35,6 @@ export function buildModeRawScores(input: TripCalculationInput): ModeRawScores[]
         modeCode: code,
         fuelCost: defaults.costPerKm * distanceKm,
         travelTime: travelTimeMinutes(distanceKm, defaults.avgSpeedKmh),
-        depreciation: defaults.depreciationPerKm * distanceKm,
       });
     }
   );
