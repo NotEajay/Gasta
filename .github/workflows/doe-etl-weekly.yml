@@ -5,8 +5,8 @@ name: DOE Weekly ETL
 
 on:
   schedule:
-    # Every Wednesday 02:00 UTC (10:00 PH) — after typical DOE weekly posting
-    - cron: "0 2 * * 3"
+    # Every Tuesday 02:00 UTC (10:00 PH) — after typical DOE weekly posting
+    - cron: "0 2 * * 2"
   workflow_dispatch:
 
 jobs:
