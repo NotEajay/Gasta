@@ -13,7 +13,7 @@ interface ChipOption<T extends string> {
 interface ChipSelectProps<T extends string> {
   label: string;
   options: readonly ChipOption<T>[];
-  value: T;
+  value: T | null;
   onChange: (value: T) => void;
   hideLabel?: boolean;
   module?: ModuleKey;

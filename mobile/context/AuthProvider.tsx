@@ -64,6 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    const loadingTimeout = setTimeout(() => {
+      setIsLoading(false);
+    }, 4000);
+
     const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
       setIsLoading(false);
@@ -88,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return () => {
+      clearTimeout(loadingTimeout);
       data.subscription.unsubscribe();
       linking.remove();
     };

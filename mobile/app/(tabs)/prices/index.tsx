@@ -9,7 +9,6 @@ import ChipSelect from '@/components/ui/ChipSelect';
 import EmptyState from '@/components/ui/EmptyState';
 import FormSection from '@/components/ui/FormSection';
 import ListRow from '@/components/ui/ListRow';
-import LoadingState from '@/components/ui/LoadingState';
 import PageHero from '@/components/ui/PageHero';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
@@ -17,6 +16,7 @@ import SectionHeader from '@/components/ui/SectionHeader';
 import SegmentedToggle from '@/components/ui/SegmentedToggle';
 import SourceBadge from '@/components/ui/SourceBadge';
 import StatCard from '@/components/ui/StatCard';
+import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import { DOE_REGIONS, type DoeRegionCode } from '@/constants/regions';
 import { palette, spacing } from '@/constants/Theme';
@@ -41,7 +41,9 @@ type PricesView = 'now' | 'history';
 const HISTORY_WEEKS = 52;
 
 export default function FuelPricesScreen() {
+  const router = useRouter();
   const theme = useTheme();
+  const { user } = useAuth();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
@@ -53,8 +55,11 @@ export default function FuelPricesScreen() {
   const [pastWeekPrices, setPastWeekPrices] = useState<FuelPriceRow[]>([]);
   const [trend, setTrend] = useState<{ bulletin_date: string; price_per_liter: number }[]>([]);
   const [verifiedCommunity, setVerifiedCommunity] = useState<
-    { station_name: string; reported_price: number }[]
+    { report_id: string; station_name: string; reported_price: number; confirmation_count: number }[]
   >([]);
+  const [pendingCommunity, setPendingCommunity] = useState<PendingCommunityReport[]>([]);
+  const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +75,12 @@ export default function FuelPricesScreen() {
   const load = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setLoading(false);
+      setRefreshing(false);
       return;
     }
     try {
       setError(null);
-      const [latest, community, weeks] = await Promise.all([
+      const [latest, community, weeks, pending] = await Promise.all([
         fetchLatestBulletinForRegion(region),
         fetchFreshVerifiedPrices(region, fuelType).catch(() => []),
         fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
@@ -82,11 +88,23 @@ export default function FuelPricesScreen() {
       setBulletin(latest);
       setPastBulletins(weeks);
       setVerifiedCommunity(
-        community.slice(0, 3).map((c) => ({
+        community.slice(0, 8).map((c) => ({
+          report_id: c.report_id,
           station_name: c.station_name,
           reported_price: c.reported_price,
+          confirmation_count: c.confirmation_count ?? VERIFY_CONFIRMATIONS_REQUIRED,
         }))
       );
+      setPendingCommunity(pending);
+      if (user && pending.length > 0) {
+        const voted = await fetchConfirmedReportIds(
+          user.id,
+          pending.map((row) => row.id)
+        ).catch(() => new Set<string>());
+        setConfirmedIds(voted);
+      } else {
+        setConfirmedIds(new Set());
+      }
 
       if (!latest) {
         setPrices([]);
@@ -111,13 +129,11 @@ export default function FuelPricesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [region, fuelType, trendCompanySlug]);
+  }, [region, fuelType, trendCompanySlug, user]);
 
   useEffect(() => {
-    setLoading(true);
     setSelectedPastDate(null);
     setPastWeekPrices([]);
-    load();
   }, [region, fuelType]);
 
   // Re-read prices whenever the tab regains focus so a bulletin loaded by the weekly
@@ -135,14 +151,14 @@ export default function FuelPricesScreen() {
   );
 
   useEffect(() => {
-    if (loading || !trendCompanySlug) return;
+    if (loading || !trendCompanySlug || !fuelType) return;
     void fetchPriceTrend(region, fuelType, trendCompanySlug)
       .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
       .catch(() => setTrend([]));
   }, [trendCompanySlug, region, fuelType, loading]);
 
   useEffect(() => {
-    if (!selectedPastDate) {
+    if (!selectedPastDate || !fuelType) {
       setPastWeekPrices([]);
       return;
     }
@@ -198,8 +214,6 @@ export default function FuelPricesScreen() {
     );
   }
 
-  if (loading) return <LoadingState message="Loading fuel prices…" />;
-
   return (
     <ScrollView
       style={[styles.flex, { backgroundColor: theme.background }]}
@@ -218,10 +232,6 @@ export default function FuelPricesScreen() {
         module="prices"
         title="Fuel Prices"
         subtitle={`${regionLabel} · ${fuelLabel}`}
-        navItems={[
-          { href: '/(tabs)/prices/community', label: 'Community' },
-          { href: '/(tabs)/prices/report', label: 'Report price' },
-        ]}
       />
 
       <SegmentedToggle
@@ -259,7 +269,14 @@ export default function FuelPricesScreen() {
         </Card>
       ) : null}
 
-      {view === 'now' ? (
+      {loading ? (
+        <View style={styles.inlineLoading}>
+          <ActivityIndicator size="large" color={palette.primary} />
+          <Text style={[styles.summaryBody, { color: theme.textSecondary, marginTop: spacing.md }]}>
+            Loading fuel prices…
+          </Text>
+        </View>
+      ) : view === 'now' ? (
         <>
           {lowest ? (
             <>
@@ -318,27 +335,77 @@ export default function FuelPricesScreen() {
             </>
           ) : null}
 
-          {verifiedCommunity.length > 0 ? (
-            <>
-              <SectionHeader
-                title="Nearby reports"
-                subtitle="Verified by 3 users · last 7 days"
-                module="community"
-              />
-              <Card elevated compact>
-                <SourceBadge source="community" />
-                {verifiedCommunity.map((item, index) => (
+          <SectionHeader
+            title="Community prices"
+            subtitle={`Unverified until ${VERIFY_CONFIRMATIONS_REQUIRED} people confirm`}
+            module="community"
+          />
+          <Card elevated>
+            {verifiedCommunity.length === 0 && pendingCommunity.length === 0 ? (
+              <Text style={[styles.emptyCommunity, { color: theme.textSecondary }]}>
+                No station prices yet. Report what you paid — it shows here as unverified.
+              </Text>
+            ) : null}
+            {verifiedCommunity.map((item, index) => (
+              <View key={item.report_id}>
+                {index === 0 ? <SourceBadge source="community" /> : null}
+                <ListRow
+                  title={item.station_name}
+                  value={`${formatCurrency(item.reported_price)}/L`}
+                  subtitle={`Verified · ${usersConfirmedLabel(item.confirmation_count)}`}
+                  highlight
+                  isLast={index === verifiedCommunity.length - 1 && pendingCommunity.length === 0}
+                />
+              </View>
+            ))}
+            {pendingCommunity.map((report, index) => {
+              const isOwn = Boolean(user && report.reported_by === user.id);
+              const alreadyVoted = confirmedIds.has(report.id);
+              const isLast = index === pendingCommunity.length - 1;
+              return (
+                <View
+                  key={report.id}
+                  style={[
+                    styles.pendingRow,
+                    !isLast && { borderBottomColor: theme.borderLight, borderBottomWidth: StyleSheet.hairlineWidth },
+                  ]}>
                   <ListRow
-                    key={item.station_name}
-                    title={item.station_name}
-                    value={`${formatCurrency(item.reported_price)}/L`}
-                    highlight
-                    isLast={index === verifiedCommunity.length - 1}
+                    title={report.station?.name ?? 'Station'}
+                    value={`${formatCurrency(report.reported_price)}/L`}
+                    subtitle={`Unverified · ${usersConfirmedLabel(report.confirmation_count)}`}
+                    isLast
                   />
-                ))}
-              </Card>
-            </>
-          ) : null}
+                  {isOwn ? (
+                    <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                      You reported this · {report.confirmation_count}/{VERIFY_CONFIRMATIONS_REQUIRED} needed
+                    </Text>
+                  ) : alreadyVoted ? (
+                    <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                      You confirmed this · {usersConfirmedLabel(report.confirmation_count)}
+                    </Text>
+                  ) : (
+                    <Pressable
+                      onPress={() => handleConfirmPrice(report)}
+                      disabled={confirmingId === report.id}
+                      style={({ pressed }) => [
+                        styles.voteBtn,
+                        pressed && styles.reportBtnPressed,
+                        confirmingId === report.id && { opacity: 0.5 },
+                      ]}>
+                      <Text style={styles.voteBtnText}>
+                        {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              );
+            })}
+            <Pressable
+              onPress={() => router.push('/(tabs)/prices/report')}
+              style={({ pressed }) => [styles.reportBtn, pressed && styles.reportBtnPressed]}>
+              <Text style={styles.reportBtnText}>Report a price</Text>
+            </Pressable>
+          </Card>
         </>
       ) : (
         <>
@@ -440,6 +507,54 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
   compareCard: { paddingVertical: spacing.xs },
+  inlineLoading: {
+    paddingVertical: spacing.xxl,
+    alignItems: 'center',
+  },
+  emptyCommunity: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: spacing.md,
+  },
+  pendingRow: {
+    paddingBottom: spacing.sm,
+  },
+  voteHint: {
+    fontSize: 12,
+    lineHeight: 16,
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  voteBtn: {
+    alignSelf: 'flex-start',
+    marginHorizontal: spacing.sm,
+    marginBottom: spacing.sm,
+    backgroundColor: GasTaColors.forest,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+  },
+  voteBtnText: {
+    color: GasTaColors.textOnForest,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  reportBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    marginTop: spacing.sm,
+  },
+  reportBtnPressed: { opacity: 0.88 },
+  reportBtnText: {
+    color: GasTaColors.forestDark,
+    fontSize: 13,
+    fontWeight: '700',
+  },
   summaryTitle: {
     fontSize: 16,
     fontWeight: '800',

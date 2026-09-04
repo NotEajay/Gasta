@@ -1,15 +1,12 @@
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Redirect, Stack, useSegments, type Href } from 'expo-router';
 
 import { AuthProvider, useAuth } from '@/context/AuthProvider';
+import { GasTaColors } from '@/constants/Theme';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, isLoading, isEmailVerified } = useAuth();
   const segments = useSegments();
-
-  if (isLoading) {
-    return null;
-  }
-
   const root = segments[0];
   const inAuthGroup = root === '(auth)';
   const inOAuthCallback = root === 'auth';
@@ -17,6 +14,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const onIndex = root === 'index' || root === undefined;
   const isAuthSurface = inAuthGroup || inOAuthCallback || onLogin || onIndex;
   const isAuthenticated = Boolean(session && isEmailVerified);
+
+  if (isLoading && !inOAuthCallback) {
+    return (
+      <View style={styles.boot}>
+        <ActivityIndicator color={GasTaColors.forest} size="large" />
+      </View>
+    );
+  }
 
   if (isAuthenticated && (inOAuthCallback || isAuthSurface)) {
     return <Redirect href="/(tabs)/prices" />;
@@ -38,6 +43,15 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   return children;
 }
+
+const styles = StyleSheet.create({
+  boot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.cream,
+  },
+});
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
