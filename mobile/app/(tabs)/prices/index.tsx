@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
@@ -19,30 +19,26 @@ import StatCard from '@/components/ui/StatCard';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import { DOE_REGIONS, type DoeRegionCode } from '@/constants/regions';
-import { GasTaColors, palette, spacing } from '@/constants/Theme';
-import { formatCurrency, formatDate, formatShortDate } from '@/lib/format';
-import { useAuth } from '@/context/AuthProvider';
+import { palette, spacing } from '@/constants/Theme';
+import { formatBulletinWeek, formatCurrency, formatDate, formatLoadedAt, formatShortDate } from '@/lib/format';
+import { fetchFreshVerifiedPrices } from '@/lib/services/communityReports';
 import {
-  confirmationsLabel,
-  confirmCommunityReport,
-  fetchConfirmedReportIds,
-  fetchFreshVerifiedPrices,
-  fetchPendingReports,
-  usersConfirmedLabel,
-  type PendingCommunityReport,
-} from '@/lib/services/communityReports';
-import {
+  bulletinAgeInDays,
   fetchBulletinsForRegion,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
   fetchPriceTrend,
+  isBulletinStale,
+  type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
-import type { FuelPriceBulletin } from '@/types';
 
 type PricesView = 'now' | 'history';
+
+/** One year of DOE weeks — enough for a full seasonal view of the trend. */
+const HISTORY_WEEKS = 52;
 
 export default function FuelPricesScreen() {
   const router = useRouter();
@@ -52,8 +48,8 @@ export default function FuelPricesScreen() {
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
   const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
-  const [bulletin, setBulletin] = useState<FuelPriceBulletin | null>(null);
-  const [pastBulletins, setPastBulletins] = useState<FuelPriceBulletin[]>([]);
+  const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
+  const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
   const [pastWeekPrices, setPastWeekPrices] = useState<FuelPriceRow[]>([]);
@@ -87,8 +83,7 @@ export default function FuelPricesScreen() {
       const [latest, community, weeks, pending] = await Promise.all([
         fetchLatestBulletinForRegion(region),
         fetchFreshVerifiedPrices(region, fuelType).catch(() => []),
-        fetchBulletinsForRegion(region, 12).catch(() => []),
-        fetchPendingReports(50, { regionCode: region, fuelTypeCode: fuelType }).catch(() => []),
+        fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
       ]);
       setBulletin(latest);
       setPastBulletins(weeks);
@@ -127,7 +122,7 @@ export default function FuelPricesScreen() {
       if (slug !== trendCompanySlug) setTrendCompanySlug(slug);
 
       const points = slug ? await fetchPriceTrend(region, fuelType, slug) : [];
-      setTrend(points.slice(-12));
+      setTrend(points.slice(-HISTORY_WEEKS));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load fuel prices');
     } finally {
@@ -141,39 +136,24 @@ export default function FuelPricesScreen() {
     setPastWeekPrices([]);
   }, [region, fuelType]);
 
+  // Re-read prices whenever the tab regains focus so a bulletin loaded by the weekly
+  // ETL shows up without the user having to restart the app. The first focus is
+  // already covered by the mount effect above.
+  const hasFocusedOnce = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      setLoading(true);
-      void load();
+      if (!hasFocusedOnce.current) {
+        hasFocusedOnce.current = true;
+        return;
+      }
+      load();
     }, [load])
   );
-
-  const handleConfirmPrice = async (report: PendingCommunityReport) => {
-    if (!user) {
-      router.push('/login');
-      return;
-    }
-    setConfirmingId(report.id);
-    try {
-      await confirmCommunityReport(report.id);
-      Alert.alert(
-        'Thanks',
-        report.confirmation_count + 1 >= VERIFY_CONFIRMATIONS_REQUIRED
-          ? 'This price is now verified.'
-          : `Marked as accurate. ${confirmationsLabel(report.confirmation_count + 1)}.`
-      );
-      await load();
-    } catch (e) {
-      Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Please try again.');
-    } finally {
-      setConfirmingId(null);
-    }
-  };
 
   useEffect(() => {
     if (loading || !trendCompanySlug || !fuelType) return;
     void fetchPriceTrend(region, fuelType, trendCompanySlug)
-      .then((points) => setTrend(points.slice(-12)))
+      .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
       .catch(() => setTrend([]));
   }, [trendCompanySlug, region, fuelType, loading]);
 
@@ -203,6 +183,28 @@ export default function FuelPricesScreen() {
 
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
+
+  const freshness = useMemo(() => {
+    if (!bulletin) return null;
+    const ageDays = bulletinAgeInDays(bulletin.bulletin_date);
+    const stale = isBulletinStale(bulletin.bulletin_date);
+    const loadedLabel = formatLoadedAt(bulletin.last_loaded_at);
+    let weekLabel: string;
+    if (ageDays < 0) {
+      weekLabel = 'Invalid future week — delete this bulletin in Supabase';
+    } else if (ageDays === 0) {
+      weekLabel = 'DOE week starts today (Tue)';
+    } else if (ageDays === 1) {
+      weekLabel = 'DOE week started yesterday';
+    } else {
+      weekLabel = `DOE week of ${formatBulletinWeek(bulletin.bulletin_date)}`;
+    }
+    return {
+      ageDays,
+      stale,
+      label: loadedLabel ? `${weekLabel} · ${loadedLabel}` : weekLabel,
+    };
+  }, [bulletin]);
 
   if (!isSupabaseConfigured) {
     return (
@@ -277,13 +279,31 @@ export default function FuelPricesScreen() {
       ) : view === 'now' ? (
         <>
           {lowest ? (
-            <StatCard
-              variant="primary"
-              module="prices"
-              label={`Lowest this week · ${bulletin ? formatDate(bulletin.bulletin_date) : ''}`}
-              value={`${formatCurrency(lowest.price_per_liter)}/L`}
-              meta={lowest.oil_company.name}
-            />
+            <>
+              <StatCard
+                variant="primary"
+                module="prices"
+                label={`Lowest · DOE week of ${bulletin ? formatBulletinWeek(bulletin.bulletin_date) : ''}`}
+                value={`${formatCurrency(lowest.price_per_liter)}/L`}
+                meta={
+                  freshness
+                    ? `${lowest.oil_company.name} · ${freshness.label}`
+                    : lowest.oil_company.name
+                }
+              />
+              {freshness?.stale ? (
+                <Card
+                  style={{ borderColor: palette.warning, backgroundColor: palette.warningSoft }}>
+                  <Text style={[styles.summaryTitle, { color: theme.text }]}>
+                    These prices are {freshness.ageDays} days old
+                  </Text>
+                  <Text style={[styles.summaryBody, { color: theme.textSecondary }]}>
+                    DOE publishes every Tuesday. This is the newest bulletin available for{' '}
+                    {regionLabel} — pull down to check for a newer one.
+                  </Text>
+                </Card>
+              ) : null}
+            </>
           ) : (
             <EmptyState
               title="No prices yet"

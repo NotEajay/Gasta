@@ -84,21 +84,30 @@ export interface Database {
           id: string;
           bulletin_date: string;
           source_pdf_url: string | null;
+          source_urls: Record<string, string>;
           notes: string | null;
+          data_freshness_days: number | null;
+          last_loaded_at: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           bulletin_date: string;
           source_pdf_url?: string | null;
+          source_urls?: Record<string, string>;
           notes?: string | null;
+          data_freshness_days?: number | null;
+          last_loaded_at?: string | null;
           created_at?: string;
         };
         Update: {
           id?: string;
           bulletin_date?: string;
           source_pdf_url?: string | null;
+          source_urls?: Record<string, string>;
           notes?: string | null;
+          data_freshness_days?: number | null;
+          last_loaded_at?: string | null;
           created_at?: string;
         };
         Relationships: [];
@@ -437,6 +446,18 @@ export interface Database {
           oil_company_id: string;
           region_id: string;
           address: string | null;
+        };
+        Relationships: [];
+      };
+      region_bulletin_weeks: {
+        Row: {
+          region_id: string;
+          region_code: string;
+          bulletin_id: string;
+          bulletin_date: string;
+          data_freshness_days: number | null;
+          last_loaded_at: string | null;
+          price_count: number;
         };
         Relationships: [];
       };

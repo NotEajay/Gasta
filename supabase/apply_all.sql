@@ -44,6 +44,12 @@ create table if not exists public.fuel_price_bulletins (
   created_at timestamptz not null default now()
 );
 
+-- ETL provenance and freshness (migrations 20240812000006 / 20240812000007)
+alter table public.fuel_price_bulletins
+  add column if not exists data_freshness_days integer,
+  add column if not exists last_loaded_at timestamptz,
+  add column if not exists source_urls jsonb not null default '{}'::jsonb;
+
 create table if not exists public.fuel_prices (
   id uuid primary key default gen_random_uuid(),
   bulletin_id uuid not null references public.fuel_price_bulletins (id) on delete cascade,
@@ -215,7 +221,10 @@ insert into public.transport_modes (code, name, description, sort_order) values
 on conflict (code) do nothing;
 
 -- =============================================================================
--- 3/3 Dev sample fuel + vehicle catalog (only if empty)
+-- 3/3 Oil companies + vehicle catalog
+--
+-- No sample fuel prices: every price row comes from the DOE ETL
+-- (`cd etl && python run.py backfill` for history, `sync-all` for the current week).
 -- =============================================================================
 
 insert into public.oil_companies (name, slug) values
@@ -226,49 +235,29 @@ insert into public.oil_companies (name, slug) values
   ('Seaoil', 'seaoil'),
   ('Unioil', 'unioil'),
   ('Phoenix', 'phoenix'),
-  ('Jetti', 'jetti')
+  ('Jetti', 'jetti'),
+  ('PTT', 'ptt'),
+  ('Flying V', 'flying-v'),
+  ('Clean Fuel', 'clean-fuel'),
+  ('My Gas', 'my-gas')
 on conflict (slug) do nothing;
 
-insert into public.fuel_price_bulletins (bulletin_date, notes) values
-  ('2026-08-05', 'Dev sample — current week'),
-  ('2026-07-29', 'Dev sample — prior week for trend')
-on conflict (bulletin_date) do nothing;
-
-insert into public.fuel_prices (bulletin_id, region_id, oil_company_id, fuel_type_id, price_per_liter)
-select b.id, r.id, c.id, ft.id,
-  base.price + r_offset.offset + c_offset.offset
-from public.fuel_price_bulletins b
-cross join public.regions r
-cross join public.oil_companies c
-cross join public.fuel_types ft
-cross join lateral (
-  select case ft.code
-    when 'RON_91' then 58.50 when 'RON_95' then 62.20 when 'RON_97' then 66.80
-    when 'RON_100' then 72.50 when 'DIESEL' then 54.30 when 'DIESEL_PLUS' then 56.10
-    when 'KEROSENE' then 48.90 end as price
-) base
-cross join lateral (
-  select case r.code
-    when 'NCR' then 0.00 when 'NORTH_LUZON' then -0.40 when 'SOUTH_LUZON' then -0.20
-    when 'VISAYAS' then 0.60 when 'MINDANAO' then 0.80 end as offset
-) r_offset
-cross join lateral (
-  select case c.slug
-    when 'petron' then 0.00 when 'shell' then 0.15 when 'caltex' then 0.10
-    when 'total' then -0.05 when 'seaoil' then -0.20 when 'unioil' then -0.15
-    when 'phoenix' then -0.25 when 'jetti' then -0.30 end as offset
-) c_offset
-where b.bulletin_date = '2026-08-05'
-on conflict (bulletin_id, region_id, oil_company_id, fuel_type_id) do nothing;
-
-insert into public.fuel_prices (bulletin_id, region_id, oil_company_id, fuel_type_id, price_per_liter)
+-- Distinct DOE bulletin weeks per region (migration 20240812000007)
+create or replace view public.region_bulletin_weeks as
 select
-  (select id from public.fuel_price_bulletins where bulletin_date = '2026-07-29'),
-  fp.region_id, fp.oil_company_id, fp.fuel_type_id, fp.price_per_liter - 0.80
+  fp.region_id,
+  r.code as region_code,
+  b.id as bulletin_id,
+  b.bulletin_date,
+  b.data_freshness_days,
+  b.last_loaded_at,
+  count(*) as price_count
 from public.fuel_prices fp
 join public.fuel_price_bulletins b on b.id = fp.bulletin_id
-where b.bulletin_date = '2026-08-05'
-on conflict (bulletin_id, region_id, oil_company_id, fuel_type_id) do nothing;
+join public.regions r on r.id = fp.region_id
+group by fp.region_id, r.code, b.id, b.bulletin_date, b.data_freshness_days, b.last_loaded_at;
+
+grant select on public.region_bulletin_weeks to anon, authenticated;
 
 insert into public.vehicle_catalog (brand, model, year, fuel_type_id, fuel_efficiency_km_per_liter)
 select 'Toyota', 'Vios', 2022, ft.id, 14.5 from public.fuel_types ft where ft.code = 'RON_91'

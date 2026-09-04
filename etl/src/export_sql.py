@@ -7,7 +7,7 @@ from .parse_bulletin import ParsedBulletin, slugify_company
 
 def export_bulletin_sql(parsed: ParsedBulletin) -> str:
     lines = [
-        "-- GasTa ETL SQL export — run in Supabase Dashboard → SQL Editor",
+        "-- GasTa ETL SQL export - run in Supabase Dashboard > SQL Editor",
         f"-- Region: {parsed.region_code} | Week: {parsed.week_label}",
         "",
         "insert into public.oil_companies (name, slug)",
@@ -22,8 +22,8 @@ def export_bulletin_sql(parsed: ParsedBulletin) -> str:
     lines.append("on conflict (slug) do nothing;")
     lines.append("")
 
-    notes = f"ETL import — {parsed.week_label}".replace("'", "''")
-    source = parsed.source_path.replace("'", "''")
+    notes = f"ETL import - {parsed.week_label}".replace("'", "''")
+    source = (parsed.source_url or parsed.source_path).replace("'", "''")
     lines.extend(
         [
             "insert into public.fuel_price_bulletins (bulletin_date, source_pdf_url, notes)",
