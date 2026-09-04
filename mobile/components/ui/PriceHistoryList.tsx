@@ -25,7 +25,21 @@ export default function PriceHistoryList({
 
   if (points.length === 0) return null;
 
-  const newestFirst = [...points].sort((a, b) => b.bulletin_date.localeCompare(a.bulletin_date));
+  const todayIso = (() => {
+    const now = new Date();
+    return [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    ].join('-');
+  })();
+
+  // Ignore future-dated rows so a bad seed like 2026-12-30 cannot become "This week".
+  const newestFirst = [...points]
+    .filter((point) => point.bulletin_date <= todayIso)
+    .sort((a, b) => b.bulletin_date.localeCompare(a.bulletin_date));
+
+  if (newestFirst.length === 0) return null;
 
   return (
     <View>
@@ -51,10 +65,10 @@ export default function PriceHistoryList({
             <View style={styles.left}>
               <Text style={[styles.date, { color: theme.text }]}>
                 {formatShortDate(point.bulletin_date)}
-                {isLatest ? '  ·  Now' : ''}
+                {isLatest ? '  ·  Latest' : ''}
               </Text>
               <Text style={[styles.hint, { color: theme.textMuted }]}>
-                {isLatest ? 'This week' : 'Past week'}
+                {isLatest ? 'Latest Tuesday week' : 'Past Tuesday week'}
               </Text>
             </View>
             <View style={styles.right}>

@@ -28,7 +28,7 @@ export default function ReportPriceScreen() {
   const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
-  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_95');
+  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
   const [stations, setStations] = useState<FuelStationOption[]>([]);
   const [stationId, setStationId] = useState('');
   const [price, setPrice] = useState('');
