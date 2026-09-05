@@ -212,6 +212,83 @@ export async function fetchPendingReports(
   limit = 50,
   filters?: { regionCode?: string; fuelTypeCode?: string }
 ): Promise<PendingCommunityReport[]> {
+  // Prefer a single embedded query so RLS + region filter stay consistent.
+  let query = supabase
+    .from('community_fuel_reports')
+    .select(
+      `
+      id,
+      reported_price,
+      confirmation_count,
+      status,
+      created_at,
+      notes,
+      reported_by,
+      station_id,
+      fuel_type_id,
+      station:fuel_stations!inner (
+        name,
+        region_id,
+        region:regions!inner ( code )
+      ),
+      fuel_type:fuel_types ( code, name )
+    `
+    )
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (filters?.regionCode) {
+    query = query.eq('station.region.code', filters.regionCode);
+  }
+
+  if (filters?.fuelTypeCode) {
+    query = query.eq('fuel_type.code', filters.fuelTypeCode);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    // Fallback without embeds if the relationship filter is unsupported
+    return fetchPendingReportsFallback(limit, filters);
+  }
+
+  return ((data ?? []) as unknown as Array<{
+    id: string;
+    reported_price: number;
+    confirmation_count: number;
+    status: string;
+    created_at: string;
+    notes: string | null;
+    reported_by: string;
+    station:
+      | { name: string; region: { code: string } | { code: string }[] | null }
+      | { name: string; region: { code: string } | { code: string }[] | null }[]
+      | null;
+    fuel_type: { code: string; name: string } | { code: string; name: string }[] | null;
+  }>).map((row) => {
+    const station = unwrapOne(row.station);
+    const region = station ? unwrapOne(station.region) : null;
+    const fuelType = unwrapOne(row.fuel_type);
+    return {
+      id: row.id,
+      reported_price: row.reported_price,
+      confirmation_count: row.confirmation_count,
+      status: row.status,
+      created_at: row.created_at,
+      notes: row.notes,
+      reported_by: row.reported_by,
+      station: station
+        ? { name: station.name, region: { code: region?.code ?? '' } }
+        : null,
+      fuel_type: fuelType ? { code: fuelType.code, name: fuelType.name } : null,
+    };
+  });
+}
+
+async function fetchPendingReportsFallback(
+  limit = 50,
+  filters?: { regionCode?: string; fuelTypeCode?: string }
+): Promise<PendingCommunityReport[]> {
   let stationIds: string[] | null = null;
   if (filters?.regionCode) {
     const regionId = await resolveRegionId(filters.regionCode);

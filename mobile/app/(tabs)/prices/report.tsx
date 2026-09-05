@@ -336,7 +336,10 @@ export default function ReportPriceScreen() {
             ) : null}
             <PrimaryButton
               label="Back to Fuel Prices"
-              onPress={() => router.replace('/(tabs)/prices')}
+              onPress={() => {
+                resetForm();
+                router.replace('/(tabs)/prices');
+              }}
               style={styles.successBtn}
             />
             <PrimaryButton label="Report another" variant="secondary" onPress={resetForm} />

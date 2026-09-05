@@ -55,36 +55,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    let isMounted = true;
+
+    // Fetch initial session
     getSession().then((currentSession) => {
-      setSession(currentSession);
-      setIsLoading(false);
-      if (currentSession?.user) {
-        void ensureProfile(currentSession.user);
-        void validateSessionInBackground();
+      if (isMounted) {
+        setSession(currentSession);
+        setIsLoading(false);
+        if (currentSession?.user) {
+          void ensureProfile(currentSession.user);
+          void validateSessionInBackground();
+        }
       }
     });
 
-    const loadingTimeout = setTimeout(() => {
-      setIsLoading(false);
-    }, 4000);
-
+    // Listen for auth state changes
     const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      setSession(nextSession);
-      setIsLoading(false);
+      if (isMounted) {
+        setSession(nextSession);
+        setIsLoading(false);
 
-      if (nextSession?.user && event !== 'TOKEN_REFRESHED') {
-        setTimeout(() => {
-          void ensureProfile(nextSession.user);
-        }, 0);
+        if (nextSession?.user && event !== 'TOKEN_REFRESHED') {
+          setTimeout(() => {
+            void ensureProfile(nextSession.user);
+          }, 0);
+        }
       }
     });
 
+    // Handle deep links
     const handleUrl = ({ url }: { url: string }) => {
       void createSessionFromUrl(url);
     };
 
     const linking = Linking.addEventListener('url', handleUrl);
 
+    // Process initial URL if present
     if (typeof window === 'undefined' || !window.location.pathname.includes('/auth/callback')) {
       void Linking.getInitialURL().then((url) => {
         void createSessionFromUrl(url);
@@ -92,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return () => {
-      clearTimeout(loadingTimeout);
+      isMounted = false;
       data.subscription.unsubscribe();
       linking.remove();
     };

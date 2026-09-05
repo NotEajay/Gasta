@@ -15,7 +15,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const isAuthSurface = inAuthGroup || inOAuthCallback || onLogin || onIndex;
   const isAuthenticated = Boolean(session && isEmailVerified);
 
-  if (isLoading && !inOAuthCallback) {
+  // Always block during loading - never render auth surface or protected routes
+  if (isLoading) {
     return (
       <View style={styles.boot}>
         <ActivityIndicator color={GasTaColors.forest} size="large" />
@@ -23,11 +24,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // If authenticated, redirect from auth surfaces to main app
   if (isAuthenticated && (inOAuthCallback || isAuthSurface)) {
     return <Redirect href="/(tabs)/prices" />;
   }
 
-  if (!isAuthenticated && !isAuthSurface) {
+  // If not authenticated, redirect to appropriate auth screen
+  if (!isAuthenticated) {
+    // Email verification required
     if (session && !isEmailVerified) {
       return (
         <Redirect
@@ -38,7 +42,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       );
     }
 
-    return <Redirect href="/(auth)" />;
+    // Must be on auth surface if not authenticated
+    if (!isAuthSurface) {
+      return <Redirect href="/(auth)" />;
+    }
   }
 
   return children;

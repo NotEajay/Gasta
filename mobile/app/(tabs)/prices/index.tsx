@@ -82,8 +82,21 @@ export default function FuelPricesScreen() {
       setError(null);
       const [latest, community, weeks, pending] = await Promise.all([
         fetchLatestBulletinForRegion(region),
+<<<<<<< Updated upstream
         fetchFreshVerifiedPrices(region, fuelType).catch(() => []),
         fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
+=======
+        fetchFreshVerifiedPrices(region, fuelType).catch((e) => {
+          console.warn('Verified community prices failed', e);
+          return [];
+        }),
+        fetchBulletinsForRegion(region, 12).catch(() => []),
+        // Region only — fuel chip must not hide other pending grades
+        fetchPendingReports(50, { regionCode: region }).catch((e) => {
+          console.warn('Pending community reports failed', e);
+          return [];
+        }),
+>>>>>>> Stashed changes
       ]);
       setBulletin(latest);
       setPastBulletins(weeks);
@@ -142,11 +155,20 @@ export default function FuelPricesScreen() {
   const hasFocusedOnce = useRef(false);
   useFocusEffect(
     useCallback(() => {
+<<<<<<< Updated upstream
       if (!hasFocusedOnce.current) {
         hasFocusedOnce.current = true;
         return;
       }
       load();
+=======
+      // Reset state and reload to ensure fresh data from database
+      setLoading(true);
+      setVerifiedCommunity([]);
+      setPendingCommunity([]);
+      setConfirmedIds(new Set());
+      void load();
+>>>>>>> Stashed changes
     }, [load])
   );
 
@@ -372,7 +394,7 @@ export default function FuelPricesScreen() {
                   <ListRow
                     title={report.station?.name ?? 'Station'}
                     value={`${formatCurrency(report.reported_price)}/L`}
-                    subtitle={`Unverified · ${usersConfirmedLabel(report.confirmation_count)}`}
+                    subtitle={`Unverified · ${report.fuel_type?.name ?? 'Fuel'} · ${usersConfirmedLabel(report.confirmation_count)}`}
                     isLast
                   />
                   {isOwn ? (
