@@ -84,21 +84,30 @@ export interface Database {
           id: string;
           bulletin_date: string;
           source_pdf_url: string | null;
+          source_urls: Record<string, string>;
           notes: string | null;
+          data_freshness_days: number | null;
+          last_loaded_at: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           bulletin_date: string;
           source_pdf_url?: string | null;
+          source_urls?: Record<string, string>;
           notes?: string | null;
+          data_freshness_days?: number | null;
+          last_loaded_at?: string | null;
           created_at?: string;
         };
         Update: {
           id?: string;
           bulletin_date?: string;
           source_pdf_url?: string | null;
+          source_urls?: Record<string, string>;
           notes?: string | null;
+          data_freshness_days?: number | null;
+          last_loaded_at?: string | null;
           created_at?: string;
         };
         Relationships: [];
@@ -111,6 +120,7 @@ export interface Database {
           oil_company_id: string;
           fuel_type_id: string;
           price_per_liter: number;
+          area_name: string;
           created_at: string;
         };
         Insert: {
@@ -120,6 +130,7 @@ export interface Database {
           oil_company_id: string;
           fuel_type_id: string;
           price_per_liter: number;
+          area_name?: string;
           created_at?: string;
         };
         Update: {
@@ -129,6 +140,7 @@ export interface Database {
           oil_company_id?: string;
           fuel_type_id?: string;
           price_per_liter?: number;
+          area_name?: string;
           created_at?: string;
         };
         Relationships: [];
@@ -440,6 +452,18 @@ export interface Database {
         };
         Relationships: [];
       };
+      region_bulletin_weeks: {
+        Row: {
+          region_id: string;
+          region_code: string;
+          bulletin_id: string;
+          bulletin_date: string;
+          data_freshness_days: number | null;
+          last_loaded_at: string | null;
+          price_count: number;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
       submit_community_fuel_report: {
@@ -457,6 +481,24 @@ export interface Database {
           p_observed_price?: number | null;
         };
         Returns: undefined;
+      };
+      create_fuel_station: {
+        Args: {
+          p_name: string;
+          p_oil_company_id: string;
+          p_region_id: string;
+          p_latitude: number;
+          p_longitude: number;
+          p_address?: string | null;
+          p_brand_label?: string | null;
+        };
+        Returns: string;
+      };
+      ensure_oil_company: {
+        Args: {
+          p_name: string;
+        };
+        Returns: string;
       };
     };
     Enums: Record<string, never>;

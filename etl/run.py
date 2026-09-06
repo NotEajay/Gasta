@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 # Allow running as `python run.py` from etl/
@@ -18,8 +18,9 @@ from src.automation import (
     sync_latest_region,
     sync_result_to_json,
 )
+from src.backfill import backfill_all_regions, backfill_region
 from src.constants import ALL_REGION_KEYS
-from src.discover import discover_latest_region
+from src.discover import discover_latest_region, discover_region_bulletins
 from src.download import download_ncr_bulletin, download_region_bulletins, normalize_region
 from src.export_sql import export_bulletin_sql
 from src.load_supabase import load_bulletin
@@ -129,6 +130,7 @@ def cmd_download_ncr(args: argparse.Namespace) -> None:
 
 
 def cmd_download_region(args: argparse.Namespace) -> None:
+    discovered = discover_latest_region(args.region)
     paths = download_region_bulletins(
         args.region,
         discovered.slugs,
@@ -138,20 +140,94 @@ def cmd_download_region(args: argparse.Namespace) -> None:
         print(f"Downloaded {path}")
 
 
+def _week_bounds(args: argparse.Namespace) -> tuple[date | None, date | None]:
+    since = date.fromisoformat(args.since) if args.since else None
+    until = date.fromisoformat(args.until) if args.until else None
+    if args.weeks:
+        window_start = date.today() - timedelta(weeks=args.weeks)
+        since = max(since, window_start) if since else window_start
+    return since, until
+
+
+def _print_backfill_summary(reports: list) -> None:
+    print("\n=== Backfill summary ===")
+    for report in reports:
+        print(
+            f"{report.region_code:<12} found={report.documents_found:<4} "
+            f"loaded={report.weeks_loaded:<4} skipped={report.weeks_skipped:<4} "
+            f"failed={report.weeks_failed:<3} prices={report.price_rows:<6} "
+            f"weeks={report.oldest_week or '-'} .. {report.newest_week or '-'}"
+        )
+        for error in report.errors:
+            print(f"  ! {error}")
+        for note in report.unreadable:
+            print(f"  - skipped (DOE published a scan): {note}")
+        for week in report.weeks:
+            for warning in week.warnings:
+                print(f"  ~ {week.week_start}: {warning}")
+
+
+def cmd_backfill(args: argparse.Namespace) -> None:
+    since, until = _week_bounds(args)
+    reports = (
+        backfill_all_regions(
+            dest_dir=args.out_dir,
+            since=since,
+            until=until,
+            dry_run=args.dry_run,
+            force=args.force,
+            max_weeks=args.max_weeks,
+        )
+        if args.region == "all"
+        else [
+            backfill_region(
+                args.region,
+                dest_dir=args.out_dir,
+                since=since,
+                until=until,
+                dry_run=args.dry_run,
+                force=args.force,
+                max_weeks=args.max_weeks,
+            )
+        ]
+    )
+    print(json.dumps([r.to_dict() for r in reports], indent=2))
+    _print_backfill_summary(reports)
+    if not args.dry_run and all(r.weeks_loaded == 0 and r.weeks_skipped == 0 for r in reports):
+        sys.exit(1)
+
+
+def cmd_list_weeks(args: argparse.Namespace) -> None:
+    bulletins = discover_region_bulletins(args.region)
+    print(
+        json.dumps(
+            [
+                {
+                    "week_start": b.week_start.isoformat(),
+                    "slugs": list(b.slugs),
+                }
+                for b in bulletins
+            ],
+            indent=2,
+        )
+    )
+    print(f"\n{len(bulletins)} datable bulletin weeks discovered for {args.region}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GasTa DOE PDF ETL")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_parse = sub.add_parser("parse", help="Parse PDF(s) and print JSON")
     p_parse.add_argument("pdf", nargs="+", help="Path(s) to DOE bulletin PDF")
-    p_parse.add_argument("--region", default="ncr", help="Region key (ncr, north_luzon, …)")
+    p_parse.add_argument("--region", default="ncr", help="Region key (ncr, north_luzon, ...)")
     p_parse.add_argument("--week", help="Fallback week start YYYY-MM-DD (Visayas slug-only headers)")
     p_parse.add_argument("-o", "--output", help="Optional JSON output file")
     p_parse.set_defaults(func=cmd_parse)
 
     p_load = sub.add_parser("load", help="Parse PDF(s) and upsert into Supabase")
     p_load.add_argument("pdf", nargs="+", help="Path(s) to DOE bulletin PDF")
-    p_load.add_argument("--region", default="ncr", help="Region key (ncr, north_luzon, …)")
+    p_load.add_argument("--region", default="ncr", help="Region key (ncr, north_luzon, ...)")
     p_load.add_argument("--week", help="Fallback week start YYYY-MM-DD")
     p_load.add_argument("--dry-run", action="store_true", help="Parse only, do not write to Supabase")
     p_load.set_defaults(func=cmd_load)
@@ -205,6 +281,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync_all.add_argument("--dry-run", action="store_true")
     p_sync_all.add_argument("--force", action="store_true")
     p_sync_all.set_defaults(func=cmd_sync_all)
+
+    p_backfill = sub.add_parser(
+        "backfill",
+        help="Load the full DOE bulletin archive (price history) for one or all regions",
+    )
+    p_backfill.add_argument(
+        "--region",
+        default="all",
+        choices=("all", *ALL_REGION_KEYS),
+        help="Region key, or 'all' for every macro-region",
+    )
+    p_backfill.add_argument("--since", help="Earliest bulletin week to load (YYYY-MM-DD)")
+    p_backfill.add_argument("--until", help="Latest bulletin week to load (YYYY-MM-DD)")
+    p_backfill.add_argument("--weeks", type=int, help="Only load the last N weeks")
+    p_backfill.add_argument("--max-weeks", type=int, help="Cap how many weeks are loaded")
+    p_backfill.add_argument("--out-dir", default="data/bulletins")
+    p_backfill.add_argument("--dry-run", action="store_true")
+    p_backfill.add_argument("--force", action="store_true", help="Reload weeks already stored")
+    p_backfill.set_defaults(func=cmd_backfill)
+
+    p_weeks = sub.add_parser(
+        "list-weeks",
+        help="Print every bulletin week DOE currently publishes for a region",
+    )
+    p_weeks.add_argument("--region", required=True, choices=ALL_REGION_KEYS)
+    p_weeks.set_defaults(func=cmd_list_weeks)
 
     return parser
 

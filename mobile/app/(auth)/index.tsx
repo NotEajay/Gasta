@@ -25,7 +25,10 @@ import { useResponsive } from '@/hooks/useResponsive';
 type AuthMode = 'signin' | 'signup';
 
 export default function AuthScreen() {
-  const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
+  const { mode: modeParam, error: errorParam } = useLocalSearchParams<{
+    mode?: string;
+    error?: string;
+  }>();
   const { signIn, signUp, signInWithGoogle } = useAuth();
 
   const [mode, setMode] = useState<AuthMode>('signin');
@@ -33,7 +36,9 @@ export default function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    typeof errorParam === 'string' ? errorParam : null
+  );
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 

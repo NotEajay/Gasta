@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import AuthPrompt from '@/components/AuthPrompt';
@@ -46,19 +46,26 @@ export default function CommunityPricesScreen() {
     try {
       const [v, p] = await Promise.all([
         fetchFreshVerifiedPrices(),
-        user ? fetchPendingReports() : Promise.resolve([]),
+        fetchPendingReports(),
       ]);
       setVerified(v);
       setPending(p);
+    } catch (e) {
+      console.warn('Community prices load failed', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      // Reset state and reload to ensure fresh data from database
+      setVerified([]);
+      setPending([]);
+      void load();
+    }, [load])
+  );
 
   const handleConfirm = async (report: PendingCommunityReport) => {
     if (!user) {
@@ -154,7 +161,7 @@ export default function CommunityPricesScreen() {
             </Text>
             <View style={[styles.confirmRow, { backgroundColor: theme.overlay }]}>
               <Text style={[styles.meta, { color: theme.textSecondary }]}>
-                {confirmationsLabel(report.confirmation_count)}
+                Unverified · {confirmationsLabel(report.confirmation_count)}
               </Text>
               <Text style={[styles.meta, { color: theme.textSecondary }]}>
                 {formatDate(report.created_at)}

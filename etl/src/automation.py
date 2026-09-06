@@ -7,11 +7,15 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 
-from .constants import ALL_REGION_KEYS, REGION_KEY_BY_CODE, REGION_CODES
-from .discover import DiscoveredBulletin, discover_latest_region, discover_latest_ncr_week
-from .download import download_region_bulletins, normalize_region
+from .constants import ALL_REGION_KEYS, REGION_KEY_BY_CODE
+from .discover import DiscoveredBulletin, discover_latest_weeks
+from .download import download_region_bulletins, normalize_region, slug_to_url
 from .load_supabase import _client, load_bulletin
-from .parse_bulletin import parse_region_pdfs
+from .parse_bulletin import (
+    BulletinDateUnknown,
+    BulletinNotMachineReadable,
+    parse_region_pdfs,
+)
 
 
 @dataclass
@@ -72,6 +76,7 @@ def _sync_discovered(
         pdf_paths,
         region_code,
         fallback_week_start=discovered.week_start,
+        source_urls=[slug_to_url(slug) for slug in discovered.slugs],
     )
 
     # Check for validation errors
@@ -97,7 +102,7 @@ def _sync_discovered(
             skipped=True,
             message=(
                 f"{region_code} prices for bulletin {parsed.bulletin_date.isoformat()} "
-                "already in Supabase — skipped."
+                "already in Supabase - skipped."
             ),
         )
 
@@ -110,7 +115,7 @@ def _sync_discovered(
             pdf_path=pdf_path_display,
             price_rows=len(parsed.prices),
             companies=len({p.company for p in parsed.prices}),
-            message="Dry run — no database write.",
+            message="Dry run - no database write.",
         )
 
     load_stats = load_bulletin(parsed)
@@ -128,6 +133,46 @@ def _sync_discovered(
     )
 
 
+def sync_latest_region(
+    region_key: str,
+    *,
+    dest_dir: str | Path = "data/bulletins",
+    dry_run: bool = False,
+    force: bool = False,
+    fallback_weeks: int = 3,
+) -> SyncResult:
+    """Discover, download, parse, and load the latest usable bulletin for one region.
+
+    DOE occasionally publishes a week as page scans, which hold no readable prices. So
+    that the app still shows this region's most recent prices rather than an error, the
+    next-newest weeks are tried in turn.
+    """
+    candidates = discover_latest_weeks(
+        region_key, limit=1 + max(fallback_weeks, 0), probe_dir=dest_dir
+    )
+
+    skipped: list[str] = []
+    for discovered in candidates:
+        try:
+            result = _sync_discovered(
+                discovered, dest_dir=dest_dir, dry_run=dry_run, force=force
+            )
+        except (BulletinNotMachineReadable, BulletinDateUnknown) as exc:
+            skipped.append(f"{discovered.week_start}: {exc}")
+            continue
+        if skipped:
+            result.message = (
+                f"{result.message} Newer weeks were unusable - "
+                f"{'; '.join(skipped)}"
+            )
+        return result
+
+    raise RuntimeError(
+        f"No usable bulletin for {normalize_region(region_key)} in the last "
+        f"{len(candidates)} published weeks: {'; '.join(skipped)}"
+    )
+
+
 def sync_latest_ncr(
     *,
     dest_dir: str | Path = "data/bulletins",
@@ -135,29 +180,7 @@ def sync_latest_ncr(
     force: bool = False,
 ) -> SyncResult:
     """Full automated pipeline for the latest NCR DOE bulletin."""
-    week_start = discover_latest_ncr_week()
-    discovered = DiscoveredBulletin(
-        region_code="NCR",
-        week_start=week_start,
-        slugs=(f"ncr-price-monitoring-{week_start.strftime('%m%d%Y')}-pdf",),
-        source="ncr-date-probe",
-    )
-    return _sync_discovered(discovered, dest_dir=dest_dir, dry_run=dry_run, force=force)
-
-
-def sync_latest_region(
-    region_key: str,
-    *,
-    dest_dir: str | Path = "data/bulletins",
-    dry_run: bool = False,
-    force: bool = False,
-) -> SyncResult:
-    """Discover, download, parse, and load the latest bulletin for one macro-region."""
-    if region_key.strip().lower().replace("-", "_") == "ncr":
-        return sync_latest_ncr(dest_dir=dest_dir, dry_run=dry_run, force=force)
-
-    discovered = discover_latest_region(region_key)
-    return _sync_discovered(discovered, dest_dir=dest_dir, dry_run=dry_run, force=force)
+    return sync_latest_region("ncr", dest_dir=dest_dir, dry_run=dry_run, force=force)
 
 
 def sync_all_regions(
@@ -178,36 +201,17 @@ def sync_all_regions(
                     force=force,
                 )
             )
-        except Exception as exc:
-            region_code = normalize_region(region_key)
-            error_msg = str(exc)
-            
-            # Check if this is a "no data available" error for North Luzon or Mindanao
-            if "may not have data available on the new DOE website yet" in error_msg:
-                # Treat as a skip rather than a failure
-                results.append(
-                    SyncResult(
-                        region_code=region_code,
-                        week_start="",
-                        pdf_path="",
-                        price_rows=0,
-                        companies=0,
-                        skipped=True,
-                        message=f"Skipped: {region_code} data not available on DOE website yet. {error_msg}",
-                    )
+        except Exception as exc:  # noqa: BLE001 — one region must not stop the rest
+            results.append(
+                SyncResult(
+                    region_code=normalize_region(region_key),
+                    week_start="",
+                    pdf_path="",
+                    price_rows=0,
+                    companies=0,
+                    message=f"Failed: {type(exc).__name__}: {exc}",
                 )
-            else:
-                # Other errors are genuine failures
-                results.append(
-                    SyncResult(
-                        region_code=region_code,
-                        week_start="",
-                        pdf_path="",
-                        price_rows=0,
-                        companies=0,
-                        message=f"Failed: {exc}",
-                    )
-                )
+            )
     return results
 
 

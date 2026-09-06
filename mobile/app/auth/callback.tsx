@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
-import { useGlobalSearchParams, useRouter } from 'expo-router';
+import { useGlobalSearchParams, useRouter, type Href } from 'expo-router';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
@@ -13,15 +13,38 @@ const capturedCallbackUrl = typeof window !== 'undefined' ? window.location.href
 
 export default function AuthCallbackScreen() {
   const router = useRouter();
-  const params = useGlobalSearchParams<{ code?: string; error?: string; error_description?: string }>();
+  const params = useGlobalSearchParams<{
+    code?: string;
+    error?: string;
+    error_description?: string;
+  }>();
+  const started = useRef(false);
 
   useEffect(() => {
     WebBrowser.maybeCompleteAuthSession();
 
-    let cancelled = false;
+    if (started.current) {
+      return;
+    }
+    started.current = true;
 
     void (async () => {
-      const searchCode = typeof params.code === 'string' ? params.code : Array.isArray(params.code) ? params.code[0] : null;
+      const oauthError =
+        (typeof params.error_description === 'string' && params.error_description) ||
+        (typeof params.error === 'string' && params.error) ||
+        null;
+
+      if (oauthError) {
+        router.replace(`/(auth)?error=${encodeURIComponent(oauthError)}` as Href);
+        return;
+      }
+
+      const searchCode =
+        typeof params.code === 'string'
+          ? params.code
+          : Array.isArray(params.code)
+            ? params.code[0]
+            : null;
       const hrefFromParams = searchCode
         ? `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost'}/auth/callback?code=${encodeURIComponent(searchCode)}`
         : null;
@@ -32,22 +55,15 @@ export default function AuthCallbackScreen() {
 
       const result = await createSessionFromUrl(href);
 
-      if (cancelled) {
-        return;
-      }
-
       if (result.session) {
         router.replace('/(tabs)/prices');
         return;
       }
 
-      router.replace('/(auth)');
+      const message = result.error ?? 'Sign-in did not finish. Try again.';
+      router.replace(`/(auth)?error=${encodeURIComponent(message)}` as Href);
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [params.code, router]);
+  }, [params.code, params.error, params.error_description, router]);
 
   return (
     <View style={styles.container}>
