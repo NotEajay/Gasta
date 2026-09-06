@@ -4,6 +4,7 @@ import type { FuelPriceBulletin } from '@/types';
 export interface FuelPriceRow {
   id: string;
   price_per_liter: number;
+  area_name: string;
   oil_company: { id: string; name: string; slug: string };
   fuel_type: { id: string; code: string; name: string };
   region: { id: string; code: string; name: string };
@@ -36,19 +37,28 @@ export function isBulletinStale(bulletinDate: string, now = new Date()): boolean
   return age < 0 || age > STALE_AFTER_DAYS;
 }
 
+const regionIdCache = new Map<string, string>();
+const fuelTypeIdCache = new Map<string, string>();
+
 async function resolveRegionId(regionCode: string): Promise<string> {
+  const cached = regionIdCache.get(regionCode);
+  if (cached) return cached;
   const { data, error } = await supabase.from('regions').select('id').eq('code', regionCode).single();
   if (error) throw error;
+  regionIdCache.set(regionCode, data.id);
   return data.id;
 }
 
 async function resolveFuelTypeId(fuelTypeCode: string): Promise<string> {
+  const cached = fuelTypeIdCache.get(fuelTypeCode);
+  if (cached) return cached;
   const { data, error } = await supabase
     .from('fuel_types')
     .select('id')
     .eq('code', fuelTypeCode)
     .single();
   if (error) throw error;
+  fuelTypeIdCache.set(fuelTypeCode, data.id);
   return data.id;
 }
 
@@ -137,7 +147,8 @@ export async function fetchBulletins(limit = 8): Promise<FuelPriceBulletin[]> {
 export async function fetchFuelPricesForBulletin(
   bulletinId: string,
   regionCode: string,
-  fuelTypeCode: string
+  fuelTypeCode: string,
+  areaName = ''
 ): Promise<FuelPriceRow[]> {
   const [regionId, fuelTypeId] = await Promise.all([
     resolveRegionId(regionCode),
@@ -150,6 +161,7 @@ export async function fetchFuelPricesForBulletin(
       `
       id,
       price_per_liter,
+      area_name,
       oil_company:oil_companies ( id, name, slug ),
       fuel_type:fuel_types ( id, code, name ),
       region:regions ( id, code, name ),
@@ -159,10 +171,35 @@ export async function fetchFuelPricesForBulletin(
     .eq('bulletin_id', bulletinId)
     .eq('region_id', regionId)
     .eq('fuel_type_id', fuelTypeId)
+    .eq('area_name', areaName)
     .order('price_per_liter', { ascending: true });
 
   if (error) throw error;
-  return (data ?? []) as unknown as FuelPriceRow[];
+  const rows = (data ?? []) as unknown as FuelPriceRow[];
+  // Some regions (e.g. North Luzon) only have region-wide rows — fall back when
+  // the selected city has no DOE AREA prices.
+  if (rows.length === 0 && areaName) {
+    return fetchFuelPricesForBulletin(bulletinId, regionCode, fuelTypeCode, '');
+  }
+  return rows;
+}
+
+/** Distinct city/area labels for a bulletin week in a region (excludes region-wide ''). */
+export async function fetchBulletinAreas(
+  bulletinId: string,
+  regionCode: string
+): Promise<string[]> {
+  const regionId = await resolveRegionId(regionCode);
+  const { data, error } = await supabase
+    .from('fuel_prices')
+    .select('area_name')
+    .eq('bulletin_id', bulletinId)
+    .eq('region_id', regionId)
+    .neq('area_name', '')
+    .order('area_name');
+
+  if (error) throw error;
+  return [...new Set((data ?? []).map((row) => row.area_name).filter(Boolean))];
 }
 
 export async function fetchPriceTrend(
@@ -192,7 +229,8 @@ export async function fetchPriceTrend(
     )
     .eq('region_id', regionId)
     .eq('fuel_type_id', fuelTypeId)
-    .eq('oil_company_id', company.id);
+    .eq('oil_company_id', company.id)
+    .eq('area_name', '');
 
   if (error) throw error;
 

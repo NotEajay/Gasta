@@ -83,8 +83,9 @@ def test_low_and_high_of_a_pair_both_land_on_their_own_brand(anchors) -> None:
         147.7,
     )
 
-    fuel, by_company = _assign_prices_by_column(row, anchors)
+    area, fuel, by_company = _assign_prices_by_column(row, anchors)
 
+    assert area == ""
     assert fuel == "RON 97"
     assert by_company == {"SHELL": [95.00, 95.60], "SEAOIL": [70.79, 80.39]}
 
@@ -102,7 +103,7 @@ def test_absent_brands_get_no_prices(anchors) -> None:
         175.1,
     )
 
-    _, by_company = _assign_prices_by_column(row, anchors)
+    _, _, by_company = _assign_prices_by_column(row, anchors)
 
     assert by_company == {"PETRON": [86.10, 90.10], "FLYING V": [85.10, 86.10]}
 
@@ -120,7 +121,7 @@ def test_independent_and_overall_range_columns_are_not_brands(anchors) -> None:
         175.1,
     )
 
-    _, by_company = _assign_prices_by_column(row, anchors)
+    _, _, by_company = _assign_prices_by_column(row, anchors)
 
     assert by_company == {}
 
@@ -138,8 +139,9 @@ def test_area_name_sharing_the_row_still_resolves_the_fuel(anchors) -> None:
         164.5,
     )
 
-    fuel, by_company = _assign_prices_by_column(row, anchors)
+    area, fuel, by_company = _assign_prices_by_column(row, anchors)
 
+    assert area == "Caloocan City"
     assert fuel == "RON 91"
     assert by_company == {"PETRON": [72.80, 77.20]}
 

@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .constants import (
+    CMS_PROBE_LOOKBACK_WEEKS,
     DOE_REGION_PAGE_URL,
     REGION_CODES,
     REGION_PAGE_SLUGS,
@@ -26,10 +27,16 @@ from .constants import (
 )
 from .download import download_pdf, ncr_pdf_url, pdf_exists, read_url_text, slug_to_url
 from .parse_bulletin import read_bulletin_week
-from .slug_dates import MONTH_ALTERNATION, normalize_slug, parse_week_start_from_slug
+from .slug_dates import (
+    MONTH_ALTERNATION,
+    normalize_bulletin_week_start,
+    normalize_slug,
+    parse_week_start_from_slug,
+)
 
 GUEST_SLUG_RE = re.compile(r"documents/d/guest/([a-z0-9][a-z0-9\-_]*pdf)", re.I)
 TRAILING_SEQUENCE_RE = re.compile(r"-(\d{1,3})$")
+LEADING_SEQUENCE_RE = re.compile(r"^(\d{1,3})-")
 MONTH_IN_SLUG_RE = re.compile(rf"(?<![a-z])({MONTH_ALTERNATION})(?![a-z])")
 
 # How many undated candidates per sub-region to open when looking for the latest week.
@@ -189,6 +196,132 @@ def discover_latest_ncr_week(*, lookback_days: int = 28) -> date:
     )
 
 
+def leading_sequence_for_slug(slug: str) -> int | None:
+    """Counter DOE prefixes Mindanao files with (`33-lfro-price-monitoring-…` → 33)."""
+    match = LEADING_SEQUENCE_RE.match(normalize_slug(slug))
+    return int(match.group(1)) if match else None
+
+
+def cms_probe_slugs(
+    region_code: str, week_start: date, *, sequence_hint: int | None = None
+) -> list[str]:
+    """CMS slugs DOE is likely to have used for a region's bulletin of one week.
+
+    Only regions with predictable filenames are probed. Every naming variant DOE has
+    used for the current series is returned, most common first:
+
+        NCR       ncr-price-monitoring-08252026-pdf
+        VISAYAS   vfo-price-monitoring-082526_with-lgu-and-field-pdf
+        MINDANAO  34-lfro-price-monitoring-august-25-31-2026-pdf   (needs the counter)
+                  31-lfro-price-monitoring-august-4-2026-pdf
+
+    Mindanao's running counter comes from `sequence_hint`; neighbouring counters are
+    tried too in case DOE skipped or repeated a number.
+    """
+    week_end = week_start + timedelta(days=6)
+    month_start = week_start.strftime("%B").lower()
+    month_end = week_end.strftime("%B").lower()
+    year = week_start.year
+
+    if month_start == month_end:
+        span = f"{month_start}-{week_start.day}-{week_end.day}-{year}"
+    else:
+        span = f"{month_start}-{week_start.day}-{month_end}-{week_end.day}-{year}"
+    single = f"{month_start}-{week_start.day}-{year}"
+
+    if region_code == "NCR":
+        return [
+            f"ncr-price-monitoring-{week_start.strftime('%m%d%Y')}-pdf",
+            f"ncr-price-monitoring-{week_start.strftime('%m%d%Y')}-1-pdf",
+            f"ncr-price-monitoring-{week_start.strftime('%m%d%Y')}n-pdf",
+            f"ncr-price-monitoring-{week_start.strftime('%m-%d-%Y')}-pdf",
+            f"ncr-price-monitoring-for-{span}-pdf",
+            f"ncr-price-monitoring-{span}-pdf",
+        ]
+
+    if region_code == "NORTH_LUZON":
+        return [
+            f"north-luzon-lf-price-monitoring-report-{month_start}-{week_start.day}-{year}-pdf",
+            f"north-luzon-lf-price-monitoring-report-{month_end}-{week_end.day}-{year}-pdf",
+            f"north-luzon-liquid-fuels-price-monitoring-report-for-{week_start.day}-{week_end.day}-{month_start}-{year}-pdf",
+            f"lf-price-monitoring-for-{span}-pdf",
+        ]
+
+    if region_code == "VISAYAS":
+        stamp = week_start.strftime("%m%d%y")
+        return [
+            f"vfo-price-monitoring-{stamp}_with-lgu-and-field-pdf",
+            f"vfo-price-monitoring-{stamp}-pdf",
+            f"vfo-price-monitoring-{week_start.strftime('%m%d%Y')}_with-lgu-and-field-pdf",
+        ]
+
+    if region_code == "MINDANAO":
+        if sequence_hint is None:
+            return []
+        slugs: list[str] = []
+        for sequence in (sequence_hint, sequence_hint + 1, sequence_hint - 1):
+            if sequence <= 0:
+                continue
+            slugs.append(f"{sequence}-lfro-price-monitoring-{span}-pdf")
+            slugs.append(f"{sequence}-lfro-price-monitoring-{single}-pdf")
+        return slugs
+
+    return []
+
+
+def _sequence_anchor(documents: list[BulletinDocument]) -> tuple[int, date] | None:
+    """Newest dated document that carries a leading counter → (counter, week)."""
+    anchor: tuple[int, date] | None = None
+    for document in documents:
+        if document.week_start is None:
+            continue
+        sequence = leading_sequence_for_slug(document.slug)
+        if sequence is None:
+            continue
+        if anchor is None or document.week_start > anchor[1]:
+            anchor = (sequence, document.week_start)
+    return anchor
+
+
+def discover_cms_weeks(
+    region_code: str,
+    documents: list[BulletinDocument],
+    *,
+    newer_than: date | None = None,
+    lookback_weeks: int = CMS_PROBE_LOOKBACK_WEEKS,
+    today: date | None = None,
+) -> list[DiscoveredBulletin]:
+    """Bulletin weeks live on the CMS but not yet linked from the archive page.
+
+    Walks back Tuesday by Tuesday from today, probing each region's predictable slugs,
+    and stops once it reaches `newer_than` (the newest week the archive page already
+    lists). Newest first.
+    """
+    anchor = _sequence_anchor(documents) if region_code == "MINDANAO" else None
+    candidate = normalize_bulletin_week_start(today or date.today())
+
+    found: list[DiscoveredBulletin] = []
+    for _ in range(lookback_weeks + 1):
+        if newer_than is not None and candidate <= newer_than:
+            break
+        sequence_hint = None
+        if anchor is not None:
+            sequence_hint = anchor[0] + (candidate - anchor[1]).days // 7
+        for slug in cms_probe_slugs(region_code, candidate, sequence_hint=sequence_hint):
+            if pdf_exists(slug_to_url(slug)):
+                found.append(
+                    DiscoveredBulletin(
+                        region_code=region_code,
+                        week_start=candidate,
+                        slugs=(slug,),
+                        source="cms-date-probe",
+                    )
+                )
+                break
+        candidate -= timedelta(days=7)
+    return found
+
+
 def discover_region_bulletins(region_key: str) -> list[DiscoveredBulletin]:
     """Datable bulletin weeks for a region, newest first."""
     region_code = resolve_region_code(region_key)
@@ -208,10 +341,10 @@ def discover_latest_weeks(
     DOE sometimes publishes a week as page scans, which carry no prices to read. The
     caller walks the list until a week parses.
 
-    For NCR the predictable CMS slug is probed as well, because the archive page is
-    often a week or two behind the files already published on the CMS. Regions whose
-    newest filenames carry no date need their PDFs opened to find their week, which
-    is what `probe_dir` caches.
+    For regions with predictable filenames (NCR, Visayas, Mindanao) the CMS is probed
+    directly as well, because the archive page is often a week or two behind the files
+    already published on the CMS. Regions whose newest filenames carry no date need
+    their PDFs opened to find their week, which is what `probe_dir` caches.
     """
     region_code = resolve_region_code(region_key)
     documents = discover_region_documents(region_code)
@@ -219,17 +352,8 @@ def discover_latest_weeks(
 
     candidates: list[DiscoveredBulletin] = []
 
-    if region_code == "NCR":
-        probed = discover_latest_ncr_week()
-        if not bulletins or probed > bulletins[0].week_start:
-            candidates.append(
-                DiscoveredBulletin(
-                    region_code=region_code,
-                    week_start=probed,
-                    slugs=(f"ncr-price-monitoring-{probed.strftime('%m%d%Y')}-pdf",),
-                    source="ncr-date-probe",
-                )
-            )
+    newest_listed = bulletins[0].week_start if bulletins else None
+    candidates.extend(discover_cms_weeks(region_code, documents, newer_than=newest_listed))
 
     # DOE stopped dating some regions' filenames, so an undated PDF can be newer than
     # every dated one. Its week is only known once the PDF header is read.

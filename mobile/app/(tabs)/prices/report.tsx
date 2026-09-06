@@ -215,7 +215,7 @@ export default function ReportPriceScreen() {
 
       <FormSection
         title="Station"
-        subtitle="Type the brand and station name. New stations stay in this region only."
+        subtitle="Type the brand and full station name (street + city). New stations stay in this region only."
         module="community">
         <ChipSelect
           label="Region"
@@ -233,7 +233,7 @@ export default function ReportPriceScreen() {
             setCompanyId(match?.id ?? null);
             setListedStationId(null);
           }}
-          placeholder="e.g. Petron, Shell, independent"
+          placeholder="e.g. Petron, Shell, PTT, Flying V"
           autoCapitalize="words"
         />
         {companies.length > 0 ? (
@@ -256,7 +256,7 @@ export default function ReportPriceScreen() {
             setStationName(text);
             setListedStationId(null);
           }}
-          placeholder="e.g. Petron EDSA Shaw"
+          placeholder="e.g. PTT Camarin Road Caloocan"
           autoCapitalize="words"
         />
         {stationOptions.length > 0 ? (

@@ -50,6 +50,8 @@ class ParsedPrice:
     company: str
     fuel_type_code: str
     price_per_liter: float
+    # Empty string = region-wide aggregate (min across cities). City rows use e.g. "Caloocan City".
+    area_name: str = ""
 
 
 @dataclass
@@ -78,6 +80,7 @@ class ParsedBulletin:
                     "company": p.company,
                     "fuel_type_code": p.fuel_type_code,
                     "price_per_liter": p.price_per_liter,
+                    "area_name": p.area_name,
                 }
                 for p in self.prices
             ],
@@ -337,10 +340,33 @@ def _table_left_edge(anchors: list[ColumnAnchor]) -> float | None:
     return min(brand_xs) - CELL_LEFT_BLEED if brand_xs else None
 
 
+def _normalize_area_name(raw: str) -> str:
+    """Clean DOE area labels; drop OCR garbage that does not look like a city."""
+    text = re.sub(r"\s+", " ", raw.strip())
+    text = re.sub(r"\bCty\b", "City", text, flags=re.IGNORECASE)
+    text = text.replace("Para�aque", "Paranaque").replace("PARA�AQUE", "PARANAQUE")
+    text = re.sub(r"Paraaque|ParaÃ±aque|ParaÑaque", "Paranaque", text, flags=re.IGNORECASE)
+    if not text:
+        return ""
+    # Reject labels that are mostly non-letters (OCR smash-ups).
+    letters = sum(1 for ch in text if ch.isalpha())
+    if letters < 4 or letters / max(len(text), 1) < 0.55:
+        return ""
+    # Known OCR mash of Mandaluyong / overlapping city headers
+    if "mcu" in text.lower() or "tioncluapna" in text.lower():
+        return "Mandaluyong City"
+    cleaned = text.title()
+    cleaned = cleaned.replace("Paranaque", "Paranaque").replace("Paranáque", "Paranaque")
+    if not cleaned.lower().endswith("city") and "city" not in cleaned.lower():
+        # Keep province/area labels that are not cities (rare outside NCR).
+        pass
+    return cleaned
+
+
 def _row_fuel_label(
     row: list[dict], table_left: float
-) -> tuple[str, list[dict]] | None:
-    """Split a row into its product label and its price cells.
+) -> tuple[str, str, list[dict]] | None:
+    """Split a row into area name, product label, and price cells.
 
     The product name has its own column, but an area name can share the row
     ("Caloocan City RON 91 72.80 …"), so the fuel is matched at the end of the label
@@ -361,13 +387,14 @@ def _row_fuel_label(
 
     for fuel in sorted(FUEL_TYPES, key=len, reverse=True):
         if label.endswith(fuel):
-            return fuel, price_words
+            area_raw = label[: -len(fuel)].strip(" -–—\t")
+            return _normalize_area_name(area_raw), fuel, price_words
     return None
 
 
 def _assign_prices_by_column(
     row: list[dict], anchors: list[ColumnAnchor]
-) -> tuple[str, dict[str, list[float]]] | None:
+) -> tuple[str, str, dict[str, list[float]]] | None:
     """Map each price in a row to the brand whose column it sits under.
 
     DOE prints a low–high pair per brand plus overall-range and common-price columns,
@@ -380,7 +407,7 @@ def _assign_prices_by_column(
     parsed = _row_fuel_label(row, table_left)
     if not parsed:
         return None
-    fuel_label, price_words = parsed
+    area_name, fuel_label, price_words = parsed
 
     by_company: dict[str, list[float]] = {}
     for word in price_words:
@@ -390,7 +417,36 @@ def _assign_prices_by_column(
         anchor = min(anchors, key=lambda a: abs(a.x - word["x0"]))
         if anchor.company:
             by_company.setdefault(anchor.company, []).append(price)
-    return fuel_label, by_company
+    return area_name, fuel_label, by_company
+
+
+def _propagate_block_areas(
+    rows: list[tuple[str, str, dict[str, list[float]]]],
+) -> list[tuple[str, str, dict[str, list[float]]]]:
+    """DOE prints the city name on one product row per city block; fill the rest.
+
+    Blocks usually restart at RON 100. Within a block, any area label found is applied
+    to every fuel row in that block.
+    """
+    if not rows:
+        return rows
+
+    blocks: list[list[tuple[str, str, dict[str, list[float]]]]] = []
+    current: list[tuple[str, str, dict[str, list[float]]]] = []
+    for area_name, fuel_label, by_company in rows:
+        if fuel_label == "RON 100" and current:
+            blocks.append(current)
+            current = []
+        current.append((area_name, fuel_label, by_company))
+    if current:
+        blocks.append(current)
+
+    filled: list[tuple[str, str, dict[str, list[float]]]] = []
+    for block in blocks:
+        block_area = next((area for area, _, _ in block if area), "")
+        for area_name, fuel_label, by_company in block:
+            filled.append((block_area or area_name, fuel_label, by_company))
+    return filled
 
 
 def _validate_document_structure(text: str, region_code: str) -> list[str]:
@@ -441,12 +497,15 @@ def _validate_field_level(prices: list[ParsedPrice], company_columns: list[str])
         elif price.price_per_liter > 200:  # Unreasonably high
             errors.append(f"Suspiciously high price for {price.company}/{price.fuel_type_code}: {price.price_per_liter}")
     
-    # Check for duplicate company/fuel combinations
+    # Check for duplicate company/fuel/area combinations
     seen = set()
     for price in prices:
-        key = (price.company, price.fuel_type_code)
+        key = (price.company, price.fuel_type_code, price.area_name)
         if key in seen:
-            errors.append(f"Duplicate price entry for {price.company}/{price.fuel_type_code}")
+            errors.append(
+                f"Duplicate price entry for {price.company}/{price.fuel_type_code}"
+                f"/{price.area_name or 'region'}"
+            )
         seen.add(key)
     
     return errors
@@ -477,15 +536,20 @@ def merge_parsed_bulletins(bulletins: list[ParsedBulletin]) -> ParsedBulletin:
                 f"{bulletin.bulletin_date} vs {bulletin_date}"
             )
 
-    buckets: dict[tuple[str, str], list[float]] = {}
+    buckets: dict[tuple[str, str, str], list[float]] = {}
     for bulletin in bulletins:
         for price in bulletin.prices:
-            key = (price.company, price.fuel_type_code)
+            key = (price.area_name or "", price.company, price.fuel_type_code)
             buckets.setdefault(key, []).append(price.price_per_liter)
 
     merged_prices = [
-        ParsedPrice(company=company, fuel_type_code=fuel_code, price_per_liter=round(min(values), 2))
-        for (company, fuel_code), values in sorted(buckets.items())
+        ParsedPrice(
+            company=company,
+            fuel_type_code=fuel_code,
+            price_per_liter=round(min(values), 2),
+            area_name=area_name,
+        )
+        for (area_name, company, fuel_code), values in sorted(buckets.items())
     ]
 
     week_label = next((b.week_label for b in bulletins if b.week_label), "")
@@ -548,10 +612,11 @@ def parse_bulletin_pdf(
     bulletin_date = normalize_bulletin_week_start(bulletin_date)
 
     warnings: list[str] = []
-    buckets: dict[tuple[str, str], list[float]] = {}
+    buckets: dict[tuple[str, str, str], list[float]] = {}
     company_columns: list[str] = []
     column_source = "pdf-columns"
     anchors: list[ColumnAnchor] | None = None
+    assigned_rows: list[tuple[str, str, dict[str, list[float]]]] = []
 
     for rows in page_rows:
         page_anchors = _find_header_anchors(rows) or anchors
@@ -566,11 +631,14 @@ def parse_bulletin_pdf(
             assigned = _assign_prices_by_column(row, anchors)
             if not assigned:
                 continue
-            fuel_label, by_company = assigned
+            assigned_rows.append(assigned)
+
+    if anchors is not None:
+        for area_name, fuel_label, by_company in _propagate_block_areas(assigned_rows):
             fuel_code = FUEL_TYPE_CODES[fuel_label]
             for company_key, prices in by_company.items():
                 company_name = COMPANY_NAMES[company_key]
-                buckets.setdefault((company_name, fuel_code), []).extend(prices)
+                buckets.setdefault((area_name, company_name, fuel_code), []).extend(prices)
 
     if anchors is None:
         # No readable table header — fall back to reading prices positionally from the
@@ -589,15 +657,32 @@ def parse_bulletin_pdf(
             fuel_code = FUEL_TYPE_CODES[fuel_label]
             for idx, price in enumerate(prices[: len(company_columns)]):
                 company_name = COMPANY_NAMES[company_columns[idx]]
-                buckets.setdefault((company_name, fuel_code), []).append(price)
+                buckets.setdefault(("", company_name, fuel_code), []).append(price)
+
+    # Region-wide mins (area_name '') plus one row set per city/area.
+    region_buckets: dict[tuple[str, str], list[float]] = {}
+    for (area_name, company_name, fuel_code), values in buckets.items():
+        region_buckets.setdefault((company_name, fuel_code), []).extend(values)
 
     parsed_prices: list[ParsedPrice] = []
-    for (company_name, fuel_code), values in sorted(buckets.items()):
+    for (company_name, fuel_code), values in sorted(region_buckets.items()):
         parsed_prices.append(
             ParsedPrice(
                 company=company_name,
                 fuel_type_code=fuel_code,
                 price_per_liter=round(min(values), 2),
+                area_name="",
+            )
+        )
+    for (area_name, company_name, fuel_code), values in sorted(buckets.items()):
+        if not area_name:
+            continue
+        parsed_prices.append(
+            ParsedPrice(
+                company=company_name,
+                fuel_type_code=fuel_code,
+                price_per_liter=round(min(values), 2),
+                area_name=area_name,
             )
         )
 

@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import date
+
 from src.discover import (
+    _sequence_anchor,
     _undated_rank,
+    cms_probe_slugs,
+    discover_cms_weeks,
     group_documents_by_week,
     is_bulletin_slug,
+    leading_sequence_for_slug,
     sequence_for_slug,
     subregion_for_slug,
 )
@@ -144,3 +150,16 @@ def test_group_documents_by_week_separates_undated_files() -> None:
     assert len(weeks[0].slugs) == 3
     assert weeks[0].week_start.isoformat() == "2025-08-26"
     assert [d.slug for d in undated] == ["region-iv-a-calabarzon-20-pdf"]
+
+
+def test_cms_probe_slugs_include_september_week_variants() -> None:
+    week = date(2026, 9, 1)
+    ncr = cms_probe_slugs("NCR", week)
+    assert "ncr-price-monitoring-09012026-pdf" in ncr
+    assert "ncr-price-monitoring-for-september-1-7-2026-pdf" in ncr
+
+    visayas = cms_probe_slugs("VISAYAS", week)
+    assert "vfo-price-monitoring-090126_with-lgu-and-field-pdf" in visayas
+
+    north = cms_probe_slugs("NORTH_LUZON", week)
+    assert "lf-price-monitoring-for-september-1-7-2026-pdf" in north

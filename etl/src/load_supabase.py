@@ -164,46 +164,33 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
     bulletin_id = _upsert_bulletin(client, parsed)
     company_ids = _ensure_oil_companies(client, {p.company for p in parsed.prices})
 
-    existing_prices = (
-        client.table("fuel_prices")
-        .select("oil_company_id,fuel_type_id,price_per_liter")
-        .eq("bulletin_id", bulletin_id)
-        .eq("region_id", region_id)
-        .execute()
-    )
-    current = {
-        (row["oil_company_id"], row["fuel_type_id"]): float(row["price_per_liter"])
-        for row in existing_prices.data or []
-    }
+    # Replace this region's rows for the week so city/area grain can expand safely.
+    client.table("fuel_prices").delete().eq("bulletin_id", bulletin_id).eq(
+        "region_id", region_id
+    ).execute()
 
     rows_to_upsert = []
-    duplicates_skipped = 0
-
     for price in parsed.prices:
         if price.fuel_type_code not in fuel_type_ids:
             continue
         company_id = company_ids[price.company]
         fuel_type_id = fuel_type_ids[price.fuel_type_code]
-
-        previous = current.get((company_id, fuel_type_id))
-        if previous is not None and abs(previous - price.price_per_liter) < 0.01:
-            duplicates_skipped += 1
-            continue
-
         rows_to_upsert.append(
             {
                 "bulletin_id": bulletin_id,
                 "region_id": region_id,
                 "oil_company_id": company_id,
                 "fuel_type_id": fuel_type_id,
+                "area_name": price.area_name or "",
                 "price_per_liter": price.price_per_liter,
             }
         )
 
+    duplicates_skipped = 0
     if rows_to_upsert:
         client.table("fuel_prices").upsert(
             rows_to_upsert,
-            on_conflict="bulletin_id,region_id,oil_company_id,fuel_type_id",
+            on_conflict="bulletin_id,region_id,oil_company_id,fuel_type_id,area_name",
         ).execute()
 
     return {

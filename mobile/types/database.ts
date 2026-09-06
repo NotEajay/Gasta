@@ -120,6 +120,7 @@ export interface Database {
           oil_company_id: string;
           fuel_type_id: string;
           price_per_liter: number;
+          area_name: string;
           created_at: string;
         };
         Insert: {
@@ -129,6 +130,7 @@ export interface Database {
           oil_company_id: string;
           fuel_type_id: string;
           price_per_liter: number;
+          area_name?: string;
           created_at?: string;
         };
         Update: {
@@ -138,6 +140,7 @@ export interface Database {
           oil_company_id?: string;
           fuel_type_id?: string;
           price_per_liter?: number;
+          area_name?: string;
           created_at?: string;
         };
         Relationships: [];

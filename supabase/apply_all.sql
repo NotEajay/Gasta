@@ -56,9 +56,10 @@ create table if not exists public.fuel_prices (
   region_id uuid not null references public.regions (id) on delete restrict,
   oil_company_id uuid not null references public.oil_companies (id) on delete restrict,
   fuel_type_id uuid not null references public.fuel_types (id) on delete restrict,
+  area_name text not null default '',
   price_per_liter numeric(8, 2) not null check (price_per_liter > 0),
   created_at timestamptz not null default now(),
-  unique (bulletin_id, region_id, oil_company_id, fuel_type_id)
+  unique (bulletin_id, region_id, oil_company_id, fuel_type_id, area_name)
 );
 
 create index if not exists fuel_prices_bulletin_id_idx on public.fuel_prices (bulletin_id);
@@ -807,3 +808,88 @@ create policy "community_fuel_reports_select_pending"
   on public.community_fuel_reports for select
   using (status = 'pending');
 
+-- City/area grain + street-named sample stations (010 / 011)
+alter table public.fuel_prices
+  add column if not exists area_name text not null default '';
+
+do $$
+declare
+  r record;
+begin
+  for r in
+    select c.conname
+    from pg_constraint c
+    join pg_class t on c.conrelid = t.oid
+    join pg_namespace n on t.relnamespace = n.oid
+    where n.nspname = 'public'
+      and t.relname = 'fuel_prices'
+      and c.contype = 'u'
+  loop
+    execute format('alter table public.fuel_prices drop constraint if exists %I', r.conname);
+  end loop;
+end $$;
+
+alter table public.fuel_prices
+  add constraint fuel_prices_bulletin_region_company_fuel_area_key
+  unique (bulletin_id, region_id, oil_company_id, fuel_type_id, area_name);
+
+create index if not exists fuel_prices_area_lookup_idx
+  on public.fuel_prices (bulletin_id, region_id, fuel_type_id, area_name);
+
+insert into public.oil_companies (name, slug) values
+  ('Flying V', 'flying-v'),
+  ('PTT', 'ptt'),
+  ('Clean Fuel', 'clean-fuel'),
+  ('My Gas', 'my-gas'),
+  ('Jetti', 'jetti')
+on conflict (slug) do nothing;
+
+insert into public.fuel_stations (name, oil_company_id, region_id, latitude, longitude, address)
+select v.name, c.id, r.id, v.lat, v.lng, v.address
+from (values
+  ('Seaoil EDSA Guadalupe Nuevo Makati', 'seaoil', 14.5665, 121.0440, 'EDSA Guadalupe Nuevo, Makati City'),
+  ('Seaoil Taguig', 'seaoil', 14.5200, 121.0500, 'Taguig City'),
+  ('Petron Felix Ave Santolan Pasig', 'petron', 14.6150, 121.0850, 'Felix Ave, Santolan, Pasig City'),
+  ('Petron E. Rodriguez Ave', 'petron', 14.6250, 121.0100, 'E. Rodriguez Ave, Quezon City'),
+  ('Flying V San Mateo 2', 'flying-v', 14.6950, 121.1200, 'San Mateo, Rizal'),
+  ('Flying V Payatas Road', 'flying-v', 14.7150, 121.0800, 'Payatas Road, Quezon City'),
+  ('PTT EDSA Kamuning', 'ptt', 14.6350, 121.0400, 'EDSA Kamuning, Quezon City'),
+  ('PTT Congressional Ave', 'ptt', 14.6600, 121.0400, 'Congressional Ave, Quezon City'),
+  ('PTT Camarin Road Caloocan', 'ptt', 14.7590, 121.0445, 'Camarin Rd, Caloocan City'),
+  ('Flying V Bagumbong Road North Caloocan', 'flying-v', 14.7575, 121.0200, 'Bagumbong Rd, North Caloocan'),
+  ('Petron EDSA Caloocan', 'petron', 14.6560, 120.9840, 'EDSA, Caloocan City'),
+  ('Shell Quezon Avenue Quezon City', 'shell', 14.6305, 121.0034, 'Quezon Ave, Quezon City'),
+  ('Caltex Marcos Highway Marikina', 'caltex', 14.6500, 121.1000, 'Marcos Highway, Marikina City'),
+  ('Seaoil C5 Taguig', 'seaoil', 14.5180, 121.0480, 'C-5, Taguig City'),
+  ('Unioil Roxas Boulevard Pasay', 'unioil', 14.5378, 120.9920, 'Roxas Blvd, Pasay City'),
+  ('Phoenix Commonwealth Quezon City', 'phoenix', 14.6470, 121.0380, 'Commonwealth Ave, Quezon City')
+) as v(name, slug, lat, lng, address)
+join public.regions r on r.code = 'NCR'
+join public.oil_companies c on c.slug = v.slug
+on conflict (name, region_id) do nothing;
+
+insert into public.fuel_stations (name, oil_company_id, region_id, latitude, longitude, address)
+select v.name, c.id, r.id, v.lat, v.lng, v.address
+from (values
+  ('Petron Session Road Baguio', 'petron', 'NORTH_LUZON', 16.4120, 120.5930, 'Session Road, Baguio City'),
+  ('Shell Marcos Highway Baguio', 'shell', 'NORTH_LUZON', 16.4025, 120.5965, 'Marcos Highway, Baguio City'),
+  ('Caltex Magsaysay Avenue Baguio', 'caltex', 'NORTH_LUZON', 16.4150, 120.5980, 'Magsaysay Ave, Baguio City'),
+  ('Petron MacArthur Highway Angeles', 'petron', 'NORTH_LUZON', 15.1450, 120.5840, 'MacArthur Highway, Angeles City'),
+  ('Shell Friendship Highway Angeles', 'shell', 'NORTH_LUZON', 15.1500, 120.5900, 'Friendship Highway, Angeles City'),
+  ('Seaoil Dagupan City', 'seaoil', 'NORTH_LUZON', 16.0430, 120.3330, 'Dagupan City'),
+  ('Petron Tarlac City', 'petron', 'NORTH_LUZON', 15.4860, 120.5970, 'Tarlac City'),
+  ('Caltex Cabanatuan City', 'caltex', 'NORTH_LUZON', 15.4865, 120.9675, 'Cabanatuan City'),
+  ('Shell Olongapo City', 'shell', 'NORTH_LUZON', 14.8290, 120.2820, 'Olongapo City'),
+  ('Petron Laoag City', 'petron', 'NORTH_LUZON', 18.1980, 120.5930, 'Laoag City'),
+  ('Seaoil Tuguegarao City', 'seaoil', 'NORTH_LUZON', 17.6130, 121.7270, 'Tuguegarao City'),
+  ('Petron San Fernando City La Union', 'petron', 'NORTH_LUZON', 16.6190, 120.3170, 'San Fernando City, La Union'),
+  ('Petron Iloilo City', 'petron', 'VISAYAS', 10.7200, 122.5620, 'Iloilo City'),
+  ('Shell Cebu City', 'shell', 'VISAYAS', 10.3157, 123.8854, 'Cebu City'),
+  ('Petron Davao City', 'petron', 'MINDANAO', 7.1907, 125.4553, 'Davao City'),
+  ('Caltex Cagayan de Oro City', 'caltex', 'MINDANAO', 8.4542, 124.6319, 'Cagayan de Oro City'),
+  ('Petron Zamboanga City', 'petron', 'MINDANAO', 6.9214, 122.0790, 'Zamboanga City'),
+  ('Shell Butuan City', 'shell', 'MINDANAO', 8.9475, 125.5406, 'Butuan City')
+) as v(name, slug, region_code, lat, lng, address)
+join public.regions r on r.code = v.region_code
+join public.oil_companies c on c.slug = v.slug
+on conflict (name, region_id) do nothing;

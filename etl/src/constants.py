@@ -181,6 +181,11 @@ HTTP_MAX_RETRIES = 3
 # DOE weekly bulletin weeks run Tuesday–Monday.
 BULLETIN_WEEKDAY = 1  # Monday=0 … Tuesday=1
 
+# The region archive pages lag the CMS by a week or more, so for regions whose
+# filenames are predictable the CMS is probed directly for each recent Tuesday.
+# This is how many Tuesdays back from today are tried.
+CMS_PROBE_LOOKBACK_WEEKS = 8
+
 # Oldest bulletin currently published on the DOE region archive pages.
 ARCHIVE_START_DATE = "2024-12-01"
 

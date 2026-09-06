@@ -1,30 +1,58 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { Text } from '@/components/Themed';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import Card from '@/components/ui/Card';
-import ChipSelect from '@/components/ui/ChipSelect';
 import EmptyState from '@/components/ui/EmptyState';
 import FormSection from '@/components/ui/FormSection';
-import ListRow from '@/components/ui/ListRow';
 import PageHero from '@/components/ui/PageHero';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
 import SectionHeader from '@/components/ui/SectionHeader';
 import SegmentedToggle from '@/components/ui/SegmentedToggle';
-import SourceBadge from '@/components/ui/SourceBadge';
-import StatCard from '@/components/ui/StatCard';
+import SelectField from '@/components/ui/SelectField';
+import StationPriceTable, { type StationPriceRow } from '@/components/ui/StationPriceTable';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { DOE_REGIONS, type DoeRegionCode } from '@/constants/regions';
-import { palette, spacing } from '@/constants/Theme';
-import { formatBulletinWeek, formatCurrency, formatDate, formatLoadedAt, formatShortDate } from '@/lib/format';
-import { fetchFreshVerifiedPrices } from '@/lib/services/communityReports';
+import {
+  DOE_REGIONS,
+  REGION_FALLBACK_CITIES,
+  type DoeRegionCode,
+} from '@/constants/regions';
+import { GasTaColors, palette, spacing } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
+import {
+  formatBulletinWeek,
+  formatCurrency,
+  formatDate,
+  formatLoadedAt,
+  formatShortDate,
+} from '@/lib/format';
+import {
+  confirmCommunityReport,
+  fetchConfirmedReportIds,
+  fetchFreshVerifiedPrices,
+  fetchFuelStationsByRegion,
+  fetchPendingReports,
+  usersConfirmedLabel,
+  type FuelStationOption,
+  type PendingCommunityReport,
+  type VerifiedCommunityPrice,
+} from '@/lib/services/communityReports';
 import {
   bulletinAgeInDays,
   fetchBulletinsForRegion,
+  fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
   fetchPriceTrend,
@@ -35,9 +63,72 @@ import {
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
 
+function matchesCityFilter(station: FuelStationOption, city: string): boolean {
+  if (!city) return true;
+  const needle = city.toLowerCase().replace(/\s+city$/i, '').trim();
+  const hay = `${station.name} ${station.address ?? ''}`.toLowerCase();
+  return hay.includes(needle);
+}
+
+function buildStationPriceRows(
+  stations: FuelStationOption[],
+  verified: VerifiedCommunityPrice[],
+  pending: PendingCommunityReport[],
+  doePrices: FuelPriceRow[],
+  city: string,
+  fuelCode: string
+): StationPriceRow[] {
+  const doeBySlug = new Map(doePrices.map((row) => [row.oil_company.slug, row.price_per_liter]));
+  const verifiedByStation = new Map(verified.map((row) => [row.station_id, row] as const));
+  const pendingByName = new Map<string, PendingCommunityReport>();
+  for (const report of pending) {
+    if (report.fuel_type?.code && report.fuel_type.code !== fuelCode) continue;
+    const name = report.station?.name;
+    if (name && !pendingByName.has(name)) pendingByName.set(name, report);
+  }
+
+  return stations
+    .filter((station) => matchesCityFilter(station, city))
+    .map((station) => {
+      const brand = station.brand_label?.trim() || station.oil_company.name;
+      const verifiedRow = verifiedByStation.get(station.id);
+      const pendingRow = pendingByName.get(station.name);
+      const doePrice = doeBySlug.get(station.oil_company.slug) ?? null;
+
+      if (verifiedRow) {
+        return {
+          id: station.id,
+          brand,
+          station: station.name,
+          price: verifiedRow.reported_price,
+          source: 'community' as const,
+          status: 'Verified',
+        };
+      }
+      if (pendingRow) {
+        return {
+          id: station.id,
+          brand,
+          station: station.name,
+          price: pendingRow.reported_price,
+          source: 'community' as const,
+          status: 'Unverified',
+        };
+      }
+      return {
+        id: station.id,
+        brand,
+        station: station.name,
+        price: doePrice,
+        source: doePrice != null ? ('doe' as const) : ('none' as const),
+        status: doePrice != null ? 'DOE estimate' : undefined,
+      };
+    })
+    .sort((a, b) => a.brand.localeCompare(b.brand) || a.station.localeCompare(b.station));
+}
+
 type PricesView = 'now' | 'history';
 
-/** One year of DOE weeks — enough for a full seasonal view of the trend. */
 const HISTORY_WEEKS = 52;
 
 export default function FuelPricesScreen() {
@@ -47,6 +138,9 @@ export default function FuelPricesScreen() {
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
+  const [areaName, setAreaName] = useState('');
+  const [doeAreas, setDoeAreas] = useState<string[]>([]);
+  const [areasFromDoe, setAreasFromDoe] = useState(false);
   const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
   const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
   const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
@@ -54,25 +148,49 @@ export default function FuelPricesScreen() {
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
   const [pastWeekPrices, setPastWeekPrices] = useState<FuelPriceRow[]>([]);
   const [trend, setTrend] = useState<{ bulletin_date: string; price_per_liter: number }[]>([]);
-  const [verifiedCommunity, setVerifiedCommunity] = useState<
-    { report_id: string; station_name: string; reported_price: number; confirmation_count: number }[]
-  >([]);
+  const [verifiedCommunity, setVerifiedCommunity] = useState<VerifiedCommunityPrice[]>([]);
   const [pendingCommunity, setPendingCommunity] = useState<PendingCommunityReport[]>([]);
+  const [stations, setStations] = useState<FuelStationOption[]>([]);
   const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pricesLoading, setPricesLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const historyLoadedFor = useRef<string | null>(null);
 
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
+  const areaLabel = areaName || 'All cities';
+
+  const areas = useMemo(() => {
+    if (doeAreas.length > 0) return doeAreas;
+    return [...(REGION_FALLBACK_CITIES[region] ?? [])];
+  }, [doeAreas, region]);
+
+  const regionOptions = useMemo(
+    () => DOE_REGIONS.map((r) => ({ value: r.code, label: r.name })),
+    []
+  );
+  const fuelOptions = useMemo(
+    () => DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name })),
+    []
+  );
+  const areaOptions = useMemo(
+    () => [
+      { value: '', label: 'All cities' },
+      ...areas.map((name) => ({ value: name, label: name })),
+    ],
+    [areas]
+  );
 
   const companyOptions = useMemo(
     () => prices.map((row) => ({ value: row.oil_company.slug, label: row.oil_company.name })),
     [prices]
   );
 
-  const load = useCallback(async () => {
+  /** Region-scoped data only — skips 52-week history and area/fuel price refetch. */
+  const loadRegion = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setLoading(false);
       setRefreshing(false);
@@ -80,35 +198,23 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
-      const [latest, community, weeks, pending] = await Promise.all([
+      const [latest, pending, regionStations] = await Promise.all([
         fetchLatestBulletinForRegion(region),
-<<<<<<< Updated upstream
-        fetchFreshVerifiedPrices(region, fuelType).catch(() => []),
-        fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
-=======
-        fetchFreshVerifiedPrices(region, fuelType).catch((e) => {
-          console.warn('Verified community prices failed', e);
-          return [];
-        }),
-        fetchBulletinsForRegion(region, 12).catch(() => []),
-        // Region only — fuel chip must not hide other pending grades
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
           return [];
         }),
->>>>>>> Stashed changes
+        fetchFuelStationsByRegion(region).catch((e) => {
+          console.warn('Fuel stations failed', e);
+          return [];
+        }),
       ]);
+
       setBulletin(latest);
-      setPastBulletins(weeks);
-      setVerifiedCommunity(
-        community.slice(0, 8).map((c) => ({
-          report_id: c.report_id,
-          station_name: c.station_name,
-          reported_price: c.reported_price,
-          confirmation_count: c.confirmation_count ?? VERIFY_CONFIRMATIONS_REQUIRED,
-        }))
-      );
       setPendingCommunity(pending);
+      setStations(regionStations);
+      historyLoadedFor.current = null;
+
       if (user && pending.length > 0) {
         const voted = await fetchConfirmedReportIds(
           user.id,
@@ -120,64 +226,173 @@ export default function FuelPricesScreen() {
       }
 
       if (!latest) {
+        setDoeAreas([]);
+        setAreasFromDoe(false);
         setPrices([]);
-        setTrend([]);
-        setPastWeekPrices([]);
         return;
       }
 
-      const rows = await fetchFuelPricesForBulletin(latest.id, region, fuelType);
-      setPrices(rows);
-
-      const slug = rows.some((r) => r.oil_company.slug === trendCompanySlug)
-        ? trendCompanySlug
-        : (rows[0]?.oil_company.slug ?? 'petron');
-      if (slug !== trendCompanySlug) setTrendCompanySlug(slug);
-
-      const points = slug ? await fetchPriceTrend(region, fuelType, slug) : [];
-      setTrend(points.slice(-HISTORY_WEEKS));
+      const cityAreas = await fetchBulletinAreas(latest.id, region).catch((): string[] => []);
+      setDoeAreas(cityAreas);
+      setAreasFromDoe(cityAreas.length > 0);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load fuel prices');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [region, fuelType, trendCompanySlug, user]);
+  }, [region, user]);
 
   useEffect(() => {
     setSelectedPastDate(null);
     setPastWeekPrices([]);
-  }, [region, fuelType]);
+    setAreaName('');
+    setPastBulletins([]);
+    setTrend([]);
+    setLoading(true);
+    void loadRegion();
+  }, [loadRegion]);
 
-  // Re-read prices whenever the tab regains focus so a bulletin loaded by the weekly
-  // ETL shows up without the user having to restart the app. The first focus is
-  // already covered by the mount effect above.
+  // Fuel / city change: only prices + verified community (fast path).
+  useEffect(() => {
+    if (!isSupabaseConfigured || loading) return;
+
+    let cancelled = false;
+    setPricesLoading(true);
+
+    const run = async () => {
+      try {
+        const communityPromise = fetchFreshVerifiedPrices(region, fuelType).catch((e) => {
+          console.warn('Verified community prices failed', e);
+          return [] as VerifiedCommunityPrice[];
+        });
+
+        if (!bulletin) {
+          const community = await communityPromise;
+          if (cancelled) return;
+          setVerifiedCommunity(community);
+          setPrices([]);
+          return;
+        }
+
+        // Prefer DOE city prices when that area exists in the bulletin; otherwise
+        // fetchFuelPricesForBulletin falls back to region-wide mins.
+        const areaForDoe = areasFromDoe && areaName ? areaName : '';
+        const [rows, community] = await Promise.all([
+          fetchFuelPricesForBulletin(bulletin.id, region, fuelType, areaForDoe),
+          communityPromise,
+        ]);
+        if (cancelled) return;
+        setPrices(rows);
+        setVerifiedCommunity(community);
+
+        setTrendCompanySlug((current) =>
+          rows.some((r) => r.oil_company.slug === current)
+            ? current
+            : (rows[0]?.oil_company.slug ?? 'petron')
+        );
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Failed to load prices');
+        }
+      } finally {
+        if (!cancelled) setPricesLoading(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [bulletin, region, fuelType, areaName, areasFromDoe, loading]);
+
+  // History tab: load 52 weeks only when opened (not on every This week visit).
+  useEffect(() => {
+    if (view !== 'history' || !bulletin || loading) return;
+    const key = `${region}:${fuelType}:${trendCompanySlug}`;
+    if (historyLoadedFor.current === key) return;
+
+    let cancelled = false;
+    void Promise.all([
+      fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
+      fetchPriceTrend(region, fuelType, trendCompanySlug).catch(() => []),
+    ]).then(([weeks, points]) => {
+      if (cancelled) return;
+      setPastBulletins(weeks);
+      setTrend(points.slice(-HISTORY_WEEKS));
+      historyLoadedFor.current = key;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [view, bulletin, region, fuelType, trendCompanySlug, loading]);
+
+  useEffect(() => {
+    if (view !== 'history' || !trendCompanySlug || loading) return;
+    void fetchPriceTrend(region, fuelType, trendCompanySlug)
+      .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
+      .catch(() => setTrend([]));
+  }, [trendCompanySlug, region, fuelType, view, loading]);
+
   const hasFocusedOnce = useRef(false);
   useFocusEffect(
     useCallback(() => {
-<<<<<<< Updated upstream
       if (!hasFocusedOnce.current) {
         hasFocusedOnce.current = true;
         return;
       }
-      load();
-=======
-      // Reset state and reload to ensure fresh data from database
       setLoading(true);
       setVerifiedCommunity([]);
       setPendingCommunity([]);
+      setStations([]);
       setConfirmedIds(new Set());
-      void load();
->>>>>>> Stashed changes
-    }, [load])
+      void loadRegion();
+    }, [loadRegion])
   );
 
-  useEffect(() => {
-    if (loading || !trendCompanySlug || !fuelType) return;
-    void fetchPriceTrend(region, fuelType, trendCompanySlug)
-      .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
-      .catch(() => setTrend([]));
-  }, [trendCompanySlug, region, fuelType, loading]);
+  const stationRows = useMemo(
+    () =>
+      buildStationPriceRows(
+        stations,
+        verifiedCommunity,
+        pendingCommunity,
+        prices,
+        areaName,
+        fuelType
+      ),
+    [stations, verifiedCommunity, pendingCommunity, prices, areaName, fuelType]
+  );
+
+  const pendingForFuel = useMemo(
+    () =>
+      pendingCommunity.filter(
+        (report) => !report.fuel_type?.code || report.fuel_type.code === fuelType
+      ),
+    [pendingCommunity, fuelType]
+  );
+
+  const handleConfirmPrice = async (report: PendingCommunityReport) => {
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    setConfirmingId(report.id);
+    try {
+      await confirmCommunityReport(report.id);
+      Alert.alert(
+        'Confirmed',
+        report.confirmation_count + 1 >= VERIFY_CONFIRMATIONS_REQUIRED
+          ? 'Report is now verified for display.'
+          : `${report.confirmation_count + 1}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`
+      );
+      await loadRegion();
+    } catch (e) {
+      Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setConfirmingId(null);
+    }
+  };
 
   useEffect(() => {
     if (!selectedPastDate || !fuelType) {
@@ -186,14 +401,11 @@ export default function FuelPricesScreen() {
     }
     const selected = pastBulletins.find((b) => b.bulletin_date === selectedPastDate);
     if (!selected) return;
-    void fetchFuelPricesForBulletin(selected.id, region, fuelType)
+    const areaForDoe = areasFromDoe && areaName ? areaName : '';
+    void fetchFuelPricesForBulletin(selected.id, region, fuelType, areaForDoe)
       .then(setPastWeekPrices)
       .catch(() => setPastWeekPrices([]));
-  }, [selectedPastDate, pastBulletins, region, fuelType]);
-
-  const lowest = prices[0] ?? null;
-  const maxPrice = prices.length ? Math.max(...prices.map((p) => p.price_per_liter)) : 0;
-  const minPrice = prices.length ? Math.min(...prices.map((p) => p.price_per_liter)) : 0;
+  }, [selectedPastDate, pastBulletins, region, fuelType, areaName, areasFromDoe]);
 
   const historySummary = useMemo(() => {
     if (trend.length < 2) return null;
@@ -245,7 +457,7 @@ export default function FuelPricesScreen() {
           refreshing={refreshing}
           onRefresh={() => {
             setRefreshing(true);
-            load();
+            void loadRegion();
           }}
           tintColor={palette.primary}
         />
@@ -253,7 +465,11 @@ export default function FuelPricesScreen() {
       <PageHero
         module="prices"
         title="Fuel Prices"
-        subtitle={`${regionLabel} · ${fuelLabel}`}
+        subtitle={
+          bulletin
+            ? `${regionLabel} · ${fuelLabel} · ${areaLabel}\nLatest available DOE bulletin: ${formatBulletinWeek(bulletin.bulletin_date)}`
+            : `${regionLabel} · ${fuelLabel}`
+        }
       />
 
       <SegmentedToggle
@@ -266,23 +482,30 @@ export default function FuelPricesScreen() {
         ]}
       />
 
-      <FormSection title="Where and what" subtitle="Change these anytime" module="prices">
-        <ChipSelect
-          label="Region"
-          options={DOE_REGIONS.map((r) => ({ value: r.code, label: r.name }))}
-          value={region}
-          onChange={setRegion}
-          hideLabel
-          module="prices"
+      <FormSection
+        title="Find prices"
+        subtitle="Tap each field to choose region, city, and fuel"
+        module="prices">
+        <SelectField label="Region" value={region} options={regionOptions} onChange={setRegion} />
+        <SelectField
+          label="City / area"
+          value={areaName}
+          options={areaOptions}
+          onChange={setAreaName}
+          placeholder="All cities"
         />
-        <ChipSelect
+        <SelectField
           label="Fuel type"
-          options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
           value={fuelType}
+          options={fuelOptions}
           onChange={setFuelType}
-          hideLabel
-          module="prices"
         />
+        {!areasFromDoe && areas.length > 0 ? (
+          <Text style={[styles.hint, { color: theme.textSecondary }]}>
+            Cities listed for browsing stations. DOE has no per-city prices for this region this
+            week — station prices use community reports or region brand estimates.
+          </Text>
+        ) : null}
       </FormSection>
 
       {error ? (
@@ -300,134 +523,107 @@ export default function FuelPricesScreen() {
         </View>
       ) : view === 'now' ? (
         <>
-          {lowest ? (
-            <>
-              <StatCard
-                variant="primary"
-                module="prices"
-                label={`Lowest · DOE week of ${bulletin ? formatBulletinWeek(bulletin.bulletin_date) : ''}`}
-                value={`${formatCurrency(lowest.price_per_liter)}/L`}
-                meta={
-                  freshness
-                    ? `${lowest.oil_company.name} · ${freshness.label}`
-                    : lowest.oil_company.name
-                }
-              />
-              {freshness?.stale ? (
-                <Card
-                  style={{ borderColor: palette.warning, backgroundColor: palette.warningSoft }}>
-                  <Text style={[styles.summaryTitle, { color: theme.text }]}>
-                    These prices are {freshness.ageDays} days old
-                  </Text>
-                  <Text style={[styles.summaryBody, { color: theme.textSecondary }]}>
-                    DOE publishes every Tuesday. This is the newest bulletin available for{' '}
-                    {regionLabel} — pull down to check for a newer one.
-                  </Text>
-                </Card>
-              ) : null}
-            </>
-          ) : (
-            <EmptyState
-              title="No prices yet"
-              message="No DOE bulletin for this region and fuel. Try another filter or pull to refresh."
-            />
-          )}
-
-          {prices.length > 0 ? (
-            <>
-              <SectionHeader
-                title="Brands this week"
-                subtitle="Lowest price first"
-                module="prices"
-              />
-              <Card elevated compact style={styles.compareCard}>
-                {prices.map((row, index) => (
-                  <PriceCompareRow
-                    key={row.id}
-                    rank={index + 1}
-                    company={row.oil_company.name}
-                    price={row.price_per_liter}
-                    maxPrice={maxPrice}
-                    minPrice={minPrice}
-                    isLowest={index === 0}
-                    isLast={index === prices.length - 1}
-                  />
-                ))}
-              </Card>
-            </>
+          {freshness?.stale ? (
+            <Card style={{ borderColor: palette.warning, backgroundColor: palette.warningSoft }}>
+              <Text style={[styles.summaryTitle, { color: theme.text }]}>
+                These prices are {freshness.ageDays} days old
+              </Text>
+              <Text style={[styles.summaryBody, { color: theme.textSecondary }]}>
+                DOE publishes every Tuesday. This is the newest bulletin available for {regionLabel}{' '}
+                — pull down to check for a newer one.
+              </Text>
+            </Card>
           ) : null}
 
           <SectionHeader
-            title="Community prices"
-            subtitle={`Unverified until ${VERIFY_CONFIRMATIONS_REQUIRED} people confirm`}
-            module="community"
+            title="Stations & prices"
+            subtitle={
+              areaName
+                ? `${fuelLabel} at stations in ${areaName}`
+                : `${fuelLabel} stations in ${regionLabel}`
+            }
+            module="prices"
           />
           <Card elevated>
-            {verifiedCommunity.length === 0 && pendingCommunity.length === 0 ? (
-              <Text style={[styles.emptyCommunity, { color: theme.textSecondary }]}>
-                No station prices yet. Report what you paid — it shows here as unverified.
-              </Text>
-            ) : null}
-            {verifiedCommunity.map((item, index) => (
-              <View key={item.report_id}>
-                {index === 0 ? <SourceBadge source="community" /> : null}
-                <ListRow
-                  title={item.station_name}
-                  value={`${formatCurrency(item.reported_price)}/L`}
-                  subtitle={`Verified · ${usersConfirmedLabel(item.confirmation_count)}`}
-                  highlight
-                  isLast={index === verifiedCommunity.length - 1 && pendingCommunity.length === 0}
-                />
+            {pricesLoading ? (
+              <View style={styles.softLoading}>
+                <ActivityIndicator color={palette.primary} />
               </View>
-            ))}
-            {pendingCommunity.map((report, index) => {
-              const isOwn = Boolean(user && report.reported_by === user.id);
-              const alreadyVoted = confirmedIds.has(report.id);
-              const isLast = index === pendingCommunity.length - 1;
-              return (
-                <View
-                  key={report.id}
-                  style={[
-                    styles.pendingRow,
-                    !isLast && { borderBottomColor: theme.borderLight, borderBottomWidth: StyleSheet.hairlineWidth },
-                  ]}>
-                  <ListRow
-                    title={report.station?.name ?? 'Station'}
-                    value={`${formatCurrency(report.reported_price)}/L`}
-                    subtitle={`Unverified · ${report.fuel_type?.name ?? 'Fuel'} · ${usersConfirmedLabel(report.confirmation_count)}`}
-                    isLast
-                  />
-                  {isOwn ? (
-                    <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
-                      You reported this · {report.confirmation_count}/{VERIFY_CONFIRMATIONS_REQUIRED} needed
-                    </Text>
-                  ) : alreadyVoted ? (
-                    <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
-                      You confirmed this · {usersConfirmedLabel(report.confirmation_count)}
-                    </Text>
-                  ) : (
-                    <Pressable
-                      onPress={() => handleConfirmPrice(report)}
-                      disabled={confirmingId === report.id}
-                      style={({ pressed }) => [
-                        styles.voteBtn,
-                        pressed && styles.reportBtnPressed,
-                        confirmingId === report.id && { opacity: 0.5 },
-                      ]}>
-                      <Text style={styles.voteBtnText}>
-                        {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              );
-            })}
+            ) : null}
+            <StationPriceTable rows={stationRows} />
             <Pressable
               onPress={() => router.push('/(tabs)/prices/report')}
               style={({ pressed }) => [styles.reportBtn, pressed && styles.reportBtnPressed]}>
-              <Text style={styles.reportBtnText}>Report a price</Text>
+              <Text style={styles.reportBtnText}>Report a station price</Text>
             </Pressable>
           </Card>
+
+          {pendingForFuel.length > 0 ? (
+            <>
+              <SectionHeader
+                title="Help verify"
+                subtitle={`Confirm a station price (${VERIFY_CONFIRMATIONS_REQUIRED} needed)`}
+                module="community"
+              />
+              <Card elevated>
+                {pendingForFuel.map((report, index) => {
+                  const isOwn = Boolean(user && report.reported_by === user.id);
+                  const alreadyVoted = confirmedIds.has(report.id);
+                  const isLast = index === pendingForFuel.length - 1;
+                  const stationTitle = report.station?.name ?? 'Station';
+                  const fuelPart = report.fuel_type?.name ?? 'Fuel';
+                  return (
+                    <View
+                      key={report.id}
+                      style={[
+                        styles.pendingRow,
+                        !isLast && {
+                          borderBottomColor: theme.borderLight,
+                          borderBottomWidth: StyleSheet.hairlineWidth,
+                        },
+                      ]}>
+                      <View style={styles.verifyRow}>
+                        <View style={styles.verifyText}>
+                          <Text
+                            style={[styles.verifyTitle, { color: theme.text }]}
+                            numberOfLines={2}>
+                            {stationTitle}
+                          </Text>
+                          <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                            {formatCurrency(report.reported_price)}/L · {fuelPart} ·{' '}
+                            {usersConfirmedLabel(report.confirmation_count)}
+                          </Text>
+                        </View>
+                      </View>
+                      {isOwn ? (
+                        <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                          You reported this · {report.confirmation_count}/
+                          {VERIFY_CONFIRMATIONS_REQUIRED} needed
+                        </Text>
+                      ) : alreadyVoted ? (
+                        <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                          You confirmed this · {usersConfirmedLabel(report.confirmation_count)}
+                        </Text>
+                      ) : (
+                        <Pressable
+                          onPress={() => handleConfirmPrice(report)}
+                          disabled={confirmingId === report.id}
+                          style={({ pressed }) => [
+                            styles.voteBtn,
+                            pressed && styles.reportBtnPressed,
+                            confirmingId === report.id && { opacity: 0.5 },
+                          ]}>
+                          <Text style={styles.voteBtnText}>
+                            {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  );
+                })}
+              </Card>
+            </>
+          ) : null}
         </>
       ) : (
         <>
@@ -436,13 +632,11 @@ export default function FuelPricesScreen() {
               title="Pick a brand"
               subtitle={`Weekly ${fuelLabel} prices for ${companyName}`}
               module="prices">
-              <ChipSelect
-                label="Company"
-                options={companyOptions}
+              <SelectField
+                label="Brand"
                 value={trendCompanySlug}
+                options={companyOptions}
                 onChange={setTrendCompanySlug}
-                hideLabel
-                module="prices"
               />
             </FormSection>
           ) : null}
@@ -533,13 +727,30 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xxl,
     alignItems: 'center',
   },
-  emptyCommunity: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: spacing.md,
+  softLoading: {
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+  },
+  hint: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: -spacing.sm,
+    marginBottom: spacing.sm,
   },
   pendingRow: {
     paddingBottom: spacing.sm,
+  },
+  verifyRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  verifyText: { flex: 1 },
+  verifyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 2,
   },
   voteHint: {
     fontSize: 12,
