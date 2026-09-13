@@ -46,7 +46,7 @@ export async function deleteBudget(budgetId: string): Promise<void> {
   if (error) throw error;
 }
 
-/** Estimate spent amount from saved trip records in the same month (own-vehicle fuel cost only). */
+/** Estimate spent amount from trip history (trip_records) in the same month — own-vehicle fuel cost only. */
 export async function estimateMonthlyFuelSpend(
   userId: string,
   year: number,

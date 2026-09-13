@@ -1,10 +1,9 @@
 import type { TransportModeCode } from '@/constants/transportModes';
 
-/** Three MCDA criteria — weights must sum to 1. */
+/** Two SAW criteria — weights must sum to 1. */
 export interface MCDAWeights {
   fuelCost: number;
   travelTime: number;
-  depreciation: number;
 }
 
 /** Raw and normalized values plus weighted score for one transport mode. */
@@ -13,17 +12,15 @@ export interface ModeEvaluation {
   raw: {
     fuelCost: number;
     travelTime: number;
-    depreciation: number;
   };
   normalized: {
     fuelCost: number;
     travelTime: number;
-    depreciation: number;
   };
   weightedScore: number;
 }
 
-/** Full trip record with auditable MCDA breakdown (matches trip_records.mode_evaluations). */
+/** Full trip record with auditable SAW breakdown (matches trip_records.mode_evaluations). */
 export interface TripRecord {
   id: string;
   user_id: string;

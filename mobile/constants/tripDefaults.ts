@@ -4,23 +4,21 @@ import type { TransportModeCode } from './transportModes';
 export interface TransportModeDefaults {
   costPerKm: number;
   avgSpeedKmh: number;
-  depreciationPerKm: number;
 }
 
 export const TRANSPORT_MODE_DEFAULTS: Record<
   Exclude<TransportModeCode, 'OWN_VEHICLE'>,
   TransportModeDefaults
 > = {
-  JEEPNEY: { costPerKm: 2.5, avgSpeedKmh: 20, depreciationPerKm: 0 },
-  TRICYCLE: { costPerKm: 8.0, avgSpeedKmh: 25, depreciationPerKm: 0 },
-  RIDE_HAILING: { costPerKm: 15.0, avgSpeedKmh: 30, depreciationPerKm: 0 },
-  WALKING: { costPerKm: 0, avgSpeedKmh: 5, depreciationPerKm: 0 },
+  JEEPNEY: { costPerKm: 2.5, avgSpeedKmh: 20 },
+  TRICYCLE: { costPerKm: 8.0, avgSpeedKmh: 25 },
+  RIDE_HAILING: { costPerKm: 15.0, avgSpeedKmh: 30 },
+  WALKING: { costPerKm: 0, avgSpeedKmh: 5 },
 };
 
-/** Own-vehicle assumptions when computing travel time and depreciation. */
+/** Own-vehicle assumptions when computing travel time. */
 export const OWN_VEHICLE_DEFAULTS = {
   avgSpeedKmh: 40,
-  depreciationPerKm: 3.5,
 };
 
 export function travelTimeMinutes(distanceKm: number, avgSpeedKmh: number): number {

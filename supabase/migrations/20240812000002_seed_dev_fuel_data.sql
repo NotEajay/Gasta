@@ -60,7 +60,11 @@ cross join lateral (
   end as offset
 ) c_offset
 where b.bulletin_date = '2026-08-05'
-  and ft.code in ('RON_91', 'RON_95', 'RON_97', 'RON_100', 'DIESEL', 'DIESEL_PLUS', 'KEROSENE');
+  and ft.code in ('RON_91', 'RON_95', 'RON_97', 'RON_100', 'DIESEL', 'DIESEL_PLUS', 'KEROSENE')
+  and c.slug in ('petron', 'shell', 'caltex', 'total', 'seaoil', 'unioil', 'phoenix', 'jetti')
+  and base.price is not null
+  and r_offset.offset is not null
+  and c_offset.offset is not null;
 
 -- Prior week — slightly lower for trend demo
 insert into public.fuel_prices (bulletin_id, region_id, oil_company_id, fuel_type_id, price_per_liter)

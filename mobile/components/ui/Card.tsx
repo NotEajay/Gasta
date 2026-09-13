@@ -1,29 +1,31 @@
-import { StyleSheet, View, type ViewProps } from 'react-native';
+import { StyleSheet, type ViewProps } from 'react-native';
 
-import { useColorScheme } from '@/components/useColorScheme';
+import GlassSurface from '@/components/ui/GlassSurface';
+import { radii, spacing } from '@/constants/Theme';
 
-export default function Card({ style, ...props }: ViewProps) {
-  const scheme = useColorScheme();
+interface CardProps extends ViewProps {
+  elevated?: boolean;
+  compact?: boolean;
+}
+
+export default function Card({ style, elevated, compact, ...props }: CardProps) {
   return (
-    <View
+    <GlassSurface
+      variant={elevated ? 'strong' : 'default'}
+      style={[styles.card, compact && styles.compact, style]}
       {...props}
-      style={[
-        styles.card,
-        {
-          backgroundColor: scheme === 'dark' ? '#1a1a1a' : '#f7f9fc',
-          borderColor: scheme === 'dark' ? '#333' : '#e2e8f0',
-        },
-        style,
-      ]}
     />
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 12,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  compact: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
 });

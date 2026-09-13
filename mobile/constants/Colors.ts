@@ -1,19 +1,18 @@
-const tintColorLight = '#2f95dc';
-const tintColorDark = '#fff';
+import { GasTaColors } from '@/constants/Theme';
 
 export default {
   light: {
-    text: '#000',
-    background: '#fff',
-    tint: tintColorLight,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorLight,
+    text: GasTaColors.textPrimary,
+    background: GasTaColors.white,
+    tint: GasTaColors.forest,
+    tabIconDefault: GasTaColors.textSoft,
+    tabIconSelected: GasTaColors.forest,
   },
   dark: {
-    text: '#fff',
-    background: '#000',
-    tint: tintColorDark,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorDark,
+    text: GasTaColors.textPrimary,
+    background: GasTaColors.white,
+    tint: GasTaColors.forest,
+    tabIconDefault: GasTaColors.textSoft,
+    tabIconSelected: GasTaColors.forest,
   },
 };

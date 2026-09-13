@@ -7,10 +7,9 @@ export interface ModeRawScores {
   modeCode: TransportModeCode;
   fuelCost: number;
   travelTime: number;
-  depreciation: number;
 }
 
-const CRITERION_KEYS: MCDACriterionKey[] = ['fuelCost', 'travelTime', 'depreciation'];
+const CRITERION_KEYS: MCDACriterionKey[] = ['fuelCost', 'travelTime'];
 
 /** Inverted min-max normalization: (max - x) / (max - min). Lower raw = better. */
 export function normalizeCriterion(value: number, min: number, max: number): number {
@@ -21,11 +20,11 @@ export function normalizeCriterion(value: number, min: number, max: number): num
 }
 
 export function weightsSumToOne(weights: MCDAWeights, tolerance = 0.001): boolean {
-  const sum = weights.fuelCost + weights.travelTime + weights.depreciation;
+  const sum = weights.fuelCost + weights.travelTime;
   return Math.abs(sum - 1) <= tolerance;
 }
 
-/** Weighted sum MCDA over three cost-type criteria. Returns full breakdown per mode. */
+/** Weighted-sum SAW over two cost-type criteria. Returns full breakdown per mode. */
 export function evaluateModes(
   modes: ModeRawScores[],
   weights: MCDAWeights
@@ -46,20 +45,16 @@ export function evaluateModes(
     const normalized = {
       fuelCost: normalizeCriterion(mode.fuelCost, mins.fuelCost, maxs.fuelCost),
       travelTime: normalizeCriterion(mode.travelTime, mins.travelTime, maxs.travelTime),
-      depreciation: normalizeCriterion(mode.depreciation, mins.depreciation, maxs.depreciation),
     };
 
     const weightedScore =
-      normalized.fuelCost * weights.fuelCost +
-      normalized.travelTime * weights.travelTime +
-      normalized.depreciation * weights.depreciation;
+      normalized.fuelCost * weights.fuelCost + normalized.travelTime * weights.travelTime;
 
     return {
       modeCode: mode.modeCode,
       raw: {
         fuelCost: mode.fuelCost,
         travelTime: mode.travelTime,
-        depreciation: mode.depreciation,
       },
       normalized,
       weightedScore,

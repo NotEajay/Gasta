@@ -20,7 +20,7 @@ export async function fetchVehicleCatalog(): Promise<VehicleCatalogEntry[]> {
     .order('model');
 
   if (error) throw error;
-  return (data ?? []) as VehicleCatalogEntry[];
+  return (data ?? []) as unknown as VehicleCatalogEntry[];
 }
 
 export async function fetchFuelTypeIdByCode(code: string): Promise<string | null> {
@@ -43,9 +43,12 @@ export interface CreateVehicleInput {
   fuelTypeId: string;
   fuelEfficiencyKmPerLiter: number;
   nickname?: string;
+  lastRefillPrice?: number;
 }
 
 export async function createVehicle(input: CreateVehicleInput): Promise<Vehicle> {
+  const hasLastRefill = input.lastRefillPrice != null && input.lastRefillPrice > 0;
+
   const { data, error } = await supabase
     .from('vehicles')
     .insert({
@@ -57,7 +60,27 @@ export async function createVehicle(input: CreateVehicleInput): Promise<Vehicle>
       fuel_type_id: input.fuelTypeId,
       fuel_efficiency_km_per_liter: input.fuelEfficiencyKmPerLiter,
       nickname: input.nickname ?? null,
+      last_refill_price: hasLastRefill ? input.lastRefillPrice : null,
+      last_refill_at: hasLastRefill ? new Date().toISOString() : null,
     })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function updateVehicleLastRefill(
+  vehicleId: string,
+  lastRefillPrice: number
+): Promise<Vehicle> {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .update({
+      last_refill_price: lastRefillPrice,
+      last_refill_at: new Date().toISOString(),
+    })
+    .eq('id', vehicleId)
     .select('*')
     .single();
 
