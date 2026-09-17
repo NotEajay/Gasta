@@ -4,6 +4,8 @@ import { supabase } from '@/lib/supabase';
 export interface FuelStationOption {
   id: string;
   name: string;
+  latitude: number | null;
+  longitude: number | null;
   address: string | null;
   brand_label: string | null;
   oil_company: { id: string; name: string; slug: string };
@@ -50,12 +52,12 @@ async function resolveRegionId(regionCode: string): Promise<string> {
 export async function fetchFuelStationsByRegion(regionCode: string): Promise<FuelStationOption[]> {
   const regionId = await resolveRegionId(regionCode);
   const selectWithBrand = `
-      id, name, address, brand_label,
+      id, name, latitude, longitude, address, brand_label,
       oil_company:oil_companies ( id, name, slug ),
       region:regions ( id, code, name )
     `;
   const selectBasic = `
-      id, name, address,
+      id, name, latitude, longitude, address,
       oil_company:oil_companies ( id, name, slug ),
       region:regions ( id, code, name )
     `;
@@ -65,6 +67,7 @@ export async function fetchFuelStationsByRegion(regionCode: string): Promise<Fue
     .select(selectWithBrand)
     .eq('region_id', regionId)
     .order('name');
+  let stationData: unknown = data;
 
   if (error) {
     const retry = await supabase
@@ -73,10 +76,10 @@ export async function fetchFuelStationsByRegion(regionCode: string): Promise<Fue
       .eq('region_id', regionId)
       .order('name');
     if (retry.error) throw retry.error;
-    data = retry.data;
+    stationData = retry.data;
   }
 
-  return ((data ?? []) as unknown as FuelStationOption[]).map((row) => ({
+  return ((stationData ?? []) as FuelStationOption[]).map((row) => ({
     ...row,
     brand_label: row.brand_label ?? null,
   }));

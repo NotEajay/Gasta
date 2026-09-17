@@ -3,12 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
+import MapView, { Callout, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 import { Text } from '@/components/Themed';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
@@ -24,12 +26,8 @@ import SelectField from '@/components/ui/SelectField';
 import StationPriceTable, { type StationPriceRow } from '@/components/ui/StationPriceTable';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import {
-  DOE_REGIONS,
-  REGION_FALLBACK_CITIES,
-  type DoeRegionCode,
-} from '@/constants/regions';
-import { GasTaColors, palette, spacing } from '@/constants/Theme';
+import { DOE_REGIONS, REGION_FALLBACK_CITIES, type DoeRegionCode } from '@/constants/regions';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import {
   formatBulletinWeek,
@@ -65,7 +63,10 @@ import { useTheme } from '@/lib/useTheme';
 
 function matchesCityFilter(station: FuelStationOption, city: string): boolean {
   if (!city) return true;
-  const needle = city.toLowerCase().replace(/\s+city$/i, '').trim();
+  const needle = city
+    .toLowerCase()
+    .replace(/\s+city$/i, '')
+    .trim();
   const hay = `${station.name} ${station.address ?? ''}`.toLowerCase();
   return hay.includes(needle);
 }
@@ -127,6 +128,21 @@ function buildStationPriceRows(
     .sort((a, b) => a.brand.localeCompare(b.brand) || a.station.localeCompare(b.station));
 }
 
+function hasValidCoordinates(
+  station: FuelStationOption
+): station is FuelStationOption & { latitude: number; longitude: number } {
+  return (
+    typeof station.latitude === 'number' &&
+    Number.isFinite(station.latitude) &&
+    station.latitude >= -90 &&
+    station.latitude <= 90 &&
+    typeof station.longitude === 'number' &&
+    Number.isFinite(station.longitude) &&
+    station.longitude >= -180 &&
+    station.longitude <= 180
+  );
+}
+
 type PricesView = 'now' | 'history';
 
 const HISTORY_WEEKS = 52;
@@ -185,7 +201,11 @@ export default function FuelPricesScreen() {
   );
 
   const companyOptions = useMemo(
-    () => prices.map((row) => ({ value: row.oil_company.slug, label: row.oil_company.name })),
+    () =>
+      prices.map((row) => ({
+        value: row.oil_company.slug,
+        label: row.oil_company.name,
+      })),
     [prices]
   );
 
@@ -363,6 +383,27 @@ export default function FuelPricesScreen() {
       ),
     [stations, verifiedCommunity, pendingCommunity, prices, areaName, fuelType]
   );
+  const mappedStations = useMemo(() => stations.filter(hasValidCoordinates), [stations]);
+  const mapInitialRegion = useMemo(() => {
+    if (mappedStations.length === 0) return null;
+
+    const latitudes = mappedStations.map((station) => station.latitude);
+    const longitudes = mappedStations.map((station) => station.longitude);
+    const minLatitude = Math.min(...latitudes);
+    const maxLatitude = Math.max(...latitudes);
+    const minLongitude = Math.min(...longitudes);
+    const maxLongitude = Math.max(...longitudes);
+    const latitudeSpan = maxLatitude - minLatitude;
+    const longitudeSpan = maxLongitude - minLongitude;
+    const padding = 1.35;
+
+    return {
+      latitude: (minLatitude + maxLatitude) / 2,
+      longitude: (minLongitude + maxLongitude) / 2,
+      latitudeDelta: Math.max(latitudeSpan * padding, 0.08),
+      longitudeDelta: Math.max(longitudeSpan * padding, 0.08),
+    };
+  }, [mappedStations]);
 
   const pendingForFuel = useMemo(
     () =>
@@ -418,6 +459,18 @@ export default function FuelPricesScreen() {
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
 
+  const priceSummary = useMemo(() => {
+    const values = prices
+      .map((row) => row.price_per_liter)
+      .filter((price): price is number => Number.isFinite(price) && price > 0);
+    if (values.length === 0) return null;
+    return {
+      lowest: Math.min(...values),
+      highest: Math.max(...values),
+      count: values.length,
+    };
+  }, [prices]);
+
   const freshness = useMemo(() => {
     if (!bulletin) return null;
     const ageDays = bulletinAgeInDays(bulletin.bulletin_date);
@@ -461,16 +514,29 @@ export default function FuelPricesScreen() {
           }}
           tintColor={palette.primary}
         />
-      }>
+      }
+    >
       <PageHero
         module="prices"
         title="Fuel Prices"
         subtitle={
           bulletin
-            ? `${regionLabel} · ${fuelLabel} · ${areaLabel}\nLatest available DOE bulletin: ${formatBulletinWeek(bulletin.bulletin_date)}`
-            : `${regionLabel} · ${fuelLabel}`
+            ? `Compare DOE fuel prices before your next trip · ${regionLabel} · ${areaLabel}`
+            : `Compare DOE fuel prices before your next trip · ${regionLabel}`
         }
-      />
+      >
+        <View style={styles.brandLine}>
+          <Image
+            source={require('@/assets/images/gasta-logo.png')}
+            style={styles.brandLogo}
+            resizeMode="contain"
+            accessibilityLabel="GasTa logo"
+          />
+          <Text style={[styles.brandLabel, { color: theme.textSecondary }]}>
+            GASTA FUEL MONITOR
+          </Text>
+        </View>
+      </PageHero>
 
       <SegmentedToggle
         module="prices"
@@ -482,24 +548,61 @@ export default function FuelPricesScreen() {
         ]}
       />
 
+      <View style={styles.fuelRailSection}>
+        <Text style={[styles.fuelRailLabel, { color: theme.textSecondary }]}>FUEL TYPE</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.fuelRail}
+        >
+          {fuelOptions.map((option) => {
+            const selected = option.value === fuelType;
+            return (
+              <Pressable
+                key={option.value}
+                onPress={() => setFuelType(option.value as DoeFuelTypeCode)}
+                style={({ pressed }) => [
+                  styles.fuelChip,
+                  {
+                    backgroundColor: selected ? palette.primary : theme.surface,
+                    borderColor: selected ? palette.primary : theme.border,
+                    opacity: pressed ? 0.82 : 1,
+                  },
+                ]}
+              >
+                <Text style={[styles.fuelChipText, { color: selected ? '#F8F0E5' : theme.text }]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+
       <FormSection
         title="Find prices"
-        subtitle="Tap each field to choose region, city, and fuel"
-        module="prices">
-        <SelectField label="Region" value={region} options={regionOptions} onChange={setRegion} />
-        <SelectField
-          label="City / area"
-          value={areaName}
-          options={areaOptions}
-          onChange={setAreaName}
-          placeholder="All cities"
-        />
-        <SelectField
-          label="Fuel type"
-          value={fuelType}
-          options={fuelOptions}
-          onChange={setFuelType}
-        />
+        subtitle="Choose a region, area, and fuel type"
+        module="prices"
+      >
+        <View style={styles.filterRow}>
+          <View style={styles.filterHalf}>
+            <SelectField
+              label="Region"
+              value={region}
+              options={regionOptions}
+              onChange={setRegion}
+            />
+          </View>
+          <View style={styles.filterHalf}>
+            <SelectField
+              label="City / area"
+              value={areaName}
+              options={areaOptions}
+              onChange={setAreaName}
+              placeholder="All cities"
+            />
+          </View>
+        </View>
         {!areasFromDoe && areas.length > 0 ? (
           <Text style={[styles.hint, { color: theme.textSecondary }]}>
             Cities listed for browsing stations. DOE has no per-city prices for this region this
@@ -509,8 +612,27 @@ export default function FuelPricesScreen() {
       </FormSection>
 
       {error ? (
-        <Card style={{ borderColor: palette.danger, backgroundColor: palette.dangerSoft }}>
-          <Text style={{ color: palette.danger, fontWeight: '600' }}>{error}</Text>
+        <Card
+          style={{
+            borderColor: palette.danger,
+            backgroundColor: palette.dangerSoft,
+          }}
+        >
+          <Text style={[styles.summaryTitle, { color: palette.danger }]}>
+            We couldn’t load fuel prices
+          </Text>
+          <Text style={[styles.summaryBody, { color: theme.textSecondary }]}>
+            Check your connection and try again.
+          </Text>
+          <Pressable
+            onPress={() => {
+              setLoading(true);
+              void loadRegion();
+            }}
+            style={({ pressed }) => [styles.retryBtn, pressed && styles.reportBtnPressed]}
+          >
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </Pressable>
         </Card>
       ) : null}
 
@@ -523,20 +645,110 @@ export default function FuelPricesScreen() {
         </View>
       ) : view === 'now' ? (
         <>
-          {freshness?.stale ? (
-            <Card style={{ borderColor: palette.warning, backgroundColor: palette.warningSoft }}>
-              <Text style={[styles.summaryTitle, { color: theme.text }]}>
-                These prices are {freshness.ageDays} days old
-              </Text>
+          {bulletin ? (
+            <Card
+              style={[
+                styles.freshnessCard,
+                freshness?.stale
+                  ? {
+                      borderColor: palette.warning,
+                      backgroundColor: palette.warningSoft,
+                    }
+                  : { borderColor: theme.border },
+              ]}
+            >
+              <View style={styles.freshnessHeader}>
+                <View style={styles.freshnessCopy}>
+                  <Text style={[styles.cardEyebrow, { color: theme.textSecondary }]}>
+                    LATEST DOE BULLETIN
+                  </Text>
+                  <Text style={[styles.freshnessDate, { color: theme.text }]}>
+                    {formatBulletinWeek(bulletin.bulletin_date)}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.freshnessPill,
+                    {
+                      backgroundColor: freshness?.stale ? palette.warningSoft : palette.successSoft,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: freshness?.stale ? palette.warning : palette.success,
+                      fontSize: 11,
+                      fontWeight: '800',
+                    }}
+                  >
+                    {freshness?.stale ? 'May be outdated' : 'Latest available'}
+                  </Text>
+                </View>
+              </View>
               <Text style={[styles.summaryBody, { color: theme.textSecondary }]}>
-                DOE publishes every Tuesday. This is the newest bulletin available for {regionLabel}{' '}
-                — pull down to check for a newer one.
+                {freshness?.stale
+                  ? `This bulletin is ${freshness.ageDays} days old. Pull down to check for newer DOE data.`
+                  : 'Published weekly by the Department of Energy.'}
               </Text>
             </Card>
           ) : null}
 
+          {priceSummary ? (
+            <View style={styles.summaryGrid}>
+              <Card compact style={styles.summaryMetric}>
+                <Text style={[styles.cardEyebrow, { color: theme.textSecondary }]}>LOWEST</Text>
+                <Text style={[styles.metricValue, { color: palette.success }]}>
+                  {formatCurrency(priceSummary.lowest)}/L
+                </Text>
+                <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>
+                  {fuelLabel}
+                </Text>
+              </Card>
+              <Card compact style={styles.summaryMetric}>
+                <Text style={[styles.cardEyebrow, { color: theme.textSecondary }]}>
+                  PRICE RANGE
+                </Text>
+                <Text style={[styles.metricValue, { color: theme.text }]}>
+                  {formatCurrency(priceSummary.lowest)}–{formatCurrency(priceSummary.highest)}
+                </Text>
+                <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>
+                  {priceSummary.count} companies
+                </Text>
+              </Card>
+            </View>
+          ) : null}
+
+          {prices.length > 0 ? (
+            <>
+              <SectionHeader
+                title={`${fuelLabel} prices`}
+                subtitle={`Lowest to highest · ${regionLabel}${areaName ? ` · ${areaName}` : ''}`}
+                module="prices"
+              />
+              <Card elevated compact style={styles.compareCard}>
+                {prices.map((row, index) => (
+                  <PriceCompareRow
+                    key={row.id}
+                    rank={index + 1}
+                    company={row.oil_company.name}
+                    price={row.price_per_liter}
+                    maxPrice={priceSummary?.highest ?? row.price_per_liter}
+                    minPrice={priceSummary?.lowest ?? row.price_per_liter}
+                    isLowest={index === 0}
+                    isLast={index === prices.length - 1}
+                  />
+                ))}
+              </Card>
+            </>
+          ) : !pricesLoading ? (
+            <EmptyState
+              title="No fuel prices available"
+              message="Try selecting another region, area, or fuel type."
+            />
+          ) : null}
+
           <SectionHeader
-            title="Stations & prices"
+            title="Nearby fuel stations"
             subtitle={
               areaName
                 ? `${fuelLabel} at stations in ${areaName}`
@@ -544,6 +756,57 @@ export default function FuelPricesScreen() {
             }
             module="prices"
           />
+          {mapInitialRegion ? (
+            <Card elevated style={styles.stationMapCard}>
+              <Text style={[styles.mapTitle, { color: theme.text }]}>Fuel stations in {regionLabel}</Text>
+              <Text style={[styles.mapSubtitle, { color: theme.textSecondary }]}>
+                Showing {mappedStations.length} station{mappedStations.length === 1 ? '' : 's'} with
+                stored coordinates.
+              </Text>
+              <View style={styles.stationMapFrame}>
+                <MapView
+                  provider={PROVIDER_GOOGLE}
+                  style={styles.stationMap}
+                  initialRegion={mapInitialRegion}
+                  showsCompass
+                  showsPointsOfInterests
+                >
+                  {mappedStations.map((station) => (
+                    <Marker
+                      key={station.id}
+                      coordinate={{
+                        latitude: station.latitude,
+                        longitude: station.longitude,
+                      }}
+                      pinColor={palette.primary}
+                      title={station.name}
+                    >
+                      <Callout>
+                        <View style={styles.callout}>
+                          <Text style={[styles.calloutTitle, { color: theme.text }]}>
+                            {station.name}
+                          </Text>
+                          <Text style={[styles.calloutAddress, { color: theme.textSecondary }]}>
+                            {station.address || 'Address not provided'}
+                          </Text>
+                        </View>
+                      </Callout>
+                    </Marker>
+                  ))}
+                </MapView>
+              </View>
+            </Card>
+          ) : (
+            <Card compact style={styles.mapEmptyCard}>
+              <Text style={[styles.mapEmptyTitle, { color: theme.text }]}>
+                No mappable stations yet
+              </Text>
+              <Text style={[styles.mapEmptyBody, { color: theme.textSecondary }]}>
+                Existing station records must contain valid latitude and longitude values to appear
+                on the map.
+              </Text>
+            </Card>
+          )}
           <Card elevated>
             {pricesLoading ? (
               <View style={styles.softLoading}>
@@ -553,7 +816,8 @@ export default function FuelPricesScreen() {
             <StationPriceTable rows={stationRows} />
             <Pressable
               onPress={() => router.push('/(tabs)/prices/report')}
-              style={({ pressed }) => [styles.reportBtn, pressed && styles.reportBtnPressed]}>
+              style={({ pressed }) => [styles.reportBtn, pressed && styles.reportBtnPressed]}
+            >
               <Text style={styles.reportBtnText}>Report a station price</Text>
             </Pressable>
           </Card>
@@ -581,12 +845,14 @@ export default function FuelPricesScreen() {
                           borderBottomColor: theme.borderLight,
                           borderBottomWidth: StyleSheet.hairlineWidth,
                         },
-                      ]}>
+                      ]}
+                    >
                       <View style={styles.verifyRow}>
                         <View style={styles.verifyText}>
                           <Text
                             style={[styles.verifyTitle, { color: theme.text }]}
-                            numberOfLines={2}>
+                            numberOfLines={2}
+                          >
                             {stationTitle}
                           </Text>
                           <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
@@ -612,7 +878,8 @@ export default function FuelPricesScreen() {
                             styles.voteBtn,
                             pressed && styles.reportBtnPressed,
                             confirmingId === report.id && { opacity: 0.5 },
-                          ]}>
+                          ]}
+                        >
                           <Text style={styles.voteBtnText}>
                             {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
                           </Text>
@@ -631,7 +898,8 @@ export default function FuelPricesScreen() {
             <FormSection
               title="Pick a brand"
               subtitle={`Weekly ${fuelLabel} prices for ${companyName}`}
-              module="prices">
+              module="prices"
+            >
               <SelectField
                 label="Brand"
                 value={trendCompanySlug}
@@ -651,7 +919,8 @@ export default function FuelPricesScreen() {
                       ? palette.dangerSoft
                       : theme.overlay,
                 borderColor: theme.border,
-              }}>
+              }}
+            >
               <Text style={[styles.summaryTitle, { color: theme.text }]}>
                 {historySummary.delta < 0
                   ? `${formatCurrency(Math.abs(historySummary.delta))} cheaper than ${formatShortDate(historySummary.oldest.bulletin_date)}`
@@ -722,6 +991,76 @@ export default function FuelPricesScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  brandLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  brandLogo: { width: 28, height: 28 },
+  brandLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  stationMapCard: { padding: spacing.md },
+  mapTitle: { fontSize: 16, fontWeight: '800' },
+  mapSubtitle: { fontSize: 12, lineHeight: 17, marginTop: 3, marginBottom: spacing.sm },
+  stationMapFrame: {
+    height: 300,
+    overflow: 'hidden',
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.primarySoft,
+  },
+  stationMap: { flex: 1 },
+  callout: { maxWidth: 220, padding: spacing.xs },
+  calloutTitle: { fontSize: 14, fontWeight: '800', marginBottom: 3 },
+  calloutAddress: { fontSize: 12, lineHeight: 16 },
+  mapEmptyCard: {
+    borderWidth: 1,
+    borderColor: palette.primarySoft,
+    backgroundColor: palette.successSoft,
+  },
+  mapEmptyTitle: { fontSize: 14, fontWeight: '800', marginBottom: 3 },
+  mapEmptyBody: { fontSize: 12, lineHeight: 17 },
+  filterRow: { flexDirection: 'row', gap: spacing.sm },
+  filterHalf: { flex: 1 },
+  fuelRailSection: { marginBottom: spacing.md },
+  fuelRailLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: spacing.xs,
+  },
+  fuelRail: { gap: spacing.sm, paddingRight: spacing.md },
+  fuelChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+  },
+  fuelChipText: { fontSize: 13, fontWeight: '700' },
+  freshnessCard: { padding: spacing.md, marginBottom: spacing.md },
+  freshnessHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  freshnessCopy: { flex: 1 },
+  freshnessDate: { fontSize: 17, fontWeight: '800', marginTop: 3 },
+  freshnessPill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  summaryMetric: { flex: 1, padding: spacing.md, marginBottom: 0 },
+  cardEyebrow: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  metricValue: { fontSize: 18, fontWeight: '800', marginTop: spacing.xs },
+  metricLabel: { fontSize: 11, marginTop: 2 },
   compareCard: { paddingVertical: spacing.xs },
   inlineLoading: {
     paddingVertical: spacing.xxl,
@@ -785,6 +1124,19 @@ const styles = StyleSheet.create({
   reportBtnPressed: { opacity: 0.88 },
   reportBtnText: {
     color: GasTaColors.forestDark,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+    backgroundColor: GasTaColors.forest,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+  },
+  retryBtnText: {
+    color: GasTaColors.textOnForest,
     fontSize: 13,
     fontWeight: '700',
   },

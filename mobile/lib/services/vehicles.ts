@@ -4,12 +4,12 @@ import type { Vehicle, VehicleCatalogEntry } from '@/types';
 export async function fetchVehicles(userId: string): Promise<Vehicle[]> {
   const { data, error } = await supabase
     .from('vehicles')
-    .select('*')
+    .select('*, fuel_type:fuel_types ( code, name )')
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []) as unknown as Vehicle[];
 }
 
 export async function fetchVehicleCatalog(): Promise<VehicleCatalogEntry[]> {
@@ -46,6 +46,16 @@ export interface CreateVehicleInput {
   lastRefillPrice?: number;
 }
 
+export interface UpdateVehicleInput {
+  userId: string;
+  brand: string;
+  model: string;
+  year: number;
+  fuelTypeId: string;
+  fuelEfficiencyKmPerLiter: number;
+  nickname?: string;
+}
+
 export async function createVehicle(input: CreateVehicleInput): Promise<Vehicle> {
   const hasLastRefill = input.lastRefillPrice != null && input.lastRefillPrice > 0;
 
@@ -70,8 +80,32 @@ export async function createVehicle(input: CreateVehicleInput): Promise<Vehicle>
   return data;
 }
 
+export async function updateVehicle(
+  vehicleId: string,
+  input: UpdateVehicleInput
+): Promise<Vehicle> {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .update({
+      brand: input.brand,
+      model: input.model,
+      year: input.year,
+      fuel_type_id: input.fuelTypeId,
+      fuel_efficiency_km_per_liter: input.fuelEfficiencyKmPerLiter,
+      nickname: input.nickname?.trim() || null,
+    })
+    .eq('id', vehicleId)
+    .eq('user_id', input.userId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function updateVehicleLastRefill(
   vehicleId: string,
+  userId: string,
   lastRefillPrice: number
 ): Promise<Vehicle> {
   const { data, error } = await supabase
@@ -81,6 +115,7 @@ export async function updateVehicleLastRefill(
       last_refill_at: new Date().toISOString(),
     })
     .eq('id', vehicleId)
+    .eq('user_id', userId)
     .select('*')
     .single();
 
@@ -88,7 +123,11 @@ export async function updateVehicleLastRefill(
   return data;
 }
 
-export async function deleteVehicle(vehicleId: string): Promise<void> {
-  const { error } = await supabase.from('vehicles').delete().eq('id', vehicleId);
+export async function deleteVehicle(vehicleId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('vehicles')
+    .delete()
+    .eq('id', vehicleId)
+    .eq('user_id', userId);
   if (error) throw error;
 }
