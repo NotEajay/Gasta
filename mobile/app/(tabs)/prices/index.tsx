@@ -1,4 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,7 +27,12 @@ import SelectField from '@/components/ui/SelectField';
 import StationPriceTable, { type StationPriceRow } from '@/components/ui/StationPriceTable';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { DOE_REGIONS, REGION_FALLBACK_CITIES, type DoeRegionCode } from '@/constants/regions';
+import {
+  DOE_REGIONS,
+  REGION_CENTROIDS,
+  REGION_FALLBACK_CITIES,
+  type DoeRegionCode,
+} from '@/constants/regions';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import {
@@ -147,17 +153,41 @@ type PricesView = 'now' | 'history';
 
 const HISTORY_WEEKS = 52;
 
+function detectRegionFromCoordinates(latitude: number, longitude: number): DoeRegionCode | null {
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < 4 ||
+    latitude > 22 ||
+    longitude < 116 ||
+    longitude > 127
+  ) {
+    return null;
+  }
+
+  return DOE_REGIONS.reduce<DoeRegionCode | null>((closest, regionOption) => {
+    const centroid = REGION_CENTROIDS[regionOption.code];
+    const distanceToCentroid =
+      (latitude - centroid.latitude) ** 2 + (longitude - centroid.longitude) ** 2;
+    if (!closest) return regionOption.code;
+    const closestCentroid = REGION_CENTROIDS[closest];
+    const closestDistance =
+      (latitude - closestCentroid.latitude) ** 2 + (longitude - closestCentroid.longitude) ** 2;
+    return distanceToCentroid < closestDistance ? regionOption.code : closest;
+  }, null);
+}
+
 export default function FuelPricesScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { user } = useAuth();
   const [view, setView] = useState<PricesView>('now');
-  const [region, setRegion] = useState<DoeRegionCode>('NCR');
-  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
+  const [region, setRegion] = useState<DoeRegionCode | ''>('');
+  const [fuelType, setFuelType] = useState<DoeFuelTypeCode | ''>('');
   const [areaName, setAreaName] = useState('');
   const [doeAreas, setDoeAreas] = useState<string[]>([]);
   const [areasFromDoe, setAreasFromDoe] = useState(false);
-  const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
+  const [trendCompanySlug, setTrendCompanySlug] = useState('');
   const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
   const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
@@ -173,23 +203,79 @@ export default function FuelPricesScreen() {
   const [pricesLoading, setPricesLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [locationStatus, setLocationStatus] = useState<'checking' | 'detected' | 'fallback'>(
+    'checking'
+  );
+  const [detectedRegion, setDetectedRegion] = useState<DoeRegionCode | null>(null);
   const historyLoadedFor = useRef<string | null>(null);
+  const locationChecked = useRef(false);
 
-  const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
-  const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
+  const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? 'All Regions';
+  const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? 'All Fuel Types';
   const areaLabel = areaName || 'All cities';
+
+  useEffect(() => {
+    if (locationChecked.current) return;
+    locationChecked.current = true;
+
+    const detectInitialRegion = async () => {
+      try {
+        let permission = await Location.getForegroundPermissionsAsync();
+        if (permission.status === 'undetermined') {
+          permission = await Location.requestForegroundPermissionsAsync();
+        }
+        if (permission.status !== 'granted') {
+          setLocationStatus('fallback');
+          setLoading(false);
+          return;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const { latitude, longitude } = position.coords;
+        const detected = detectRegionFromCoordinates(
+          latitude,
+          longitude
+        );
+        if (__DEV__) {
+          console.info('[Fuel Prices] location detection', {
+            latitude,
+            longitude,
+            detectedRegion: detected,
+          });
+        }
+        if (detected) {
+          setDetectedRegion(detected);
+          setRegion(detected);
+          setLocationStatus('detected');
+        } else {
+          setLocationStatus('fallback');
+          setLoading(false);
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[Fuel Prices] location detection failed', error);
+        }
+        setLocationStatus('fallback');
+        setLoading(false);
+      }
+    };
+
+    void detectInitialRegion();
+  }, []);
 
   const areas = useMemo(() => {
     if (doeAreas.length > 0) return doeAreas;
-    return [...(REGION_FALLBACK_CITIES[region] ?? [])];
+    return region ? [...(REGION_FALLBACK_CITIES[region] ?? [])] : [];
   }, [doeAreas, region]);
 
   const regionOptions = useMemo(
-    () => DOE_REGIONS.map((r) => ({ value: r.code, label: r.name })),
+    () => [{ value: '', label: 'All Regions' }, ...DOE_REGIONS.map((r) => ({ value: r.code, label: r.name }))],
     []
   );
   const fuelOptions = useMemo(
-    () => DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name })),
+    () => [{ value: '', label: 'All Fuel Types' }, ...DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))],
     []
   );
   const areaOptions = useMemo(
@@ -202,15 +288,22 @@ export default function FuelPricesScreen() {
 
   const companyOptions = useMemo(
     () =>
-      prices.map((row) => ({
-        value: row.oil_company.slug,
-        label: row.oil_company.name,
-      })),
+      [
+        { value: '', label: 'All Companies' },
+        ...prices.map((row) => ({
+          value: row.oil_company.slug,
+          label: row.oil_company.name,
+        })),
+      ].filter(
+        (option, index, options) =>
+          options.findIndex((candidate) => candidate.value === option.value) === index
+      ),
     [prices]
   );
 
   /** Region-scoped data only — skips 52-week history and area/fuel price refetch. */
   const loadRegion = useCallback(async () => {
+    if (locationStatus === 'checking') return;
     if (!isSupabaseConfigured) {
       setLoading(false);
       setRefreshing(false);
@@ -218,13 +311,16 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
+      if (__DEV__) {
+        console.info('[Fuel Prices] loading region filter', region || 'ALL_REGIONS');
+      }
       const [latest, pending, regionStations] = await Promise.all([
-        fetchLatestBulletinForRegion(region),
+        fetchLatestBulletinForRegion(region || undefined),
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
           return [];
         }),
-        fetchFuelStationsByRegion(region).catch((e) => {
+        fetchFuelStationsByRegion(region || undefined).catch((e) => {
           console.warn('Fuel stations failed', e);
           return [];
         }),
@@ -261,7 +357,7 @@ export default function FuelPricesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [region, user]);
+  }, [region, user, locationStatus]);
 
   useEffect(() => {
     setSelectedPastDate(null);
@@ -270,19 +366,19 @@ export default function FuelPricesScreen() {
     setPastBulletins([]);
     setTrend([]);
     setLoading(true);
-    void loadRegion();
-  }, [loadRegion]);
+    if (locationStatus !== 'checking') void loadRegion();
+  }, [loadRegion, locationStatus]);
 
   // Fuel / city change: only prices + verified community (fast path).
   useEffect(() => {
-    if (!isSupabaseConfigured || loading) return;
+    if (!isSupabaseConfigured || loading || locationStatus === 'checking') return;
 
     let cancelled = false;
     setPricesLoading(true);
 
     const run = async () => {
       try {
-        const communityPromise = fetchFreshVerifiedPrices(region, fuelType).catch((e) => {
+        const communityPromise = fetchFreshVerifiedPrices(region || undefined, fuelType || undefined).catch((e) => {
           console.warn('Verified community prices failed', e);
           return [] as VerifiedCommunityPrice[];
         });
@@ -307,9 +403,9 @@ export default function FuelPricesScreen() {
         setVerifiedCommunity(community);
 
         setTrendCompanySlug((current) =>
-          rows.some((r) => r.oil_company.slug === current)
+          current && rows.some((r) => r.oil_company.slug === current)
             ? current
-            : (rows[0]?.oil_company.slug ?? 'petron')
+            : ''
         );
       } catch (e) {
         if (!cancelled) {
@@ -324,11 +420,11 @@ export default function FuelPricesScreen() {
     return () => {
       cancelled = true;
     };
-  }, [bulletin, region, fuelType, areaName, areasFromDoe, loading]);
+  }, [bulletin, region, fuelType, areaName, areasFromDoe, loading, locationStatus]);
 
   // History tab: load 52 weeks only when opened (not on every This week visit).
   useEffect(() => {
-    if (view !== 'history' || !bulletin || loading) return;
+    if (view !== 'history' || !bulletin || !region || !fuelType || loading) return;
     const key = `${region}:${fuelType}:${trendCompanySlug}`;
     if (historyLoadedFor.current === key) return;
 
@@ -349,7 +445,7 @@ export default function FuelPricesScreen() {
   }, [view, bulletin, region, fuelType, trendCompanySlug, loading]);
 
   useEffect(() => {
-    if (view !== 'history' || !trendCompanySlug || loading) return;
+    if (view !== 'history' || !region || !fuelType || !trendCompanySlug || loading) return;
     void fetchPriceTrend(region, fuelType, trendCompanySlug)
       .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
       .catch(() => setTrend([]));
@@ -408,7 +504,7 @@ export default function FuelPricesScreen() {
   const pendingForFuel = useMemo(
     () =>
       pendingCommunity.filter(
-        (report) => !report.fuel_type?.code || report.fuel_type.code === fuelType
+        (report) => !fuelType || !report.fuel_type?.code || report.fuel_type.code === fuelType
       ),
     [pendingCommunity, fuelType]
   );
@@ -436,7 +532,7 @@ export default function FuelPricesScreen() {
   };
 
   useEffect(() => {
-    if (!selectedPastDate || !fuelType) {
+    if (!selectedPastDate || !region || !fuelType) {
       setPastWeekPrices([]);
       return;
     }
@@ -538,6 +634,14 @@ export default function FuelPricesScreen() {
         </View>
       </PageHero>
 
+      {locationStatus === 'detected' && region === detectedRegion ? (
+        <View style={[styles.locationHint, { backgroundColor: palette.primarySoft }]}>
+          <Text style={[styles.locationHintText, { color: palette.primary }]}>
+            Prices near you · {regionLabel}
+          </Text>
+        </View>
+      ) : null}
+
       <SegmentedToggle
         module="prices"
         value={view}
@@ -590,7 +694,10 @@ export default function FuelPricesScreen() {
               label="Region"
               value={region}
               options={regionOptions}
-              onChange={setRegion}
+              onChange={(value) => {
+                setRegion(value as DoeRegionCode | '');
+                setLocationStatus('fallback');
+              }}
             />
           </View>
           <View style={styles.filterHalf}>
@@ -999,6 +1106,14 @@ const styles = StyleSheet.create({
   },
   brandLogo: { width: 28, height: 28 },
   brandLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  locationHint: {
+    alignSelf: 'flex-start',
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  locationHintText: { fontSize: 12, fontWeight: '800' },
   stationMapCard: { padding: spacing.md },
   mapTitle: { fontSize: 16, fontWeight: '800' },
   mapSubtitle: { fontSize: 12, lineHeight: 17, marginTop: 3, marginBottom: spacing.sm },

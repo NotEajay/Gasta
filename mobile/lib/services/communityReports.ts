@@ -49,8 +49,7 @@ async function resolveRegionId(regionCode: string): Promise<string> {
   return data.id;
 }
 
-export async function fetchFuelStationsByRegion(regionCode: string): Promise<FuelStationOption[]> {
-  const regionId = await resolveRegionId(regionCode);
+export async function fetchFuelStationsByRegion(regionCode?: string): Promise<FuelStationOption[]> {
   const selectWithBrand = `
       id, name, latitude, longitude, address, brand_label,
       oil_company:oil_companies ( id, name, slug ),
@@ -62,19 +61,21 @@ export async function fetchFuelStationsByRegion(regionCode: string): Promise<Fue
       region:regions ( id, code, name )
     `;
 
-  let { data, error } = await supabase
+  let query = supabase
     .from('fuel_stations')
     .select(selectWithBrand)
-    .eq('region_id', regionId)
     .order('name');
+  if (regionCode) query = query.eq('region_id', await resolveRegionId(regionCode));
+  let { data, error } = await query;
   let stationData: unknown = data;
 
   if (error) {
-    const retry = await supabase
+    let retryQuery = supabase
       .from('fuel_stations')
       .select(selectBasic)
-      .eq('region_id', regionId)
       .order('name');
+    if (regionCode) retryQuery = retryQuery.eq('region_id', await resolveRegionId(regionCode));
+    const retry = await retryQuery;
     if (retry.error) throw retry.error;
     stationData = retry.data;
   }
@@ -174,8 +175,7 @@ export async function fetchFreshVerifiedPrices(
   let query = supabase.from('fresh_verified_community_prices').select('*');
 
   if (regionCode) {
-    const regionId = await resolveRegionId(regionCode);
-    query = query.eq('region_id', regionId);
+    query = query.eq('region_id', await resolveRegionId(regionCode));
   }
 
   const { data, error } = await query.order('verified_at', { ascending: false });
