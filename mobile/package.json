@@ -35,6 +35,8 @@
   "scripts": {
     "start": "expo start --android",
     "android": "expo start --android",
+    "web": "expo start --web",
+    "build:web": "expo export -p web",
     "typecheck": "tsc --noEmit"
   },
   "private": true
