@@ -18,7 +18,7 @@ import AuthTextField from '@/components/auth/AuthTextField';
 import GlassSurface, { AuthBackground } from '@/components/ui/GlassSurface';
 import { useAuth } from '@/context/AuthProvider';
 import { validateSignInForm, validateSignUpForm } from '@/lib/auth';
-import { goToVerifyEmail } from '@/lib/navigation';
+import { goHome, goToVerifyEmail } from '@/lib/navigation';
 import { GasTaColors, GasTaRadius, GasTaSpacing } from '@/constants/Theme';
 import { useResponsive } from '@/hooks/useResponsive';
 
@@ -105,7 +105,7 @@ export default function AuthScreen() {
         return;
       }
 
-      router.replace('/(tabs)');
+      goHome();
       return;
     }
 
@@ -135,7 +135,7 @@ export default function AuthScreen() {
       return;
     }
 
-    router.replace('/(tabs)');
+    goHome();
   };
 
   const handleGoogleAuth = async () => {
@@ -153,7 +153,7 @@ export default function AuthScreen() {
       return;
     }
 
-    router.replace('/(tabs)');
+    goHome();
   };
 
   return (

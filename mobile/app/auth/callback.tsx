@@ -5,6 +5,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
 import { createSessionFromUrl } from '@/lib/auth';
+import { HOME_HREF } from '@/lib/navigation';
 import { GasTaColors } from '@/constants/Theme';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -56,7 +57,7 @@ export default function AuthCallbackScreen() {
       const result = await createSessionFromUrl(href);
 
       if (result.session) {
-        router.replace('/(tabs)/prices');
+        router.replace(HOME_HREF);
         return;
       }
 

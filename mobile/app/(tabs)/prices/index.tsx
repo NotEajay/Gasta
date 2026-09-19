@@ -35,7 +35,6 @@ import {
   formatBulletinWeek,
   formatCurrency,
   formatDate,
-  formatLoadedAt,
   formatShortDate,
 } from '@/lib/format';
 import {
@@ -50,13 +49,12 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
-  bulletinAgeInDays,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
+  fetchLatestDoeWebsiteFetchAt,
   fetchPriceTrend,
-  isBulletinStale,
   type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
@@ -143,6 +141,7 @@ export default function FuelPricesScreen() {
   const [areasFromDoe, setAreasFromDoe] = useState(false);
   const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
   const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
+  const [doeFetchAt, setDoeFetchAt] = useState<string | null>(null);
   const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
@@ -198,7 +197,7 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
-      const [latest, pending, regionStations] = await Promise.all([
+      const [latest, pending, regionStations, websiteFetchAt] = await Promise.all([
         fetchLatestBulletinForRegion(region),
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
@@ -208,9 +207,14 @@ export default function FuelPricesScreen() {
           console.warn('Fuel stations failed', e);
           return [];
         }),
+        fetchLatestDoeWebsiteFetchAt().catch((e) => {
+          console.warn('DOE fetch timestamp failed', e);
+          return null;
+        }),
       ]);
 
       setBulletin(latest);
+      setDoeFetchAt(websiteFetchAt);
       setPendingCommunity(pending);
       setStations(regionStations);
       historyLoadedFor.current = null;
@@ -418,27 +422,18 @@ export default function FuelPricesScreen() {
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
 
-  const freshness = useMemo(() => {
-    if (!bulletin) return null;
-    const ageDays = bulletinAgeInDays(bulletin.bulletin_date);
-    const stale = isBulletinStale(bulletin.bulletin_date);
-    const loadedLabel = formatLoadedAt(bulletin.last_loaded_at);
-    let weekLabel: string;
-    if (ageDays < 0) {
-      weekLabel = 'Invalid future week — delete this bulletin in Supabase';
-    } else if (ageDays === 0) {
-      weekLabel = 'DOE week starts today (Tue)';
-    } else if (ageDays === 1) {
-      weekLabel = 'DOE week started yesterday';
-    } else {
-      weekLabel = `DOE week of ${formatBulletinWeek(bulletin.bulletin_date)}`;
-    }
-    return {
-      ageDays,
-      stale,
-      label: loadedLabel ? `${weekLabel} · ${loadedLabel}` : weekLabel,
-    };
-  }, [bulletin]);
+  const latestFetchLabel = useMemo(() => {
+    const iso = doeFetchAt ?? bulletin?.last_loaded_at;
+    if (!iso) return null;
+    const loaded = new Date(iso);
+    if (Number.isNaN(loaded.getTime())) return null;
+    return loaded.toLocaleDateString('en-PH', {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }, [doeFetchAt, bulletin]);
 
   if (!isSupabaseConfigured) {
     return (
@@ -467,7 +462,9 @@ export default function FuelPricesScreen() {
         title="Fuel Prices"
         subtitle={
           bulletin
-            ? `${regionLabel} · ${fuelLabel} · ${areaLabel}\nLatest available DOE bulletin: ${formatBulletinWeek(bulletin.bulletin_date)}`
+            ? `${regionLabel} · ${fuelLabel} · ${areaLabel}\nLatest DOE website fetch: ${
+                latestFetchLabel ?? formatBulletinWeek(bulletin.bulletin_date)
+              }`
             : `${regionLabel} · ${fuelLabel}`
         }
       />
@@ -523,18 +520,6 @@ export default function FuelPricesScreen() {
         </View>
       ) : view === 'now' ? (
         <>
-          {freshness?.stale ? (
-            <Card style={{ borderColor: palette.warning, backgroundColor: palette.warningSoft }}>
-              <Text style={[styles.summaryTitle, { color: theme.text }]}>
-                These prices are {freshness.ageDays} days old
-              </Text>
-              <Text style={[styles.summaryBody, { color: theme.textSecondary }]}>
-                DOE publishes every Tuesday. This is the newest bulletin available for {regionLabel}{' '}
-                — pull down to check for a newer one.
-              </Text>
-            </Card>
-          ) : null}
-
           <SectionHeader
             title="Stations & prices"
             subtitle={
