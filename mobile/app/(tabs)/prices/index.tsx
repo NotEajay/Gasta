@@ -39,7 +39,6 @@ import {
   formatBulletinWeek,
   formatCurrency,
   formatDate,
-  formatLoadedAt,
   formatShortDate,
 } from '@/lib/format';
 import {
@@ -54,13 +53,12 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
-  bulletinAgeInDays,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
+  fetchLatestDoeWebsiteFetchAt,
   fetchPriceTrend,
-  isBulletinStale,
   type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
@@ -189,6 +187,7 @@ export default function FuelPricesScreen() {
   const [areasFromDoe, setAreasFromDoe] = useState(false);
   const [trendCompanySlug, setTrendCompanySlug] = useState('');
   const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
+  const [doeFetchAt, setDoeFetchAt] = useState<string | null>(null);
   const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
@@ -311,11 +310,8 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
-      if (__DEV__) {
-        console.info('[Fuel Prices] loading region filter', region || 'ALL_REGIONS');
-      }
-      const [latest, pending, regionStations] = await Promise.all([
-        fetchLatestBulletinForRegion(region || undefined),
+      const [latest, pending, regionStations, websiteFetchAt] = await Promise.all([
+        fetchLatestBulletinForRegion(region),
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
           return [];
@@ -324,9 +320,14 @@ export default function FuelPricesScreen() {
           console.warn('Fuel stations failed', e);
           return [];
         }),
+        fetchLatestDoeWebsiteFetchAt().catch((e) => {
+          console.warn('DOE fetch timestamp failed', e);
+          return null;
+        }),
       ]);
 
       setBulletin(latest);
+      setDoeFetchAt(websiteFetchAt);
       setPendingCommunity(pending);
       setStations(regionStations);
       historyLoadedFor.current = null;
@@ -617,8 +618,10 @@ export default function FuelPricesScreen() {
         title="Fuel Prices"
         subtitle={
           bulletin
-            ? `Compare DOE fuel prices before your next trip · ${regionLabel} · ${areaLabel}`
-            : `Compare DOE fuel prices before your next trip · ${regionLabel}`
+            ? `${regionLabel} · ${fuelLabel} · ${areaLabel}\nLatest DOE website fetch: ${
+                latestFetchLabel ?? formatBulletinWeek(bulletin.bulletin_date)
+              }`
+            : `${regionLabel} · ${fuelLabel}`
         }
       >
         <View style={styles.brandLine}>

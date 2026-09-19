@@ -120,6 +120,18 @@ export async function fetchLatestBulletinForRegion(
   return weeks[0] ?? null;
 }
 
+/** When the ETL last successfully contacted the DOE website (GitHub Actions or CLI). */
+export async function fetchLatestDoeWebsiteFetchAt(): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('doe_etl_state')
+    .select('last_website_fetch_at')
+    .eq('id', 1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.last_website_fetch_at ?? null;
+}
+
 /** Newest first. Bulletins that actually have prices for this region. */
 export async function fetchBulletinsForRegion(
   regionCode?: string,

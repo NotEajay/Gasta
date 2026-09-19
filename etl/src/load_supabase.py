@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -199,6 +199,28 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
         "companies": len(company_ids),
         "duplicates_skipped": duplicates_skipped,
     }
+
+
+def touch_bulletin_fetched_at(bulletin_date: date) -> None:
+    """Record that ETL successfully fetched this week from DOE (even if prices were skipped)."""
+    client = _client()
+    client.table("fuel_price_bulletins").update(
+        {"last_loaded_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("bulletin_date", bulletin_date.isoformat()).execute()
+
+
+def record_doe_website_fetch(*, trigger: str | None = None, run_id: str | None = None) -> None:
+    """Upsert the singleton timestamp shown in the app as 'Latest DOE fetch'."""
+    client = _client()
+    now = datetime.now(timezone.utc).isoformat()
+    payload: dict[str, Any] = {
+        "id": 1,
+        "last_website_fetch_at": now,
+        "updated_at": now,
+        "last_trigger": (trigger or os.environ.get("ETL_TRIGGER") or "cli").strip() or "cli",
+        "last_run_id": (run_id or os.environ.get("GITHUB_RUN_ID") or "").strip() or None,
+    }
+    client.table("doe_etl_state").upsert(payload, on_conflict="id").execute()
 
 
 def fetch_loaded_weeks(region_code: str) -> set[str]:

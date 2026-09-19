@@ -10,7 +10,7 @@ from pathlib import Path
 from .constants import ALL_REGION_KEYS, REGION_KEY_BY_CODE
 from .discover import DiscoveredBulletin, discover_latest_weeks
 from .download import download_region_bulletins, normalize_region, slug_to_url
-from .load_supabase import _client, load_bulletin
+from .load_supabase import _client, load_bulletin, record_doe_website_fetch, touch_bulletin_fetched_at
 from .parse_bulletin import (
     BulletinDateUnknown,
     BulletinNotMachineReadable,
@@ -93,6 +93,7 @@ def _sync_discovered(
             )
 
     if not force and not dry_run and _region_already_loaded(parsed.bulletin_date, region_code):
+        touch_bulletin_fetched_at(parsed.bulletin_date)
         return SyncResult(
             region_code=region_code,
             week_start=parsed.bulletin_date.isoformat(),
@@ -212,6 +213,9 @@ def sync_all_regions(
                     message=f"Failed: {type(exc).__name__}: {exc}",
                 )
             )
+    # Any region that resolved a DOE week means we contacted the website/CMS.
+    if not dry_run and any(r.week_start for r in results):
+        record_doe_website_fetch()
     return results
 
 

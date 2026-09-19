@@ -464,6 +464,30 @@ export interface Database {
         };
         Relationships: [];
       };
+      doe_etl_state: {
+        Row: {
+          id: number;
+          last_website_fetch_at: string;
+          last_trigger: string | null;
+          last_run_id: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: number;
+          last_website_fetch_at: string;
+          last_trigger?: string | null;
+          last_run_id?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: number;
+          last_website_fetch_at?: string;
+          last_trigger?: string | null;
+          last_run_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
       submit_community_fuel_report: {

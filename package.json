@@ -1,0 +1,10 @@
+{
+  "name": "gasta",
+  "private": true,
+  "description": "Root package for Vercel; Expo app lives in mobile/.",
+  "scripts": {
+    "postinstall": "npm install --prefix mobile",
+    "build": "npm run build:web --prefix mobile",
+    "build:web": "npm run build:web --prefix mobile"
+  }
+}

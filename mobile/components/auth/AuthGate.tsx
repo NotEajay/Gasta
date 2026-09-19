@@ -8,6 +8,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, isLoading, isEmailVerified } = useAuth();
   const segments = useSegments();
   const root = segments[0];
+  const inTabs = root === '(tabs)';
   const inAuthGroup = root === '(auth)';
   const inOAuthCallback = root === 'auth';
   const onLogin = root === 'login';
@@ -24,8 +25,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // If authenticated, redirect from auth surfaces to main app
-  if (isAuthenticated && (inOAuthCallback || isAuthSurface)) {
+  // Signed-in users always land in the main app (never auth / not-found / stray routes)
+  if (isAuthenticated && !inTabs) {
     return <Redirect href="/(tabs)/prices" />;
   }
 

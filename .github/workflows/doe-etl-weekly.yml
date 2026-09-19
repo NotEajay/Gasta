@@ -57,4 +57,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ETL_TRIGGER: github-actions
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: python run.py sync-all ${{ inputs.force && '--force' || '' }}
