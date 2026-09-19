@@ -82,7 +82,7 @@ export async function fetchLatestBulletin(): Promise<FuelPriceBulletin | null> {
  * just to list which weeks exist.
  */
 export async function fetchBulletinWeeksForRegion(
-  regionCode: string,
+  regionCode?: string,
   limit = 52
 ): Promise<BulletinWeek[]> {
   const today = new Date();
@@ -92,15 +92,16 @@ export async function fetchBulletinWeeksForRegion(
     String(today.getDate()).padStart(2, '0'),
   ].join('-');
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('region_bulletin_weeks')
     .select('bulletin_id, bulletin_date, price_count, data_freshness_days, last_loaded_at')
-    .eq('region_code', regionCode)
     // Future-dated rows (bad seed) must not become "this week".
     .lte('bulletin_date', todayIso)
     .order('bulletin_date', { ascending: false })
     .limit(limit);
 
+  if (regionCode) query = query.eq('region_code', regionCode);
+  const { data, error } = await query;
   if (error) throw error;
   return (data ?? []).map((row) => ({
     id: row.bulletin_id,
@@ -113,7 +114,7 @@ export async function fetchBulletinWeeksForRegion(
 
 /** Latest bulletin that actually has prices for a macro-region (DOE weeks differ by region). */
 export async function fetchLatestBulletinForRegion(
-  regionCode: string
+  regionCode?: string
 ): Promise<BulletinWeek | null> {
   const weeks = await fetchBulletinWeeksForRegion(regionCode, 1);
   return weeks[0] ?? null;
@@ -133,7 +134,7 @@ export async function fetchLatestDoeWebsiteFetchAt(): Promise<string | null> {
 
 /** Newest first. Bulletins that actually have prices for this region. */
 export async function fetchBulletinsForRegion(
-  regionCode: string,
+  regionCode?: string,
   limit = 52
 ): Promise<BulletinWeek[]> {
   return fetchBulletinWeeksForRegion(regionCode, limit);
@@ -158,16 +159,11 @@ export async function fetchBulletins(limit = 8): Promise<FuelPriceBulletin[]> {
 
 export async function fetchFuelPricesForBulletin(
   bulletinId: string,
-  regionCode: string,
-  fuelTypeCode: string,
+  regionCode: string | '',
+  fuelTypeCode: string | '',
   areaName = ''
 ): Promise<FuelPriceRow[]> {
-  const [regionId, fuelTypeId] = await Promise.all([
-    resolveRegionId(regionCode),
-    resolveFuelTypeId(fuelTypeCode),
-  ]);
-
-  const { data, error } = await supabase
+  let query = supabase
     .from('fuel_prices')
     .select(
       `
@@ -181,11 +177,12 @@ export async function fetchFuelPricesForBulletin(
     `
     )
     .eq('bulletin_id', bulletinId)
-    .eq('region_id', regionId)
-    .eq('fuel_type_id', fuelTypeId)
-    .eq('area_name', areaName)
     .order('price_per_liter', { ascending: true });
+  if (regionCode) query = query.eq('region_id', await resolveRegionId(regionCode));
+  if (fuelTypeCode) query = query.eq('fuel_type_id', await resolveFuelTypeId(fuelTypeCode));
+  if (regionCode || areaName) query = query.eq('area_name', areaName);
 
+  const { data, error } = await query;
   if (error) throw error;
   const rows = (data ?? []) as unknown as FuelPriceRow[];
   // Some regions (e.g. North Luzon) only have region-wide rows — fall back when
@@ -199,17 +196,17 @@ export async function fetchFuelPricesForBulletin(
 /** Distinct city/area labels for a bulletin week in a region (excludes region-wide ''). */
 export async function fetchBulletinAreas(
   bulletinId: string,
-  regionCode: string
+  regionCode?: string
 ): Promise<string[]> {
-  const regionId = await resolveRegionId(regionCode);
-  const { data, error } = await supabase
+  let query = supabase
     .from('fuel_prices')
     .select('area_name')
     .eq('bulletin_id', bulletinId)
-    .eq('region_id', regionId)
     .neq('area_name', '')
     .order('area_name');
+  if (regionCode) query = query.eq('region_id', await resolveRegionId(regionCode));
 
+  const { data, error } = await query;
   if (error) throw error;
   return [...new Set((data ?? []).map((row) => row.area_name).filter(Boolean))];
 }

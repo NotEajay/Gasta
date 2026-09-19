@@ -63,6 +63,7 @@ export interface Vehicle {
   fuel_type_id: string;
   fuel_efficiency_km_per_liter: number;
   nickname: string | null;
+  fuel_type?: { code: DoeFuelTypeCode; name?: string };
   last_refill_price: number | null;
   last_refill_at: string | null;
   created_at: string;

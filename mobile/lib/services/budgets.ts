@@ -21,6 +21,91 @@ export interface UpsertBudgetInput {
   alertThresholdPercent: number;
 }
 
+export interface BudgetAnalytics {
+  spent: number;
+  previousSpent: number;
+  tripCount: number;
+  highCostTripCount: number;
+  trendPercent: number | null;
+  projectedSpent: number | null;
+}
+
+interface FuelSpendTripRow {
+  mode_evaluations: unknown;
+  created_at: string;
+}
+
+function ownVehicleFuelCost(row: FuelSpendTripRow): number {
+  if (!Array.isArray(row.mode_evaluations)) return 0;
+  const own = row.mode_evaluations.find(
+    (evaluation): evaluation is { modeCode: string; raw?: { fuelCost?: number } } =>
+      typeof evaluation === 'object' &&
+      evaluation !== null &&
+      'modeCode' in evaluation &&
+      evaluation.modeCode === 'OWN_VEHICLE'
+  );
+  const fuelCost = own?.raw?.fuelCost;
+  return typeof fuelCost === 'number' && Number.isFinite(fuelCost) && fuelCost > 0 ? fuelCost : 0;
+}
+
+function monthBounds(year: number, month: number) {
+  return {
+    start: new Date(year, month - 1, 1),
+    end: new Date(year, month, 1),
+  };
+}
+
+export async function fetchBudgetAnalytics(
+  userId: string,
+  year: number,
+  month: number
+): Promise<BudgetAnalytics> {
+  const current = monthBounds(year, month);
+  const previous = monthBounds(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1);
+  const { data, error } = await supabase
+    .from('trip_records')
+    .select('mode_evaluations, created_at')
+    .eq('user_id', userId)
+    .gte('created_at', previous.start.toISOString())
+    .lt('created_at', current.end.toISOString());
+
+  if (error) throw error;
+
+  const currentTrips = ((data ?? []) as FuelSpendTripRow[]).filter((trip) => {
+    const createdAt = new Date(trip.created_at).getTime();
+    return createdAt >= current.start.getTime() && createdAt < current.end.getTime();
+  });
+  const previousTrips = ((data ?? []) as FuelSpendTripRow[]).filter((trip) => {
+    const createdAt = new Date(trip.created_at).getTime();
+    return createdAt >= previous.start.getTime() && createdAt < previous.end.getTime();
+  });
+  const currentCosts = currentTrips.map(ownVehicleFuelCost).filter((cost) => cost > 0);
+  const previousSpent = previousTrips.reduce((sum, trip) => sum + ownVehicleFuelCost(trip), 0);
+  const spent = currentCosts.reduce((sum, cost) => sum + cost, 0);
+  const averageCost = currentCosts.length > 0 ? spent / currentCosts.length : 0;
+  const highCostTripCount =
+    averageCost > 0 ? currentCosts.filter((cost) => cost > averageCost).length : 0;
+  const trendPercent =
+    previousSpent > 0 ? ((spent - previousSpent) / previousSpent) * 100 : null;
+  const now = new Date();
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+  const elapsedDays = now.getDate();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const projectedSpent =
+    isCurrentMonth && elapsedDays > 0 && spent > 0
+      ? (spent / elapsedDays) * daysInMonth
+      : null;
+
+  return {
+    spent,
+    previousSpent,
+    tripCount: currentCosts.length,
+    highCostTripCount,
+    trendPercent,
+    projectedSpent,
+  };
+}
+
 export async function upsertBudget(input: UpsertBudgetInput): Promise<FuelBudget> {
   const { data, error } = await supabase
     .from('fuel_budgets')
@@ -41,8 +126,12 @@ export async function upsertBudget(input: UpsertBudgetInput): Promise<FuelBudget
   return data;
 }
 
-export async function deleteBudget(budgetId: string): Promise<void> {
-  const { error } = await supabase.from('fuel_budgets').delete().eq('id', budgetId);
+export async function deleteBudget(budgetId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('fuel_budgets')
+    .delete()
+    .eq('id', budgetId)
+    .eq('user_id', userId);
   if (error) throw error;
 }
 
@@ -52,26 +141,8 @@ export async function estimateMonthlyFuelSpend(
   year: number,
   month: number
 ): Promise<number> {
-  const start = new Date(year, month - 1, 1).toISOString();
-  const end = new Date(year, month, 1).toISOString();
-
-  const { data, error } = await supabase
-    .from('trip_records')
-    .select('mode_evaluations, recommended_mode_code, created_at')
-    .eq('user_id', userId)
-    .gte('created_at', start)
-    .lt('created_at', end);
-
-  if (error) throw error;
-
-  return (data ?? []).reduce((sum, trip) => {
-    const evaluations = trip.mode_evaluations as {
-      modeCode: string;
-      raw: { fuelCost: number };
-    }[];
-    const own = evaluations.find((e) => e.modeCode === 'OWN_VEHICLE');
-    return sum + (own?.raw.fuelCost ?? 0);
-  }, 0);
+  const analytics = await fetchBudgetAnalytics(userId, year, month);
+  return analytics.spent;
 }
 
 export function budgetAlertStatus(
