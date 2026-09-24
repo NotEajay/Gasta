@@ -45,7 +45,6 @@ export default function GlassSurface({
   return (
     <View style={[styles.shell, { borderRadius }, style]} {...props}>
       <BlurView
-        experimentalBlurMethod="dimezisBlurView"
         intensity={intensity}
         style={[StyleSheet.absoluteFill, { borderRadius, overflow: 'hidden' }]}
         tint="light"
