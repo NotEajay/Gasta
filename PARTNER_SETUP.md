@@ -122,6 +122,10 @@ Also add your production web origin if you deploy (e.g. `https://your-app.vercel
 
 Site URL can stay your primary web URL (or `http://localhost:8081` for local web).
 
+**Must include the scheme** (`https://` or `http://`).  
+Wrong: `gasta-kappa.vercel.app` → causes `{"error":"requested path is invalid"}` on `….supabase.co/gasta-kappa.vercel.app`.  
+Right: `https://gasta-kappa.vercel.app`
+
 #### D. Allow anyone to use Google (not only test users)
 
 While the OAuth consent screen is **Testing**, only listed **Test users** can sign in (or Google may show an “app in testing” warning).
@@ -183,6 +187,7 @@ See `docs/PROJECT_CONTEXT.md`, `mobile/AGENTS.md`, and `mobile/README.md` before
 | Empty fuel prices | Confirm `.env` is correct; check Supabase Table Editor for `fuel_prices` rows |
 | Login fails | Enable Email auth in Supabase; disable email confirmation for dev if needed |
 | Google `deleted_client` / Authorization Error | Recreate **Web** OAuth client in Google Cloud; paste new ID/secret into Supabase Auth → Google (see §5) |
+| Google `requested path is invalid` on phone | Site URL must be `https://gasta-kappa.vercel.app` (with https). Add that host under Redirect URLs. Expo Go also needs `EXPO_PUBLIC_SITE_URL` in `mobile/.env`, then restart Expo. |
 | Google works on web, not phone | Add `gasta://**`, `exp://**`, and `https://*.exp.direct/**` under Supabase Redirect URLs; prefer `npx expo start --tunnel` |
 | Supabase not configured banner | Create `mobile/.env` from `.env.example` |
 | Trip optimizer shows no results | Set a last-refill price on your vehicle (My Vehicles tab) |

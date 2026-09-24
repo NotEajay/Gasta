@@ -1,4 +1,5 @@
 import { makeRedirectUri } from 'expo-auth-session';
+import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import type { AuthError, Session, User } from '@supabase/supabase-js';
@@ -11,6 +12,8 @@ WebBrowser.maybeCompleteAuthSession();
 const initialWebHref = typeof window !== 'undefined' ? window.location.href : null;
 const usedAuthCodes = new Set<string>();
 let oauthCompletion: Promise<AuthResult> | null = null;
+
+const PUBLIC_SITE_URL = (process.env.EXPO_PUBLIC_SITE_URL ?? '').replace(/\/$/, '');
 
 export type AuthResult = {
   error: string | null;
@@ -31,9 +34,14 @@ export function getOAuthRedirectUrl() {
     return `${window.location.origin}/auth/callback`;
   }
 
-  // Expo Go → exp://…/auth/callback (or https://*.exp.direct when tunneling)
-  // Dev/standalone builds → gasta://auth/callback
-  // Prefer Linking so the URI matches the runtime that will receive the deep link.
+  // Expo Go often produces exp://LAN-IP/… redirects. Supabase may reject those and
+  // fall back to Site URL — if Site URL lacks https:// you get
+  // {"error":"requested path is invalid"} on *.supabase.co/<host>.
+  // Prefer the deployed HTTPS callback (captured by openAuthSessionAsync).
+  if (Constants.appOwnership === 'expo' && PUBLIC_SITE_URL.startsWith('http')) {
+    return `${PUBLIC_SITE_URL}/auth/callback`;
+  }
+
   const fromLinking = Linking.createURL('auth/callback', { scheme: 'gasta' });
   if (fromLinking) {
     return fromLinking;
