@@ -31,6 +31,14 @@ export function getOAuthRedirectUrl() {
     return `${window.location.origin}/auth/callback`;
   }
 
+  // Expo Go → exp://…/auth/callback (or https://*.exp.direct when tunneling)
+  // Dev/standalone builds → gasta://auth/callback
+  // Prefer Linking so the URI matches the runtime that will receive the deep link.
+  const fromLinking = Linking.createURL('auth/callback', { scheme: 'gasta' });
+  if (fromLinking) {
+    return fromLinking;
+  }
+
   return makeRedirectUri({
     scheme: 'gasta',
     path: 'auth/callback',
@@ -240,6 +248,14 @@ function mapAuthError(error: AuthError | null): string | null {
 
   if (message.includes('provider is not enabled') || message.includes('unsupported provider')) {
     return 'Google sign-in is not enabled. Turn on the Google provider in Supabase Auth.';
+  }
+
+  if (
+    message.includes('deleted_client') ||
+    message.includes('oauth client was deleted') ||
+    message.includes('invalid_client')
+  ) {
+    return 'Google sign-in is misconfigured. Recreate the Web OAuth client in Google Cloud and paste the new Client ID/secret into Supabase Auth → Google.';
   }
 
   if (
