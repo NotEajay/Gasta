@@ -122,18 +122,37 @@ Also add your production web origin if you deploy (e.g. `https://your-app.vercel
 
 Site URL can stay your primary web URL (or `http://localhost:8081` for local web).
 
-#### D. Consent screen test users
+#### D. Allow anyone to use Google (not only test users)
 
-While the OAuth consent screen is in **Testing**, add every Gmail that should sign in under **Test users**.
+While the OAuth consent screen is **Testing**, only listed **Test users** can sign in (or Google may show an “app in testing” warning).
+
+To let **any Google account** use GasTa:
+
+1. Google Cloud → **APIs & Services → OAuth consent screen**
+2. User type: **External**
+3. Scopes: keep only the defaults (`openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`) — do not add Gmail/Drive/etc.
+4. Click **Publish app** → confirm **In production**
+5. Users may still see “Google hasn’t verified this app” once — they can choose **Advanced → Go to GasTa (unsafe)**. That is normal until you optionally submit for brand verification.
+
+Also in Supabase → **Authentication → Providers → Google**: leave enabled.  
+**Authentication → Settings**: ensure **Allow new users to sign up** is on.
+
+#### Partner blocked on `supabase.co` (Cloudflare)
+
+If someone sees **“Sorry, you have been blocked” / Unable to access supabase.co**, that is a **network / WAF** block on Supabase’s edge, not Google test-user settings. Have them:
+
+- Turn off VPN, try mobile data or another Wi‑Fi
+- Retry in Safari/Chrome (not only the in-app browser)
+- If it keeps happening from their ISP/country, contact [Supabase support](https://supabase.com/dashboard/support/new) with their IP and project ref `xzslsklecloqiitcirtw`
 
 #### E. Try again on phone
 
 ```bash
 cd mobile
-npx expo start --tunnel --clear
+npx expo start --clear
 ```
 
-Use Expo Go → Google. After the client ID is updated, `deleted_client` goes away on web and native alike.
+Use Expo Go → Google. Prefer `--tunnel` only if LAN/QR connection fails.
 
 ## Project layout
 
