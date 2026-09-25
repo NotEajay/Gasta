@@ -12,19 +12,27 @@ export interface TripCalculationInput {
   fuelPricePerLiter: number;
   fuelEfficiencyKmPerLiter: number;
   weights: MCDAWeights;
+  /** Optional route-derived driving duration. Falls back to the documented average speed. */
+  ownVehicleTravelTimeMinutes?: number;
 }
 
 export function buildModeRawScores(input: TripCalculationInput): ModeRawScores[] {
-  const { distanceKm, fuelPricePerLiter, fuelEfficiencyKmPerLiter } = input;
+  const { distanceKm, fuelPricePerLiter, fuelEfficiencyKmPerLiter, ownVehicleTravelTimeMinutes } =
+    input;
 
   const ownFuelCost =
     fuelEfficiencyKmPerLiter > 0 ? (distanceKm / fuelEfficiencyKmPerLiter) * fuelPricePerLiter : 999999;
+
+  const ownTravelTime =
+    ownVehicleTravelTimeMinutes != null && ownVehicleTravelTimeMinutes > 0
+      ? ownVehicleTravelTimeMinutes
+      : travelTimeMinutes(distanceKm, OWN_VEHICLE_DEFAULTS.avgSpeedKmh);
 
   const modes: ModeRawScores[] = [
     {
       modeCode: 'OWN_VEHICLE',
       fuelCost: ownFuelCost,
-      travelTime: travelTimeMinutes(distanceKm, OWN_VEHICLE_DEFAULTS.avgSpeedKmh),
+      travelTime: ownTravelTime,
     },
   ];
 

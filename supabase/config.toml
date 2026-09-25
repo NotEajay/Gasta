@@ -21,3 +21,8 @@ port = 54323
 [auth]
 enabled = true
 site_url = "http://127.0.0.1:3000"
+
+# Keep the platform JWT check enabled for signed-in user calls. The handler
+# also validates the session so auth failures use the DirectionsError contract.
+[functions.google-directions]
+verify_jwt = true

@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
@@ -23,6 +23,11 @@ import { createSavedTrip } from '@/lib/services/savedTrips';
 import { logTripToHistory } from '@/lib/services/trips';
 import { fetchVehicles } from '@/lib/services/vehicles';
 import { calculateTripRecommendation } from '@/lib/tripCalculator';
+import {
+  DirectionsError,
+  getDrivingRoute,
+  type DirectionsRoute,
+} from '@/lib/services/googleMaps';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
 import type { MCDAWeights } from '@/types/mcda';
@@ -34,7 +39,6 @@ export default function TripOptimizerScreen() {
   const params = useLocalSearchParams<{
     origin?: string;
     destination?: string;
-    distance?: string;
     vehicleId?: string;
     fuelCostWeight?: string;
     travelTimeWeight?: string;
@@ -45,7 +49,6 @@ export default function TripOptimizerScreen() {
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [templateName, setTemplateName] = useState('');
-  const [distance, setDistance] = useState('10');
   const [efficiency, setEfficiency] = useState('14');
   const [manualLastRefillPrice, setManualLastRefillPrice] = useState('');
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -54,12 +57,16 @@ export default function TripOptimizerScreen() {
   const [loading, setLoading] = useState(true);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [loggingHistory, setLoggingHistory] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+  const [routeDurationMinutes, setRouteDurationMinutes] = useState<number | null>(null);
+  const [lastOptimizeElapsedMs, setLastOptimizeElapsedMs] = useState<number | null>(null);
   const [result, setResult] = useState<ReturnType<typeof calculateTripRecommendation> | null>(null);
 
   useEffect(() => {
     if (params.origin) setOrigin(params.origin);
     if (params.destination) setDestination(params.destination);
-    if (params.distance) setDistance(params.distance);
     if (params.templateName) setTemplateName(params.templateName);
     if (params.vehicleId) {
       setSelectedVehicleId(params.vehicleId === 'manual' ? 'manual' : params.vehicleId);
@@ -74,7 +81,6 @@ export default function TripOptimizerScreen() {
   }, [
     params.origin,
     params.destination,
-    params.distance,
     params.vehicleId,
     params.fuelCostWeight,
     params.travelTimeWeight,
@@ -138,14 +144,21 @@ export default function TripOptimizerScreen() {
   const missingLastRefillPrice =
     hasRegisteredVehicles && selectedVehicle?.last_refill_price == null;
 
+  const optimizeRequestId = useRef(0);
+
   // Inputs are editable without recalculating. Any calculation input change
-  // invalidates the previous result until the user taps Optimize again.
+  // invalidates the previous route/result until the user taps Optimize again.
   useEffect(() => {
+    optimizeRequestId.current += 1;
+    setOptimizing(false);
     setResult(null);
+    setRouteError(null);
+    setRouteDistanceKm(null);
+    setRouteDurationMinutes(null);
+    setLastOptimizeElapsedMs(null);
   }, [
     origin,
     destination,
-    distance,
     efficiency,
     manualLastRefillPrice,
     lastRefillPrice,
@@ -154,50 +167,95 @@ export default function TripOptimizerScreen() {
     weights,
   ]);
 
-  const handleOptimize = useCallback(() => {
-    const distanceKm = parseFloat(distance);
-    const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
-    const price = lastRefillPrice;
+  const handleOptimize = useCallback(async () => {
+    if (optimizing) return;
 
-    if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
-      Alert.alert('Invalid distance', 'Enter a distance greater than zero.');
-      return;
-    }
-    if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
-      Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
-      return;
-    }
-    if (!weightsSumToOne(weights)) {
-      Alert.alert('Invalid weights', 'Criterion weights must sum to 1.0.');
-      return;
-    }
-    if (hasRegisteredVehicles && !selectedVehicle) {
-      Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
-      return;
-    }
-    if (price == null || price <= 0) {
-      Alert.alert(
-        'Last-refill price required',
-        hasRegisteredVehicles
-          ? 'Add a last-refill price to this vehicle before optimizing.'
-          : 'Enter your last fuel price before optimizing.'
+    const requestId = ++optimizeRequestId.current;
+    const startedAt = Date.now();
+    let outcome: 'success' | 'error' = 'error';
+    let routeResult: DirectionsRoute | null = null;
+
+    setOptimizing(true);
+    setRouteError(null);
+    setResult(null);
+    setRouteDistanceKm(null);
+    setRouteDurationMinutes(null);
+
+    try {
+      if (!origin.trim() || !destination.trim()) {
+        setRouteError('Enter both an origin and a destination before optimizing.');
+        return;
+      }
+
+      const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
+      const price = lastRefillPrice;
+      if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
+        Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
+        return;
+      }
+      if (!weightsSumToOne(weights)) {
+        Alert.alert('Invalid weights', 'Criterion weights must sum to 1.0.');
+        return;
+      }
+      if (hasRegisteredVehicles && !selectedVehicle) {
+        Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
+        return;
+      }
+      if (price == null || price <= 0) {
+        Alert.alert(
+          'Last-refill price required',
+          hasRegisteredVehicles
+            ? 'Add a last-refill price to this vehicle before optimizing.'
+            : 'Enter your last fuel price before optimizing.'
+        );
+        return;
+      }
+
+      routeResult = await getDrivingRoute(origin, destination);
+      if (requestId !== optimizeRequestId.current) return;
+
+      setRouteDistanceKm(routeResult.distanceKm);
+      setRouteDurationMinutes(routeResult.durationMinutes);
+      setResult(
+        calculateTripRecommendation({
+          distanceKm: routeResult.distanceKm,
+          fuelPricePerLiter: price,
+          fuelEfficiencyKmPerLiter,
+          weights,
+          ownVehicleTravelTimeMinutes: routeResult.durationMinutes,
+        })
       );
-      return;
+      outcome = 'success';
+    } catch (error) {
+      if (requestId !== optimizeRequestId.current) return;
+      setRouteError(
+        error instanceof DirectionsError
+          ? error.userMessage
+          : "Couldn't retrieve a route. Check your connection and try again."
+      );
+    } finally {
+      if (requestId === optimizeRequestId.current) {
+        setOptimizing(false);
+        const elapsedMs = Date.now() - startedAt;
+        setLastOptimizeElapsedMs(elapsedMs);
+        if (outcome === 'success') {
+          console.log('[Trip Optimizer] Optimize flow completed', {
+            elapsedMs,
+            distanceKm: routeResult?.distanceKm,
+            durationMinutes: routeResult?.durationMinutes,
+          });
+        } else {
+          console.warn('[Trip Optimizer] Optimize flow failed', { elapsedMs });
+        }
+      }
     }
-
-    setResult(
-      calculateTripRecommendation({
-        distanceKm,
-        fuelPricePerLiter: price,
-        fuelEfficiencyKmPerLiter,
-        weights,
-      })
-    );
   }, [
-    distance,
+    destination,
     efficiency,
     hasRegisteredVehicles,
     lastRefillPrice,
+    optimizing,
+    origin,
     selectedVehicle,
     weights,
   ]);
@@ -221,13 +279,12 @@ export default function TripOptimizerScreen() {
     if (!user) return;
 
     const name = templateName.trim();
-    const distanceKm = parseFloat(distance);
     if (!name) {
       Alert.alert('Name required', 'Enter a template name before saving.');
       return;
     }
-    if (!distanceKm || distanceKm <= 0) {
-      Alert.alert('Invalid distance', 'Enter a distance greater than zero.');
+    if (!result?.recommended || routeDistanceKm == null) {
+      Alert.alert('Optimize first', 'Run Optimize successfully before saving this trip template.');
       return;
     }
     if (!weightsSumToOne(weights)) {
@@ -243,7 +300,7 @@ export default function TripOptimizerScreen() {
         originLabel: origin.trim() || undefined,
         destinationLabel: destination.trim() || undefined,
         vehicleId: selectedVehicleId === 'manual' ? null : selectedVehicleId,
-        distanceKm,
+        distanceKm: routeDistanceKm,
         weights,
       });
       Alert.alert('Saved', 'Trip template saved. Re-run it anytime from Saved Trips.');
@@ -252,18 +309,28 @@ export default function TripOptimizerScreen() {
     } finally {
       setSavingTemplate(false);
     }
-  }, [user, requireAuth, templateName, origin, destination, distance, selectedVehicleId, weights]);
+  }, [
+    user,
+    requireAuth,
+    templateName,
+    origin,
+    destination,
+    result,
+    routeDistanceKm,
+    selectedVehicleId,
+    weights,
+  ]);
 
   const handleLogHistory = useCallback(async () => {
     if (!user && !requireAuth()) return;
-    if (!user || !result?.recommended) return;
+    if (!user || !result?.recommended || routeDistanceKm == null) return;
 
     setLoggingHistory(true);
     try {
       await logTripToHistory({
         userId: user.id,
         vehicleId: selectedVehicleId === 'manual' ? null : selectedVehicleId,
-        distanceKm: parseFloat(distance),
+        distanceKm: routeDistanceKm ?? 0,
         originLabel: origin.trim() || undefined,
         destinationLabel: destination.trim() || undefined,
         weights,
@@ -276,7 +343,16 @@ export default function TripOptimizerScreen() {
     } finally {
       setLoggingHistory(false);
     }
-  }, [user, requireAuth, result, selectedVehicleId, distance, origin, destination, weights]);
+  }, [
+    user,
+    requireAuth,
+    result,
+    selectedVehicleId,
+    routeDistanceKm,
+    origin,
+    destination,
+    weights,
+  ]);
 
   if (!isSupabaseConfigured) {
     return (
@@ -314,15 +390,23 @@ export default function TripOptimizerScreen() {
         ]}
       />
 
-      <FormSection title="Route" subtitle="Optional labels for saved trips" module="trip">
-        <LabeledInput label="Origin" value={origin} onChangeText={setOrigin} placeholder="e.g. Quezon City" />
-        <LabeledInput label="Destination" value={destination} onChangeText={setDestination} placeholder="e.g. Makati" />
-        <LabeledInput
-          label="Distance (km)"
-          value={distance}
-          onChangeText={setDistance}
-          keyboardType="decimal-pad"
-        />
+      <FormSection title="Route" subtitle="Enter specific locations; route data is retrieved on Optimize" module="trip">
+        <LabeledInput label="Origin" value={origin} onChangeText={setOrigin} placeholder="e.g. Quezon City Hall, Quezon City" />
+        <LabeledInput label="Destination" value={destination} onChangeText={setDestination} placeholder="e.g. Makati Avenue, Makati" />
+        {routeDistanceKm != null && routeDurationMinutes != null && (
+          <View style={[styles.routeSummary, { backgroundColor: theme.overlay }]}>
+            <Text style={[styles.meta, { color: theme.textSecondary }]}>Google Maps route</Text>
+            <Text style={[styles.routeSummaryValue, { color: theme.text }]}>
+              {routeDistanceKm.toFixed(2)} km · {routeDurationMinutes.toFixed(0)} min driving
+            </Text>
+          </View>
+        )}
+        {routeError && <Text style={styles.error}>{routeError}</Text>}
+        {lastOptimizeElapsedMs != null && (
+          <Text style={[styles.timing, { color: theme.textSecondary }]}>
+            Last Optimize flow: {lastOptimizeElapsedMs} ms
+          </Text>
+        )}
       </FormSection>
 
       <FormSection title="Vehicle & fuel" module="trip">
@@ -399,7 +483,12 @@ export default function TripOptimizerScreen() {
         )}
       </FormSection>
 
-      <PrimaryButton label="Optimize" onPress={handleOptimize} style={styles.actionBtn} />
+      <PrimaryButton
+        label={optimizing ? 'Finding route…' : 'Optimize'}
+        onPress={handleOptimize}
+        disabled={optimizing}
+        style={styles.actionBtn}
+      />
 
       {result?.recommended && (
         <>
@@ -473,6 +562,9 @@ const styles = StyleSheet.create({
   manualNotice: { fontSize: 14, lineHeight: 20, marginBottom: spacing.md },
   warningBtn: { marginTop: spacing.xs },
   routeLabel: { fontSize: 15, fontWeight: '700', marginBottom: spacing.sm },
+  routeSummary: { padding: spacing.md, borderRadius: radii.md, marginBottom: spacing.sm },
+  routeSummaryValue: { fontSize: 17, fontWeight: '800', marginTop: spacing.xs },
+  timing: { fontSize: 12, marginTop: spacing.xs },
   error: { color: palette.danger, marginBottom: spacing.sm, fontWeight: '700' },
   actionBtn: { marginTop: spacing.sm },
 });
