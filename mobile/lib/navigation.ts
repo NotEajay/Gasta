@@ -1,7 +1,7 @@
 import { router, type Href } from 'expo-router';
 
-/** Prices tab — the app home after any successful sign-in. */
-export const HOME_HREF = '/(tabs)/prices' as const;
+/** Home tab — the app landing destination after authentication. */
+export const HOME_HREF = '/(tabs)/home' as const;
 
 export function goHome() {
   router.replace(HOME_HREF);

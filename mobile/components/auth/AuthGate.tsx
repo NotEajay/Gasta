@@ -7,7 +7,7 @@ import { GasTaColors } from '@/constants/Theme';
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, isLoading, isEmailVerified } = useAuth();
   const segments = useSegments();
-  const root = segments[0];
+  const root = segments[0] as string | undefined;
   const inTabs = root === '(tabs)';
   const inAuthGroup = root === '(auth)';
   const inOAuthCallback = root === 'auth';
@@ -27,7 +27,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   // Signed-in users always land in the main app (never auth / not-found / stray routes)
   if (isAuthenticated && !inTabs) {
-    return <Redirect href="/(tabs)/prices" />;
+    return <Redirect href="/(tabs)/home" />;
   }
 
   // If not authenticated, redirect to appropriate auth screen

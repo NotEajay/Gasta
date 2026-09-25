@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { FlatList, Modal, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { GasTaColors, radii, spacing, typography } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 export type SelectOption<T extends string = string> = {
@@ -83,7 +83,7 @@ export default function SelectField<T extends string>({
                       {item.label}
                     </Text>
                     {isSelected ? (
-                      <Text style={{ color: GasTaColors.forest, fontWeight: '800' }}>✓</Text>
+                      <Text style={{ color: palette.success, fontWeight: '800' }}>✓</Text>
                     ) : null}
                   </Pressable>
                 );
@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(1, 68, 33, 0.35)',
+    backgroundColor: 'rgba(20, 49, 92, 0.38)',
     justifyContent: 'flex-end',
   },
   sheet: {

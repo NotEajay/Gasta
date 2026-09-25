@@ -58,7 +58,7 @@ export default function PriceHistoryList({
               styles.row,
               {
                 borderBottomColor: theme.borderLight,
-                backgroundColor: selected ? palette.primarySoft : 'transparent',
+                backgroundColor: selected ? palette.successSoft : 'transparent',
               },
               index === newestFirst.length - 1 && styles.last,
             ]}>
@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderRadius: radii.sm,
   },

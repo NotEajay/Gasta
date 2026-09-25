@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, type ViewStyle } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface PrimaryButtonProps {
@@ -31,7 +31,7 @@ export default function PrimaryButton({
         : palette.primary;
 
   const textColor =
-    variant === 'secondary' ? palette.primary : '#F8F0E5';
+    variant === 'secondary' ? palette.primary : GasTaColors.white;
 
   return (
     <Pressable
@@ -62,6 +62,11 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     alignItems: 'center',
     borderWidth: 1.5,
+    shadowColor: palette.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 2,
   },
   buttonSm: {
     paddingVertical: spacing.sm + 2,

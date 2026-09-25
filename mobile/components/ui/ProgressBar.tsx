@@ -1,5 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 
+import { palette } from '@/constants/Theme';
+
 interface ProgressBarProps {
   /** 0–1 */
   progress: number;
@@ -10,8 +12,8 @@ interface ProgressBarProps {
 
 export default function ProgressBar({
   progress,
-  color = '#014421',
-  trackColor = 'rgba(1, 68, 33, 0.08)',
+  color = palette.primary,
+  trackColor = palette.primarySoft,
   height = 8,
 }: ProgressBarProps) {
   const clamped = Math.min(1, Math.max(0, progress));

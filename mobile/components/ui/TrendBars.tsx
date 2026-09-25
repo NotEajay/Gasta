@@ -62,7 +62,7 @@ export default function TrendBars({ points }: TrendBarsProps) {
                   styles.barFill,
                   {
                     flex: ratio,
-                    backgroundColor: isLatest ? palette.primary : 'rgba(1, 68, 33, 0.28)',
+                    backgroundColor: isLatest ? palette.primary : palette.primarySoft,
                   },
                 ]}
               />

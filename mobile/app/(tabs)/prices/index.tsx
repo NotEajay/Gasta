@@ -1,8 +1,11 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -21,7 +24,10 @@ import PriceHistoryList from '@/components/ui/PriceHistoryList';
 import SectionHeader from '@/components/ui/SectionHeader';
 import SegmentedToggle from '@/components/ui/SegmentedToggle';
 import SelectField from '@/components/ui/SelectField';
-import StationPriceTable, { type StationPriceRow } from '@/components/ui/StationPriceTable';
+import StationPriceTable, {
+  type AreaPriceRow,
+  type StationPriceRow,
+} from '@/components/ui/StationPriceTable';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import {
@@ -29,7 +35,7 @@ import {
   REGION_FALLBACK_CITIES,
   type DoeRegionCode,
 } from '@/constants/regions';
-import { GasTaColors, palette, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import {
@@ -76,7 +82,7 @@ function buildStationPriceRows(
   doePrices: FuelPriceRow[],
   city: string,
   fuelCode: string
-): StationPriceRow[] {
+): { stationRows: StationPriceRow[]; areaRows: AreaPriceRow[] } {
   const doeBySlug = new Map(doePrices.map((row) => [row.oil_company.slug, row.price_per_liter]));
   const verifiedByStation = new Map(verified.map((row) => [row.station_id, row] as const));
   const pendingByName = new Map<string, PendingCommunityReport>();
@@ -86,7 +92,7 @@ function buildStationPriceRows(
     if (name && !pendingByName.has(name)) pendingByName.set(name, report);
   }
 
-  return stations
+  const stationRows = stations
     .filter((station) => matchesCityFilter(station, city))
     .map((station) => {
       const brand = station.brand_label?.trim() || station.oil_company.name;
@@ -97,6 +103,7 @@ function buildStationPriceRows(
       if (verifiedRow) {
         return {
           id: station.id,
+          slug: station.oil_company.slug,
           brand,
           station: station.name,
           price: verifiedRow.reported_price,
@@ -107,6 +114,7 @@ function buildStationPriceRows(
       if (pendingRow) {
         return {
           id: station.id,
+          slug: station.oil_company.slug,
           brand,
           station: station.name,
           price: pendingRow.reported_price,
@@ -116,6 +124,7 @@ function buildStationPriceRows(
       }
       return {
         id: station.id,
+        slug: station.oil_company.slug,
         brand,
         station: station.name,
         price: doePrice,
@@ -124,11 +133,147 @@ function buildStationPriceRows(
       };
     })
     .sort((a, b) => a.brand.localeCompare(b.brand) || a.station.localeCompare(b.station));
+
+  const includedStationSlugs = new Set(
+    stations
+      .filter((station) => matchesCityFilter(station, city))
+      .map((station) => station.oil_company.slug)
+  );
+  const seenAreaSlugs = new Set<string>();
+  const areaRows: AreaPriceRow[] = [];
+
+  for (const row of doePrices) {
+    const slug = row.oil_company.slug;
+    if (includedStationSlugs.has(slug) || seenAreaSlugs.has(slug)) continue;
+    seenAreaSlugs.add(slug);
+
+    areaRows.push({
+      id: `doe-area-${row.id}`,
+      slug,
+      brand: row.oil_company.name,
+      areaName: row.area_name || 'All cities',
+      price: doeBySlug.get(slug) ?? row.price_per_liter,
+      source: 'doe_area',
+      status: 'DOE area price',
+    });
+  }
+
+  areaRows.sort((a, b) => a.brand.localeCompare(b.brand));
+
+  return { stationRows, areaRows };
 }
 
 type PricesView = 'now' | 'history';
 
 const HISTORY_WEEKS = 52;
+const PRICE_GREEN = '#2E7D32';
+const PRICE_GREEN_SOFT = 'rgba(46, 125, 50, 0.10)';
+const PRICE_GREEN_BORDER = 'rgba(46, 125, 50, 0.28)';
+
+type PriceFilterOption<T extends string = string> = {
+  value: T;
+  label: string;
+};
+
+type PriceFilterFieldProps<T extends string> = {
+  label: string;
+  value: T;
+  options: readonly PriceFilterOption<T>[];
+  onChange: (value: T) => void;
+  icon: 'map-marker-outline' | 'office-building-outline' | 'gas-station';
+  placeholder?: string;
+};
+
+function PriceFilterField<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  icon,
+  placeholder = 'Choose…',
+}: PriceFilterFieldProps<T>) {
+  const theme = useTheme();
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value)?.label ?? placeholder;
+
+  return (
+    <View style={styles.filterField}>
+      <View style={styles.filterLabelRow}>
+        <View style={[styles.filterIcon, { backgroundColor: PRICE_GREEN_SOFT }]}>
+          <MaterialCommunityIcons name={icon} size={16} color={PRICE_GREEN} />
+        </View>
+        <Text style={[styles.filterLabel, { color: theme.textSecondary }]}>{label}</Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${selected}`}
+        onPress={() => setOpen(true)}
+        style={({ pressed }) => [
+          styles.filterControl,
+          {
+            backgroundColor: pressed ? PRICE_GREEN_SOFT : theme.surface,
+            borderColor: pressed ? PRICE_GREEN_BORDER : theme.border,
+          },
+        ]}>
+        <Text style={[styles.filterValue, { color: theme.text }]} numberOfLines={1}>
+          {selected}
+        </Text>
+        <MaterialCommunityIcons name="chevron-down" size={18} color={theme.textSecondary} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.filterBackdrop} onPress={() => setOpen(false)}>
+          <Pressable
+            style={[styles.filterSheet, { backgroundColor: GasTaColors.creamLight }]}
+            onPress={(event) => event.stopPropagation()}>
+            <View style={styles.filterSheetHeader}>
+              <Text style={[styles.filterSheetTitle, { color: theme.text }]}>{label}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Close ${label} options`}
+                hitSlop={8}
+                onPress={() => setOpen(false)}>
+                <MaterialCommunityIcons name="close" size={20} color={theme.textSecondary} />
+              </Pressable>
+            </View>
+            <FlatList
+              data={[...options]}
+              keyExtractor={(item) => item.value}
+              style={styles.filterOptionList}
+              renderItem={({ item }) => {
+                const isSelected = item.value === value;
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    onPress={() => {
+                      onChange(item.value);
+                      setOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.filterOption,
+                      (isSelected || pressed) && { backgroundColor: PRICE_GREEN_SOFT },
+                    ]}>
+                    <Text
+                      style={[
+                        styles.filterOptionText,
+                        { color: theme.text, fontWeight: isSelected ? '800' : '500' },
+                      ]}>
+                      {item.label}
+                    </Text>
+                    {isSelected ? (
+                      <MaterialCommunityIcons name="check-circle" size={19} color={PRICE_GREEN} />
+                    ) : null}
+                  </Pressable>
+                );
+              }}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
 
 export default function FuelPricesScreen() {
   const router = useRouter();
@@ -357,7 +502,7 @@ export default function FuelPricesScreen() {
     }, [loadRegion])
   );
 
-  const stationRows = useMemo(
+  const { stationRows, areaRows } = useMemo(
     () =>
       buildStationPriceRows(
         stations,
@@ -483,31 +628,42 @@ export default function FuelPricesScreen() {
         ]}
       />
 
-      <FormSection
-        title="Find prices"
-        subtitle="Tap each field to choose region, city, and fuel"
-        module="prices">
-        <SelectField label="Region" value={region} options={regionOptions} onChange={setRegion} />
-        <SelectField
-          label="City / area"
-          value={areaName}
-          options={areaOptions}
-          onChange={setAreaName}
-          placeholder="All cities"
-        />
-        <SelectField
-          label="Fuel type"
-          value={fuelType}
-          options={fuelOptions}
-          onChange={setFuelType}
-        />
-        {!areasFromDoe && areas.length > 0 ? (
-          <Text style={[styles.hint, { color: theme.textSecondary }]}>
-            Cities listed for browsing stations. DOE has no per-city prices for this region this
-            week — station prices use community reports or region brand estimates.
-          </Text>
-        ) : null}
-      </FormSection>
+      <View style={styles.filterSection}>
+        <View style={styles.filterSectionHeader}>
+          <View style={styles.filterSectionAccent} />
+          <View style={styles.filterSectionCopy}>
+            <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Find prices</Text>
+            <Text style={[styles.filterSectionSubtitle, { color: theme.textSecondary }]}>Tap each field to choose region, city, and fuel</Text>
+          </View>
+        </View>
+        <Card style={styles.filterCard}>
+          <PriceFilterField
+            label="Region"
+            value={region}
+            options={regionOptions}
+            onChange={setRegion}
+            icon="map-marker-outline"
+          />
+          <PriceFilterField
+            label="City / area"
+            value={areaName}
+            options={areaOptions}
+            onChange={setAreaName}
+            icon="office-building-outline"
+            placeholder="All cities"
+          />
+          <PriceFilterField
+            label="Fuel type"
+            value={fuelType}
+            options={fuelOptions}
+            onChange={setFuelType}
+            icon="gas-station"
+          />
+          {!areasFromDoe && areas.length > 0 ? (
+            <Text style={[styles.hint, { color: theme.textSecondary }]}>Cities listed for browsing stations. DOE has no per-city prices for this region this week — station prices use community reports or region brand estimates.</Text>
+          ) : null}
+        </Card>
+      </View>
 
       {error ? (
         <Card style={{ borderColor: palette.danger, backgroundColor: palette.dangerSoft }}>
@@ -533,13 +689,13 @@ export default function FuelPricesScreen() {
             }
             module="prices"
           />
-          <Card elevated>
+          <Card elevated style={styles.stationListCard}>
             {pricesLoading ? (
               <View style={styles.softLoading}>
                 <ActivityIndicator color={palette.primary} />
               </View>
             ) : null}
-            <StationPriceTable rows={stationRows} />
+            <StationPriceTable rows={stationRows} areaRows={areaRows} />
             <Pressable
               onPress={() => router.push('/(tabs)/prices/report')}
               style={({ pressed }) => [styles.reportBtn, pressed && styles.reportBtnPressed]}>
@@ -710,8 +866,132 @@ export default function FuelPricesScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  compareCard: { paddingVertical: spacing.xs },
+  padding: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
+  compareCard: { paddingVertical: spacing.sm },
+  filterSection: {
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  filterSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  filterSectionAccent: {
+    width: 4,
+    minHeight: 30,
+    borderRadius: 2,
+    backgroundColor: PRICE_GREEN,
+  },
+  filterSectionCopy: { flex: 1 },
+  filterSectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  filterSectionSubtitle: {
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  filterCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    padding: spacing.md,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  filterField: {
+    marginBottom: spacing.md,
+  },
+  filterLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  filterIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  filterControl: {
+    minHeight: 50,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  filterValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  filterBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 49, 92, 0.38)',
+    justifyContent: 'flex-end',
+  },
+  filterSheet: {
+    maxHeight: '70%',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  filterSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  filterSheetTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  filterOptionList: {
+    paddingHorizontal: spacing.md,
+  },
+  filterOption: {
+    minHeight: 50,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterOptionText: {
+    flex: 1,
+    fontSize: 15,
+    paddingRight: spacing.sm,
+  },
+  stationListCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    padding: spacing.md,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
   inlineLoading: {
     paddingVertical: spacing.xxl,
     alignItems: 'center',
@@ -722,8 +1002,8 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 12,
-    lineHeight: 17,
-    marginTop: -spacing.sm,
+    lineHeight: 18,
+    marginTop: 0,
     marginBottom: spacing.sm,
   },
   pendingRow: {
@@ -751,10 +1031,15 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginHorizontal: spacing.sm,
     marginBottom: spacing.sm,
-    backgroundColor: GasTaColors.forest,
+    backgroundColor: palette.success,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: 999,
+    borderRadius: radii.pill,
+    shadowColor: palette.success,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 2,
   },
   voteBtnText: {
     color: GasTaColors.textOnForest,
@@ -763,27 +1048,28 @@ const styles = StyleSheet.create({
   },
   reportBtn: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    backgroundColor: GasTaColors.creamLight,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: 999,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
+    borderColor: GasTaColors.forestGlow,
     marginTop: spacing.sm,
   },
   reportBtnPressed: { opacity: 0.88 },
   reportBtnText: {
-    color: GasTaColors.forestDark,
+    color: GasTaColors.textPrimary,
     fontSize: 13,
     fontWeight: '700',
   },
   summaryTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
+    letterSpacing: -0.2,
     marginBottom: spacing.xs,
   },
   summaryBody: {
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
 });

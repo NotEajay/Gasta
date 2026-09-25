@@ -1,8 +1,8 @@
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
-import { radii, spacing, typography } from '@/constants/Theme';
+import type { ModuleKey } from '@/constants/moduleColors';
+import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface ChipOption<T extends string> {
@@ -28,7 +28,6 @@ export default function ChipSelect<T extends string>({
   module = 'prices',
 }: ChipSelectProps<T>) {
   const theme = useTheme();
-  const accent = moduleColors[module];
 
   return (
     <View style={styles.container}>
@@ -48,8 +47,8 @@ export default function ChipSelect<T extends string>({
               style={({ pressed }) => [
                 styles.chip,
                 {
-                  borderColor: selected ? accent.main : theme.border,
-                  backgroundColor: selected ? accent.main : theme.surface,
+                  borderColor: selected ? palette.success : theme.border,
+                  backgroundColor: selected ? palette.success : theme.surface,
                   opacity: pressed ? 0.88 : 1,
                 },
               ]}>

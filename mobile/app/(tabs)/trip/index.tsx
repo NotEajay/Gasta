@@ -14,7 +14,7 @@ import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import SectionHeader from '@/components/ui/SectionHeader';
 import { DEFAULT_MCDA_WEIGHTS } from '@/constants/mcda';
-import { palette, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, transportModeLabel } from '@/lib/format';
@@ -382,20 +382,26 @@ export default function TripOptimizerScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-  meta: { fontSize: 12, fontWeight: '600' },
+  padding: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
+  meta: { fontSize: 12, fontWeight: '600', lineHeight: 17 },
   refillPill: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: spacing.md,
-    borderRadius: 10,
+    borderRadius: radii.md,
     marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestGlow,
   },
-  refillValue: { fontSize: 16, fontWeight: '800' },
-  warningText: { lineHeight: 22, marginBottom: spacing.sm },
+  refillValue: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
+  warningText: { fontSize: 14, lineHeight: 21, marginBottom: spacing.sm },
   warningBtn: { marginTop: spacing.xs },
-  routeLabel: { fontSize: 14, fontWeight: '600', marginBottom: spacing.sm },
-  error: { color: palette.danger, marginBottom: spacing.sm, fontWeight: '600' },
+  routeLabel: { fontSize: 15, fontWeight: '700', marginBottom: spacing.sm },
+  error: { color: palette.danger, marginBottom: spacing.sm, fontWeight: '700' },
   actionBtn: { marginTop: spacing.sm },
 });

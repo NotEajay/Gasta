@@ -1,26 +1,42 @@
 import type { TextStyle, ViewStyle } from 'react-native';
 
-/** GasTa! design tokens — Cream + Forest Green palette. */
-export const GasTaColors = {
-  cream: '#F8F0E5',
-  creamLight: '#FDFAF6',
-  creamDark: '#EDE3D6',
+export const BrandColors = {
+  navy: '#14315C',
+  green: '#4CAF50',
+  gold: '#F5A623',
+  skyBlue: '#4A90D9',
+  skyBlueLight: '#A9D4F5',
   white: '#FFFFFF',
-  forest: '#014421',
-  forestDark: '#013019',
-  forestMuted: 'rgba(1, 68, 33, 0.68)',
-  forestGlow: 'rgba(1, 68, 33, 0.12)',
-  forestBorder: 'rgba(1, 68, 33, 0.32)',
-  textPrimary: '#014421',
-  textMuted: 'rgba(1, 68, 33, 0.62)',
-  textSoft: 'rgba(1, 68, 33, 0.42)',
-  textOnForest: '#F8F0E5',
-  glassFill: 'rgba(255, 255, 255, 0.62)',
-  glassFillStrong: 'rgba(255, 255, 255, 0.9)',
-  glassBorder: 'rgba(255, 255, 255, 0.95)',
-  glassBorderSubtle: 'rgba(1, 68, 33, 0.1)',
-  glassHighlight: 'rgba(255, 255, 255, 0.65)',
-  error: '#DC2626',
+  offWhite: '#F5F7FA',
+  navySoft: 'rgba(20, 49, 92, 0.08)',
+  greenSoft: 'rgba(76, 175, 80, 0.12)',
+  goldSoft: 'rgba(245, 166, 35, 0.14)',
+  skySoft: 'rgba(74, 144, 217, 0.12)',
+  border: '#D8E4F0',
+  muted: '#66758A',
+} as const;
+
+/** GasTa! design tokens — navy, green, gold, and sky visual system. */
+export const GasTaColors = {
+  cream: BrandColors.offWhite,
+  creamLight: BrandColors.white,
+  creamDark: '#E8F0F8',
+  white: BrandColors.white,
+  forest: BrandColors.navy,
+  forestDark: '#0D2345',
+  forestMuted: 'rgba(20, 49, 92, 0.68)',
+  forestGlow: BrandColors.skySoft,
+  forestBorder: 'rgba(20, 49, 92, 0.20)',
+  textPrimary: BrandColors.navy,
+  textMuted: BrandColors.muted,
+  textSoft: '#95A3B5',
+  textOnForest: BrandColors.white,
+  glassFill: 'rgba(255, 255, 255, 0.76)',
+  glassFillStrong: 'rgba(255, 255, 255, 0.96)',
+  glassBorder: 'rgba(255, 255, 255, 0.98)',
+  glassBorderSubtle: BrandColors.border,
+  glassHighlight: 'rgba(255, 255, 255, 0.85)',
+  error: '#D64545',
 } as const;
 
 export const GasTaSpacing = {
@@ -41,15 +57,15 @@ export const GasTaRadius = {
 } as const;
 
 export const palette = {
-  primary: '#014421',
-  primarySoft: 'rgba(1, 68, 33, 0.08)',
-  primaryDark: '#013019',
-  success: '#014421',
-  successSoft: 'rgba(1, 68, 33, 0.08)',
-  warning: '#B45309',
-  warningSoft: 'rgba(255, 255, 255, 0.92)',
-  danger: '#DC2626',
-  dangerSoft: 'rgba(220, 38, 38, 0.1)',
+  primary: BrandColors.green,
+  primarySoft: BrandColors.greenSoft,
+  primaryDark: '#3E8E40',
+  success: BrandColors.green,
+  successSoft: BrandColors.greenSoft,
+  warning: BrandColors.gold,
+  warningSoft: BrandColors.goldSoft,
+  danger: '#D64545',
+  dangerSoft: 'rgba(214, 69, 69, 0.10)',
 } as const;
 
 export const spacing = GasTaSpacing;
@@ -70,7 +86,7 @@ export function shadow(scheme: 'light' | 'dark', size: 'sm' | 'md' | 'lg' = 'md'
   const opacity = scheme === 'dark' ? 0.4 : 0.08;
 
   return {
-    shadowColor: GasTaColors.forest,
+    shadowColor: BrandColors.navy,
     shadowOffset: { width: 0, height: size === 'sm' ? 1 : 4 },
     shadowOpacity: opacity,
     shadowRadius: radius,
@@ -93,13 +109,13 @@ export type AppTheme = {
 export function getTheme(_scheme: 'light' | 'dark' | null | undefined): AppTheme {
   return {
     scheme: 'light',
-    background: 'transparent',
-    surface: GasTaColors.glassFillStrong,
-    border: GasTaColors.glassBorderSubtle,
-    borderLight: 'rgba(1, 68, 33, 0.08)',
-    text: GasTaColors.textPrimary,
-    textSecondary: GasTaColors.textMuted,
-    textMuted: GasTaColors.textSoft,
-    overlay: 'rgba(1, 68, 33, 0.06)',
+    background: BrandColors.offWhite,
+    surface: BrandColors.white,
+    border: BrandColors.border,
+    borderLight: BrandColors.navySoft,
+    text: BrandColors.navy,
+    textSecondary: BrandColors.muted,
+    textMuted: '#8391A3',
+    overlay: BrandColors.skySoft,
   };
 }

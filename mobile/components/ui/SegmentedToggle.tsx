@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { GasTaColors, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 
 interface SegmentedToggleProps<T extends string> {
   options: { value: T; label: string }[];
@@ -35,7 +35,7 @@ export default function SegmentedToggle<T extends string>({
 const styles = StyleSheet.create({
   wrap: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(1, 68, 33, 0.06)',
+    backgroundColor: GasTaColors.forestGlow,
     borderRadius: radii.sm,
     padding: 5,
     gap: 6,
@@ -50,8 +50,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   itemActive: {
-    backgroundColor: GasTaColors.forest,
-    shadowColor: GasTaColors.forest,
+    backgroundColor: palette.success,
+    shadowColor: palette.success,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.25,
     shadowRadius: 10,

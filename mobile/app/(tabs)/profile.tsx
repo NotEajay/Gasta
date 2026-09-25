@@ -9,7 +9,7 @@ import FormSection from '@/components/ui/FormSection';
 import LoadingState from '@/components/ui/LoadingState';
 import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import { radii, spacing } from '@/constants/Theme';
+import { BrandColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -118,47 +118,57 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  padding: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
   identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: spacing.lg,
   },
   avatar: {
-    width: 56,
-    height: 56,
+    width: 64,
+    height: 64,
     borderRadius: radii.pill,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: spacing.md,
+    borderWidth: 1,
+    borderColor: BrandColors.border,
   },
   avatarText: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '800',
   },
   identityText: {
     flex: 1,
   },
   name: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '800',
+    letterSpacing: -0.2,
   },
   email: {
-    fontSize: 13,
-    marginTop: 3,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 4,
   },
   divider: {
     height: 1,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   fieldLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-    marginTop: spacing.sm,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginTop: spacing.md,
   },
   fieldValue: {
-    fontSize: 15,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '600',
     marginTop: spacing.xs,
     marginBottom: spacing.sm,

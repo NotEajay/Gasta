@@ -6,10 +6,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AuthBackground } from '@/components/ui/GlassSurface';
 import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarVisibility';
+import { HomeColors } from '@/constants/home';
 import { tabConfig } from '@/constants/moduleColors';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 
 const tabIconNames = {
+  home: { active: 'home', inactive: 'home-outline' },
   prices: { active: 'pricetag', inactive: 'pricetag-outline' },
   trip: { active: 'navigate', inactive: 'navigate-outline' },
   vehicles: { active: 'car', inactive: 'car-outline' },
@@ -35,12 +37,12 @@ function TabIcon({
     <View
       style={[
         styles.iconWrap,
-        focused && { backgroundColor: 'rgba(1, 68, 33, 0.1)' },
+        focused && { backgroundColor: HomeColors.primarySoft },
       ]}>
       <Ionicons
         name={iconName}
         size={22}
-        color={focused ? GasTaColors.forest : inactive}
+        color={focused ? HomeColors.primary : inactive}
       />
     </View>
   );
@@ -155,10 +157,11 @@ export default function TabLayout() {
       <AuthBackground canvas="white">
         <SafeAreaView edges={['top']} style={styles.fill}>
           <Tabs
+            initialRouteName="home"
             screenOptions={{
               headerShown: false,
-              sceneContainerStyle: { backgroundColor: 'transparent' },
-              tabBarActiveTintColor: GasTaColors.forest,
+              sceneStyle: { backgroundColor: 'transparent' },
+              tabBarActiveTintColor: HomeColors.primary,
               tabBarInactiveTintColor: GasTaColors.textSoft,
               tabBarStyle: tabBarStyle as unknown as ViewStyle,
               tabBarLabelStyle: {
@@ -167,6 +170,15 @@ export default function TabLayout() {
                 marginBottom: spacing.xs,
               },
             }}>
+            <Tabs.Screen
+              name="home"
+              options={{
+                title: 'Home',
+                tabBarIcon: ({ color, focused }) => (
+                  <TabIcon name="home" focused={focused} color={color} />
+                ),
+              }}
+            />
             <Tabs.Screen
               name="prices"
               options={{

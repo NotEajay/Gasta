@@ -1,11 +1,11 @@
 /** Accent colors per app module — aligned with GasTa cream + forest auth UI. */
 
 const forest = {
-  main: '#014421',
-  soft: 'rgba(1, 68, 33, 0.08)',
-  dark: '#013019',
-  gradientTop: '#014421',
-  gradientBottom: '#013019',
+  main: '#4A90D9',
+  soft: 'rgba(74, 144, 217, 0.12)',
+  dark: '#14315C',
+  gradientTop: '#14315C',
+  gradientBottom: '#4A90D9',
 } as const;
 
 export const moduleColors = {

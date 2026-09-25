@@ -15,7 +15,7 @@ import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import SectionHeader from '@/components/ui/SectionHeader';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { palette, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate } from '@/lib/format';
@@ -560,19 +560,25 @@ export default function VehiclesScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-  vehicleTitle: { fontSize: 18, fontWeight: '800', marginBottom: 4 },
-  vehicleMeta: { fontSize: 14, marginBottom: spacing.sm },
+  padding: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
+  vehicleTitle: { fontSize: 19, fontWeight: '800', letterSpacing: -0.2, marginBottom: 6 },
+  vehicleMeta: { fontSize: 14, lineHeight: 20, marginBottom: spacing.md },
   refillRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: spacing.sm,
+    padding: spacing.md,
     borderRadius: radii.md,
     marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestGlow,
   },
-  refillLabel: { fontSize: 12, fontWeight: '600' },
-  refillValue: { fontSize: 14, fontWeight: '700' },
-  missingRefill: { color: palette.warning, fontWeight: '600', marginBottom: spacing.sm },
+  refillLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.3, textTransform: 'uppercase' },
+  refillValue: { fontSize: 15, fontWeight: '800' },
+  missingRefill: { color: palette.warning, fontWeight: '700', marginBottom: spacing.sm },
   actionBtn: { marginTop: spacing.sm },
   deleteBtn: { marginTop: spacing.sm },
   cancelEditBtn: { marginTop: spacing.sm },
@@ -583,11 +589,16 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radii.md,
     marginBottom: spacing.md,
+    shadowColor: palette.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 2,
   },
   selectedVehicleText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#F8F0E5',
+    fontWeight: '700',
+    color: GasTaColors.white,
   },
   clearButton: {
     padding: spacing.sm,
@@ -595,7 +606,7 @@ const styles = StyleSheet.create({
   clearButtonText: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#F8F0E5',
+    color: GasTaColors.white,
   },
   searchResults: {
     marginBottom: spacing.md,
@@ -604,14 +615,16 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radii.md,
     marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestGlow,
   },
   searchResultText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   searchResultSubtext: {
-    fontSize: 14,
-    marginTop: 2,
+    fontSize: 13,
+    marginTop: 3,
   },
   sharedVehicleButton: {
     width: '100%',
@@ -625,12 +638,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sharedVehicleTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
+    letterSpacing: -0.2,
   },
   sharedVehicleRole: {
     fontSize: 13,
-    marginTop: 3,
+    fontWeight: '700',
+    marginTop: 4,
   },
   sharedVehicleChevron: {
     fontSize: 28,
