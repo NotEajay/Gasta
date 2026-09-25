@@ -88,6 +88,40 @@ export async function updateVehicleLastRefill(
   return data;
 }
 
+export interface UpdateVehicleInput {
+  vehicleId: string;
+  brand: string;
+  model: string;
+  year: number;
+  fuelTypeId: string;
+  fuelEfficiencyKmPerLiter: number;
+  nickname: string;
+  lastRefillPrice?: number;
+}
+
+export async function updateVehicle(input: UpdateVehicleInput): Promise<Vehicle> {
+  const hasLastRefill = input.lastRefillPrice != null && input.lastRefillPrice > 0;
+
+  const { data, error } = await supabase
+    .from('vehicles')
+    .update({
+      brand: input.brand,
+      model: input.model,
+      year: input.year,
+      fuel_type_id: input.fuelTypeId,
+      fuel_efficiency_km_per_liter: input.fuelEfficiencyKmPerLiter,
+      nickname: input.nickname,
+      last_refill_price: hasLastRefill ? input.lastRefillPrice : null,
+      last_refill_at: hasLastRefill ? new Date().toISOString() : null,
+    })
+    .eq('id', input.vehicleId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function deleteVehicle(vehicleId: string): Promise<void> {
   const { error } = await supabase.from('vehicles').delete().eq('id', vehicleId);
   if (error) throw error;
