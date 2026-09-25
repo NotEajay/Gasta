@@ -114,19 +114,19 @@ https://xzslsklecloqiitcirtw.supabase.co/auth/v1/callback
 
 1. Supabase → **Authentication → URL Configuration**:
    - **Site URL:** `https://gasta-kappa.vercel.app` (must include `https://`)
-   - **Redirect URLs** must include: `exp://**` and `https://gasta-kappa.vercel.app/**`
+   - **Redirect URLs** include: `https://gasta-kappa.vercel.app/**` (and `exp://**` is fine too)
 2. From `mobile/`:
    ```bash
    npx expo start
    ```
-   Same Wi‑Fi as the phone.
+   Press **s** if it says development build, so it shows **Expo Go**. Same Wi‑Fi as the phone.
 3. Open **Expo Go** → scan QR → test Google.
-4. After Google, Expo Go should reopen (return URL is `exp://…`, not the Vercel “Signing you in…” page).
+4. Flow: Google → short Vercel bridge → back into Expo Go (should not stay on “Signing you in…”).
 
 | Who | Easiest access | Google login |
 |-----|----------------|--------------|
 | Anyone (Windows / iPhone / Android) | Open **https://gasta-kappa.vercel.app** | Works in the browser |
-| You while coding | **Expo Go** (`npx expo start`) | Needs `exp://**` in Redirect URLs + Site URL with `https://` |
+| You while coding | **Expo Go** (`npx expo start`) | Needs Vercel live + Site URL with `https://` |
 | Optional later | Installable Android APK / App Store iOS | Native `gasta://` (Apple Dev only for *publishing* iOS) |
 
 ### Optional later: native install (App Store / Play Store)
