@@ -12,6 +12,25 @@ WebBrowser.maybeCompleteAuthSession();
 
 const capturedCallbackUrl = typeof window !== 'undefined' ? window.location.href : null;
 
+function hasLocalPkceVerifier() {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+
+  try {
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (key && key.includes('code-verifier')) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
+}
+
 export default function AuthCallbackScreen() {
   const router = useRouter();
   const params = useGlobalSearchParams<{
@@ -23,16 +42,28 @@ export default function AuthCallbackScreen() {
   const [statusText, setStatusText] = useState('Signing you in…');
 
   useEffect(() => {
-    // If this page was opened inside Expo's auth browser, close it and let the
-    // native app finish PKCE exchange (it has the code verifier).
-    const completion = WebBrowser.maybeCompleteAuthSession();
-    if (completion.type === 'success') {
-      setStatusText('Returning to the app…');
-      return;
-    }
+    const tryClose = () => {
+      const completion = WebBrowser.maybeCompleteAuthSession();
+      if (completion.type === 'success') {
+        setStatusText('Returning to the app…');
+        return true;
+      }
+      return false;
+    };
+
+    tryClose();
+    const closeTimer = setInterval(() => {
+      if (tryClose()) {
+        clearInterval(closeTimer);
+      }
+    }, 200);
+    const stopTrying = setTimeout(() => clearInterval(closeTimer), 5000);
 
     if (started.current) {
-      return;
+      return () => {
+        clearInterval(closeTimer);
+        clearTimeout(stopTrying);
+      };
     }
     started.current = true;
 
@@ -43,6 +74,8 @@ export default function AuthCallbackScreen() {
         null;
 
       if (oauthError) {
+        clearInterval(closeTimer);
+        clearTimeout(stopTrying);
         router.replace(`/(auth)?error=${encodeURIComponent(oauthError)}` as Href);
         return;
       }
@@ -53,6 +86,14 @@ export default function AuthCallbackScreen() {
           : Array.isArray(params.code)
             ? params.code[0]
             : null;
+
+      // Mobile OAuth (Expo Go): this HTTPS page never has the verifier.
+      // Do not exchange — just dismiss / tell the user to return to the app.
+      if (Platform.OS === 'web' && !hasLocalPkceVerifier()) {
+        setStatusText('Return to GasTa — sign-in finishes in the app.');
+        return;
+      }
+
       const hrefFromParams = searchCode
         ? `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost'}/auth/callback?code=${encodeURIComponent(searchCode)}`
         : null;
@@ -64,18 +105,26 @@ export default function AuthCallbackScreen() {
       const result = await createSessionFromUrl(href);
 
       if (result.session) {
+        clearInterval(closeTimer);
+        clearTimeout(stopTrying);
         router.replace(HOME_HREF);
         return;
       }
 
       if (!result.error) {
-        // Native Expo Go owns the verifier — don't spin forever in the browser.
-        setStatusText('You can close this window and return to GasTa.');
+        setStatusText('Return to GasTa — sign-in finishes in the app.');
         return;
       }
 
+      clearInterval(closeTimer);
+      clearTimeout(stopTrying);
       router.replace(`/(auth)?error=${encodeURIComponent(result.error)}` as Href);
     })();
+
+    return () => {
+      clearInterval(closeTimer);
+      clearTimeout(stopTrying);
+    };
   }, [params.code, params.error, params.error_description, router]);
 
   return (

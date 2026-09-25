@@ -68,7 +68,7 @@ npm run android
 **Or Expo Go on a physical phone** (same Wi‑Fi):
 
 ```bash
-npx expo start
+npx expo start --go
 ```
 
 Scan the QR code with Expo Go.
@@ -112,21 +112,21 @@ https://xzslsklecloqiitcirtw.supabase.co/auth/v1/callback
 
 ### Test on Expo Go first (recommended while building)
 
-1. **Unpause Vercel** so `https://gasta-kappa.vercel.app` loads (needed for Google return URL).
-2. Supabase Redirect URLs include `https://gasta-kappa.vercel.app/**` and Site URL is that same URL with `https://`.
-3. From `mobile/`:
+1. Supabase → **Authentication → URL Configuration**:
+   - **Site URL:** `https://gasta-kappa.vercel.app` (must include `https://`)
+   - **Redirect URLs** must include: `exp://**` and `https://gasta-kappa.vercel.app/**`
+2. From `mobile/`:
    ```bash
-   npm run start:go
+   npx expo start
    ```
-   Same Wi‑Fi as the phone, or use tunnel if LAN fails: `npx expo start --tunnel`.
-4. Open **Expo Go** → scan QR → test the app.
-5. **Google:** Continue with Google → after account pick, the sheet should close back into Expo Go (callback is the live site, not localhost).
-6. **Email:** works without Vercel.
+   Same Wi‑Fi as the phone.
+3. Open **Expo Go** → scan QR → test Google.
+4. After Google, Expo Go should reopen (return URL is `exp://…`, not the Vercel “Signing you in…” page).
 
 | Who | Easiest access | Google login |
 |-----|----------------|--------------|
 | Anyone (Windows / iPhone / Android) | Open **https://gasta-kappa.vercel.app** | Works in the browser |
-| You while coding | **Expo Go** + live Vercel as OAuth return | Needs Vercel **unpaused** |
+| You while coding | **Expo Go** (`npx expo start`) | Needs `exp://**` in Redirect URLs + Site URL with `https://` |
 | Optional later | Installable Android APK / App Store iOS | Native `gasta://` (Apple Dev only for *publishing* iOS) |
 
 ### Optional later: native install (App Store / Play Store)
@@ -160,7 +160,7 @@ Site URL (required for Google on phone + web):
 https://gasta-kappa.vercel.app
 ```
 
-Keep Vercel **unpaused** while testing Google from Expo Go or sharing the link with others.
+Keep Vercel **unpaused** while testing Google from Expo Go or sharing the website.
 
 **Must include the scheme** (`https://` or `http://`).  
 Wrong: `gasta-kappa.vercel.app` → `requested path is invalid`.  
@@ -227,8 +227,9 @@ See `docs/PROJECT_CONTEXT.md`, `mobile/AGENTS.md`, and `mobile/README.md` before
 | Empty fuel prices | Confirm `.env` is correct; check Supabase Table Editor for `fuel_prices` rows |
 | Login fails | Enable Email auth in Supabase; disable email confirmation for dev if needed |
 | Google `deleted_client` / Authorization Error | Recreate **Web** OAuth client in Google Cloud; paste new ID/secret into Supabase Auth → Google (see §5) |
-| Google `requested path is invalid` on phone | Site URL must be `https://gasta-kappa.vercel.app` (with https). Add that host under Redirect URLs. Expo Go also needs `EXPO_PUBLIC_SITE_URL` in `mobile/.env`, then restart Expo. |
-| Google works on web, not phone | Add `gasta://**`, `exp://**`, and `https://*.exp.direct/**` under Supabase Redirect URLs; prefer `npx expo start --tunnel` |
+| Google `requested path is invalid` | Site URL must be exactly `https://gasta-kappa.vercel.app`. Keep `exp://**` under Redirect URLs. Restart Expo. |
+| Google works on web, not phone | Same Site URL + `exp://**`; same Wi‑Fi; `npx expo start`. |
+| Stuck on Vercel “Signing you in…” | Old HTTPS return. Restart Expo so the app uses `exp://` return (not Vercel). Confirm Site URL has `https://`. |
 | Supabase not configured banner | Create `mobile/.env` from `.env.example` |
 | Trip optimizer shows no results | Set a last-refill price on your vehicle (My Vehicles tab) |
 | Vehicle save column error | Run the last-refill migration SQL above |

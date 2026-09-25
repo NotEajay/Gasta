@@ -46,7 +46,7 @@ const BRAND_COLOR: Record<string, string> = {
   unioil: '#64748B',
 };
 
-const PRICE_NAVY = '#14315C';
+const PRICE_FOREST = '#014421';
 const PRICE_GREEN = '#2E7D32';
 const PRICE_GREEN_SOFT = 'rgba(46, 125, 50, 0.10)';
 const PRICE_GREEN_BORDER = 'rgba(46, 125, 50, 0.30)';
@@ -59,7 +59,7 @@ type StatusPresentation = {
 
 function brandColor(brand: string): string {
   const key = brand.trim().toLowerCase();
-  return BRAND_COLOR[key] ?? PRICE_NAVY;
+  return BRAND_COLOR[key] ?? PRICE_FOREST;
 }
 
 function statusPresentation(status?: string): StatusPresentation | null {
@@ -72,7 +72,7 @@ function statusPresentation(status?: string): StatusPresentation | null {
   if (status === 'DOE estimate') {
     return {
       backgroundColor: GasTaColors.forestGlow,
-      color: PRICE_NAVY,
+      color: PRICE_FOREST,
       icon: 'file-document-outline',
     };
   }
@@ -160,7 +160,7 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
                   <Text
                     style={[
                       styles.priceText,
-                      { color: isBestPrice ? PRICE_GREEN : PRICE_NAVY },
+                      { color: isBestPrice ? PRICE_GREEN : PRICE_FOREST },
                     ]}>
                     {row.price != null ? formatCurrency(row.price) : '—'}
                     {row.price != null ? <Text style={styles.priceUnit}>/L</Text> : null}
@@ -193,7 +193,7 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
           <View style={[styles.areaDivider, { borderColor: theme.borderLight }]} />
           <View style={styles.areaHeading}>
             <View style={[styles.areaHeadingIcon, { backgroundColor: theme.overlay }]}>
-              <MaterialCommunityIcons name="storefront-outline" size={17} color={PRICE_NAVY} />
+              <MaterialCommunityIcons name="storefront-outline" size={17} color={PRICE_FOREST} />
             </View>
             <View style={styles.areaHeadingCopy}>
               <Text style={[styles.areaHeadingTitle, { color: theme.text }]}>
@@ -227,7 +227,7 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
                       accessibilityLabel={`${row.brand} logo`}
                     />
                   ) : (
-                    <MaterialCommunityIcons name="storefront-outline" size={18} color={PRICE_NAVY} />
+                    <MaterialCommunityIcons name="storefront-outline" size={18} color={PRICE_FOREST} />
                   )}
                 </View>
                 <View style={styles.areaCopy}>
@@ -249,8 +249,8 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
                     hitSlop={6}
                     onPress={() => router.push('/(tabs)/prices/report')}
                     style={({ pressed }) => [styles.reportButton, pressed && styles.reportButtonPressed]}>
-                    <MaterialCommunityIcons name="map-marker-plus-outline" size={14} color={PRICE_NAVY} />
-                    <Text style={[styles.reportButtonText, { color: PRICE_NAVY }]}>Report here</Text>
+                    <MaterialCommunityIcons name="map-marker-plus-outline" size={14} color={PRICE_FOREST} />
+                    <Text style={[styles.reportButtonText, { color: PRICE_FOREST }]}>Report here</Text>
                   </Pressable>
                 </View>
               </View>

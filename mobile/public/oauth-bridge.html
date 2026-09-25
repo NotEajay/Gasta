@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GasTa — finishing sign-in</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #f8f0e5;
+        color: #014421;
+        text-align: center;
+      }
+      p {
+        font-weight: 600;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="msg">Returning to GasTa…</p>
+    <script>
+      (function () {
+        try {
+          var current = new URL(window.location.href);
+          var native = current.searchParams.get('native');
+          if (!native) {
+            document.getElementById('msg').textContent =
+              'Missing return link. Close this window and open GasTa in Expo Go.';
+            return;
+          }
+
+          var dest = new URL(native);
+          current.searchParams.forEach(function (value, key) {
+            if (key === 'native') return;
+            dest.searchParams.set(key, value);
+          });
+
+          if (window.location.hash && window.location.hash.length > 1) {
+            dest.hash = window.location.hash;
+          }
+
+          window.location.replace(dest.toString());
+
+          setTimeout(function () {
+            document.getElementById('msg').textContent =
+              'If GasTa did not open, switch back to Expo Go — sign-in should finish there.';
+          }, 1500);
+        } catch (e) {
+          document.getElementById('msg').textContent =
+            'Could not return to the app. Close this window and open Expo Go.';
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -1,5 +1,3 @@
-import { makeRedirectUri } from 'expo-auth-session';
-import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import type { AuthError, Session, User } from '@supabase/supabase-js';
@@ -29,35 +27,43 @@ function getRedirectUrl() {
   return Linking.createURL('/');
 }
 
-function looksLikeLanIp(url: string) {
-  return /\d{1,3}(\.\d{1,3}){3}/.test(url);
+function getNativeOAuthReturnUrl() {
+  // Expo Go → exp://…  |  custom build with scheme → gasta://…
+  return Linking.createURL('auth/callback');
 }
 
 /**
- * OAuth return URL (Google-first, no Apple Developer required):
- * - Web: current origin (Vercel / localhost)
- * - Expo Go / phone: https://EXPO_PUBLIC_SITE_URL/auth/callback (live web app)
- * - Future native install (optional): gasta://auth/callback
+ * OAuth return URL for Supabase (must be on the Redirect allow list):
+ * - Web: current origin /auth/callback
+ * - Native/Expo Go: HTTPS Vercel URL with ?native=exp://… so Supabase accepts it,
+ *   then the page immediately deep-links into Expo Go (iOS cannot finish on https alone).
  */
 export function getOAuthRedirectUrl() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     return `${window.location.origin}/auth/callback`;
   }
 
-  // Prefer live HTTPS app URL so Google works in Expo Go without an Apple/EAS install.
+  const nativeReturn = getNativeOAuthReturnUrl();
+
   if (PUBLIC_SITE_URL.startsWith('https://')) {
-    return `${PUBLIC_SITE_URL}/auth/callback`;
+    return `${PUBLIC_SITE_URL}/oauth-bridge.html?native=${encodeURIComponent(nativeReturn)}`;
   }
 
-  // Optional: custom native build with scheme registered on the app.
-  if (Constants.appOwnership !== 'expo') {
-    return 'gasta://auth/callback';
-  }
+  return nativeReturn;
+}
 
-  return (
-    makeRedirectUri({ scheme: 'gasta', path: 'auth/callback' }) ||
-    Linking.createURL('auth/callback', { scheme: 'gasta' })
-  );
+/** URL openAuthSessionAsync watches for (exp:// / gasta://), not the HTTPS bridge. */
+function getAuthSessionReturnUrl(supabaseRedirectTo: string) {
+  try {
+    const url = new URL(supabaseRedirectTo);
+    const native = url.searchParams.get('native');
+    if (native) {
+      return native;
+    }
+  } catch {
+    // ignore
+  }
+  return supabaseRedirectTo;
 }
 
 function withRedirectTo(oauthUrl: string, redirectTo: string) {
@@ -219,19 +225,23 @@ export async function signInWithGoogle(): Promise<AuthResult> {
     }
 
     const redirectTo = getOAuthRedirectUrl();
+    const sessionReturnUrl = getAuthSessionReturnUrl(redirectTo);
 
     if (__DEV__) {
       console.log('[auth] OAuth redirectTo =', redirectTo);
+      console.log('[auth] AuthSession return =', sessionReturnUrl);
     }
 
     if (
       Platform.OS !== 'web' &&
       !redirectTo.startsWith('https://') &&
-      !redirectTo.startsWith('gasta://')
+      !redirectTo.startsWith('gasta://') &&
+      !redirectTo.startsWith('exp://') &&
+      !redirectTo.startsWith('exps://')
     ) {
       return {
         error:
-          'Google sign-in needs a live web app. Set EXPO_PUBLIC_SITE_URL=https://gasta-kappa.vercel.app and unpause Vercel, or use email sign-in.',
+          'Google sign-in needs EXPO_PUBLIC_SITE_URL=https://gasta-kappa.vercel.app in mobile/.env. Or use email sign-in.',
       };
     }
 
@@ -254,8 +264,10 @@ export async function signInWithGoogle(): Promise<AuthResult> {
       return { error: null, pendingRedirect: true };
     }
 
-    const result = await WebBrowser.openAuthSessionAsync(oauthUrl, redirectTo, {
+    // Watch the same URL Supabase redirects to (exp:// / gasta://).
+    const result = await WebBrowser.openAuthSessionAsync(oauthUrl, sessionReturnUrl, {
       showInRecents: true,
+      preferEphemeralSession: false,
     });
 
     if (Platform.OS === 'android') {
@@ -263,11 +275,22 @@ export async function signInWithGoogle(): Promise<AuthResult> {
     }
 
     if (result.type === 'success' && result.url) {
+      if (result.url.includes('requested path is invalid') || result.url.includes('error=')) {
+        const params = parseAuthParams(result.url);
+        const description =
+          params.get('error_description') ?? params.get('error') ?? 'requested path is invalid';
+        if (description.includes('invalid') || description.includes('requested path')) {
+          return {
+            error:
+              'Google return URL was rejected by Supabase. Site URL must be https://gasta-kappa.vercel.app and Redirect URLs must include https://gasta-kappa.vercel.app/**.',
+          };
+        }
+      }
       return createSessionFromUrl(result.url);
     }
 
     if (result.type === 'cancel' || result.type === 'dismiss') {
-      const waited = await waitForSession(3000);
+      const waited = await waitForSession(4000);
       if (waited) {
         return { error: null, session: waited };
       }
