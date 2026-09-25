@@ -16,6 +16,7 @@ import SectionHeader from '@/components/ui/SectionHeader';
 import { DEFAULT_MCDA_WEIGHTS } from '@/constants/mcda';
 import { palette, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, transportModeLabel } from '@/lib/format';
 import { weightsSumToOne } from '@/lib/mcda';
 import { createSavedTrip } from '@/lib/services/savedTrips';
@@ -40,6 +41,7 @@ export default function TripOptimizerScreen() {
     templateName?: string;
   }>();
   const { user } = useAuth();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [templateName, setTemplateName] = useState('');
@@ -241,6 +243,8 @@ export default function TripOptimizerScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}>
       <PageHero

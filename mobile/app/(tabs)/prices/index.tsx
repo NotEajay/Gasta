@@ -31,6 +31,7 @@ import {
 } from '@/constants/regions';
 import { GasTaColors, palette, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import {
   formatBulletinWeek,
   formatCurrency,
@@ -133,6 +134,7 @@ export default function FuelPricesScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { user } = useAuth();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
@@ -445,6 +447,8 @@ export default function FuelPricesScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}
       refreshControl={

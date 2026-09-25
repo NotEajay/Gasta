@@ -15,6 +15,7 @@ import ProgressBar from '@/components/ui/ProgressBar';
 import SectionHeader from '@/components/ui/SectionHeader';
 import { palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, monthName } from '@/lib/format';
 import {
   budgetAlertStatus,
@@ -37,6 +38,7 @@ export default function BudgetScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const [budgets, setBudgets] = useState<BudgetWithSpend[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -147,6 +149,8 @@ export default function BudgetScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}>
       <PageHero

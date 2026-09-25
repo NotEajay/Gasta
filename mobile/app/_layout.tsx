@@ -1,5 +1,6 @@
 import { useFonts } from 'expo-font';
 import { DefaultTheme, ThemeProvider } from 'expo-router';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
@@ -57,11 +58,13 @@ const GasTaNavigationTheme = {
 
 function RootLayoutNav() {
   return (
-    <ThemeProvider value={GasTaNavigationTheme}>
-      <StatusBar style="dark" />
-      <AppProviders>
-        <RootStack />
-      </AppProviders>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider value={GasTaNavigationTheme}>
+        <StatusBar style="dark" />
+        <AppProviders>
+          <RootStack />
+        </AppProviders>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }

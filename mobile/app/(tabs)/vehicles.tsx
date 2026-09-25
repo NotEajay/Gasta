@@ -17,6 +17,7 @@ import SectionHeader from '@/components/ui/SectionHeader';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import { palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   createVehicle,
@@ -36,6 +37,7 @@ export default function VehiclesScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [sharedVehicles, setSharedVehicles] = useState<SharedVehicle[]>([]);
   const [catalog, setCatalog] = useState<VehicleCatalogEntry[]>([]);
@@ -278,6 +280,8 @@ export default function VehiclesScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}>
       <PageHero

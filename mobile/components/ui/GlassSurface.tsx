@@ -109,7 +109,17 @@ export function AuthBackground({ children, canvas = 'cream' }: AuthBackgroundPro
         style={StyleSheet.absoluteFill}
       />
 
-      <View style={[bgStyles.orb, bgStyles.orbForestTop]} />
+      <LinearGradient
+        colors={[
+          'rgba(1, 68, 33, 0)',
+          GasTaColors.forestGlow,
+          'rgba(1, 68, 33, 0)',
+        ]}
+        locations={[0, 0.46, 1]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={bgStyles.topGlow}
+      />
       <View style={[bgStyles.orb, bgStyles.orbForestBottom]} />
       <View
         style={[
@@ -143,13 +153,13 @@ const bgStyles = StyleSheet.create({
     position: 'absolute',
     borderRadius: 999,
   },
-  orbForestTop: {
-    width: 300,
-    height: 300,
-    top: -100,
-    right: -80,
-    backgroundColor: GasTaColors.forestGlow,
-    transform: [{ scaleX: 1.2 }],
+  topGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 280,
+    pointerEvents: 'none',
   },
   orbForestBottom: {
     width: 240,

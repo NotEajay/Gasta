@@ -4,7 +4,6 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { GasTaColors, radii, spacing, typography } from '@/constants/Theme';
-import { useAuth } from '@/context/AuthProvider';
 
 interface PageHeroProps {
   module?: string;
@@ -15,19 +14,12 @@ interface PageHeroProps {
 }
 
 export default function PageHero({ title, subtitle, navItems, children }: PageHeroProps) {
-  const { user, signOut } = useAuth();
-
   return (
     <View style={styles.wrap}>
       <View style={styles.topRow}>
         <View style={styles.titleBlock}>
           <Text style={styles.title}>{title}</Text>
         </View>
-        {user ? (
-          <Pressable onPress={() => signOut()} style={styles.authBtn} hitSlop={8}>
-            <Text style={styles.authText}>Sign out</Text>
-          </Pressable>
-        ) : null}
       </View>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {navItems && navItems.length > 0 ? (
@@ -72,19 +64,6 @@ const styles = StyleSheet.create({
     color: GasTaColors.textMuted,
     marginTop: spacing.sm,
     lineHeight: 22,
-  },
-  authBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-  },
-  authText: {
-    color: GasTaColors.forestDark,
-    fontSize: 13,
-    fontWeight: '700',
   },
   navRow: {
     flexDirection: 'row',
