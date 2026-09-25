@@ -5,6 +5,8 @@ export interface DirectionsRoute {
   distanceKm: number;
   /** Total estimated driving duration in minutes. */
   durationMinutes: number;
+  /** Road path as WGS84 points (from Google overview polyline). */
+  coordinates: Array<{ latitude: number; longitude: number }>;
 }
 
 type DirectionsErrorCode =
@@ -61,13 +63,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isDirectionsRoute(value: unknown): value is DirectionsRoute {
   if (!isRecord(value)) return false;
-  return (
-    typeof value.distanceKm === 'number' &&
-    Number.isFinite(value.distanceKm) &&
-    value.distanceKm > 0 &&
-    typeof value.durationMinutes === 'number' &&
-    Number.isFinite(value.durationMinutes) &&
-    value.durationMinutes > 0
+  if (
+    typeof value.distanceKm !== 'number' ||
+    !Number.isFinite(value.distanceKm) ||
+    value.distanceKm <= 0 ||
+    typeof value.durationMinutes !== 'number' ||
+    !Number.isFinite(value.durationMinutes) ||
+    value.durationMinutes <= 0
+  ) {
+    return false;
+  }
+
+  // Older deployments may omit coordinates; treat as empty path.
+  if (value.coordinates === undefined) {
+    return true;
+  }
+  if (!Array.isArray(value.coordinates) || value.coordinates.length < 2) {
+    return false;
+  }
+  return value.coordinates.every(
+    (point) =>
+      isRecord(point) &&
+      typeof point.latitude === 'number' &&
+      Number.isFinite(point.latitude) &&
+      typeof point.longitude === 'number' &&
+      Number.isFinite(point.longitude),
   );
 }
 
@@ -175,6 +195,7 @@ export async function getDrivingRoute(
     return {
       distanceKm: data.distanceKm,
       durationMinutes: data.durationMinutes,
+      coordinates: Array.isArray(data.coordinates) ? data.coordinates : [],
     };
   } catch (error) {
     if (error instanceof DirectionsError) throw error;

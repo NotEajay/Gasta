@@ -1,35 +1,40 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
-import MapView, {
-  Marker,
-  type MapPressEvent,
-  type Region,
-} from "react-native-maps";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Text } from "@/components/Themed";
-import Card from "@/components/ui/Card";
+import {
+  MapView,
+  Marker,
+  Polyline,
+  reverseGeocodeWithMapsJs,
+  reverseGeocodeWithNominatim,
+  type MapPressEvent,
+  type MapViewHandle,
+  type Region,
+} from "@/components/maps/TripMap";
 import PrimaryButton from "@/components/ui/PrimaryButton";
 import SupabaseSetupBanner from "@/components/SupabaseSetupBanner";
 import {
+  BrandColors,
   GasTaColors,
   palette,
   radii,
   spacing,
-  typography,
 } from "@/constants/Theme";
 import { REGION_CENTROIDS } from "@/constants/regions";
+import { useResponsive } from "@/hooks/useResponsive";
 import {
   GeocodingError,
   getReadableAddress,
@@ -46,6 +51,11 @@ import {
   publishRouteSelection,
   type PickedRoutePoint,
 } from "@/lib/services/routeSelection";
+import {
+  DirectionsError,
+  getDrivingRoute,
+  type DirectionsRoute,
+} from "@/lib/services/googleMaps";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { useTheme } from "@/lib/useTheme";
 
@@ -70,16 +80,108 @@ const DEFAULT_REGION: Region = {
   longitudeDelta: 0.22,
 };
 
-const MAP_PADDING = { top: 80, right: 48, bottom: 220, left: 48 };
+const MARKER_A = palette.success;
+const MARKER_B = BrandColors.skyBlue;
+
+/** Turn a map tap into a human place name (Google first, then platform fallbacks). */
+async function resolveTappedPlaceName(
+  latitude: number,
+  longitude: number,
+): Promise<{ displayName: string; error: string | null }> {
+  let lastError: string | null = null;
+
+  // 1) Authenticated Edge Function (server key — most reliable when signed in).
+  try {
+    const place = await reverseGeocode(latitude, longitude);
+    if (place?.formattedAddress) {
+      return {
+        displayName: getReadableAddress(place.formattedAddress),
+        error: null,
+      };
+    }
+  } catch (error) {
+    lastError =
+      error instanceof GeocodingError ? error.userMessage : lastError;
+  }
+
+  // 2) Web: Maps JS Geocoder (needs Geocoding API on the browser key).
+  if (Platform.OS === "web") {
+    const mapsAddress = await reverseGeocodeWithMapsJs(latitude, longitude);
+    if (mapsAddress) {
+      return {
+        displayName: getReadableAddress(mapsAddress),
+        error: null,
+      };
+    }
+
+    // 3) Web: OpenStreetMap when Google geocoding is blocked/unavailable.
+    const osmAddress = await reverseGeocodeWithNominatim(latitude, longitude);
+    if (osmAddress) {
+      return {
+        displayName: getReadableAddress(osmAddress),
+        error: null,
+      };
+    }
+
+    return {
+      displayName: `Pinned location (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`,
+      error: lastError,
+    };
+  }
+
+  // Native: device reverse geocoder.
+  try {
+    const entries = await Location.reverseGeocodeAsync({
+      latitude,
+      longitude,
+    });
+    const entry = entries[0];
+    if (entry) {
+      const parts = [
+        entry.name,
+        entry.streetNumber && entry.street
+          ? `${entry.streetNumber} ${entry.street}`
+          : entry.street,
+        entry.district,
+        entry.city,
+        entry.subregion,
+        entry.region,
+      ].filter((part, index, list) => {
+        if (!part) return false;
+        const normalized = part.trim().toLowerCase();
+        return (
+          normalized.length > 0 &&
+          list.findIndex(
+            (other) => other?.trim().toLowerCase() === normalized,
+          ) === index
+        );
+      });
+      if (parts.length > 0) {
+        return { displayName: parts.join(", "), error: null };
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  return {
+    displayName: `Pinned location (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`,
+    error: lastError,
+  };
+}
 
 export default function PickOnMapScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const { width, isLandscape, scale, horizontalPadding } =
+    useResponsive();
   const params = useLocalSearchParams<{
     origin?: string;
     destination?: string;
   }>();
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<MapViewHandle | null>(null);
+  const regionRef = useRef<Region>(DEFAULT_REGION);
   const searchRequestId = useRef(0);
   const placeRequestId = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,17 +206,29 @@ export default function PickOnMapScreen() {
   const [resolvingCoordinate, setResolvingCoordinate] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [route, setRoute] = useState<DirectionsRoute | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const routeRequestId = useRef(0);
 
   const bothPointsSet = origin.point !== null && destination.point !== null;
+  // Wide screens: floating panel constrained; phones: full-width overlays.
+  const isWide = width >= 768;
+
+  const mapPadding = useMemo(
+    () => ({
+      top: isWide ? 48 : scale(120),
+      right: isWide ? (isLandscape ? width * 0.42 : 56) : 48,
+      bottom: isWide ? 48 : scale(220),
+      left: isWide ? (isLandscape ? 56 : width * 0.38) : 48,
+    }),
+    [isLandscape, isWide, scale, width],
+  );
+
   const setField = useCallback((field: RouteField, value: FieldState) => {
     if (field === "origin") setOrigin(value);
     else setDestination(value);
   }, []);
-  const pointForField = useCallback(
-    (field: RouteField) =>
-      field === "origin" ? origin.point : destination.point,
-    [destination.point, origin.point],
-  );
   const queryForField = useCallback(
     (field: RouteField) =>
       field === "origin" ? origin.query : destination.query,
@@ -139,16 +253,27 @@ export default function PickOnMapScreen() {
   const focusPoint = useCallback((point: PickedRoutePoint) => {
     const map = mapRef.current;
     if (map && typeof map.animateToRegion === "function") {
-      map.animateToRegion(
-        {
-          latitude: point.latitude,
-          longitude: point.longitude,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        },
-        350,
-      );
+      const next = {
+        latitude: point.latitude,
+        longitude: point.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+      regionRef.current = next;
+      map.animateToRegion(next, 350);
     }
+  }, []);
+  const zoomBy = useCallback((factor: number) => {
+    const map = mapRef.current;
+    const current = regionRef.current;
+    if (!map || typeof map.animateToRegion !== "function") return;
+    const next = {
+      ...current,
+      latitudeDelta: Math.min(80, Math.max(0.002, current.latitudeDelta * factor)),
+      longitudeDelta: Math.min(80, Math.max(0.002, current.longitudeDelta * factor)),
+    };
+    regionRef.current = next;
+    map.animateToRegion(next, 200);
   }, []);
   const setPointFromPlace = useCallback(
     (field: RouteField, place: ResolvedPlaceSuggestion) => {
@@ -211,44 +336,36 @@ export default function PickOnMapScreen() {
       clearSearch();
       const { latitude, longitude } = event.nativeEvent.coordinate;
       const field = activeField;
-      const point = {
-        displayName: "Map location",
-        latitude,
-        longitude,
-        directionsValue: `${latitude},${longitude}`,
-      };
-      setField(field, { query: point.displayName, point });
-      setActiveField(field === "origin" ? "destination" : "origin");
       setLocationError(null);
       setResolvingCoordinate(true);
-      try {
-        const place = await reverseGeocode(latitude, longitude);
-        if (place) {
-          const displayName =
-            field === "origin"
-              ? getReadableAddress(place.formattedAddress)
-              : place.formattedAddress;
-          setField(field, {
-            query: displayName,
-            point: {
-              displayName,
-              latitude,
-              longitude,
-              directionsValue: `${latitude},${longitude}`,
-            },
-          });
-        }
-      } catch (error) {
-        if (!(error instanceof GeocodingError && error.code === "timeout")) {
-          setLocationError(
-            error instanceof GeocodingError
-              ? error.userMessage
-              : "Could not read that map location.",
-          );
-        }
-      } finally {
-        setResolvingCoordinate(false);
+      setField(field, {
+        query: "Looking up address…",
+        point: {
+          displayName: "Looking up address…",
+          latitude,
+          longitude,
+          directionsValue: `${latitude},${longitude}`,
+        },
+      });
+
+      const { displayName, error } = await resolveTappedPlaceName(
+        latitude,
+        longitude,
+      );
+      setField(field, {
+        query: displayName,
+        point: {
+          displayName,
+          latitude,
+          longitude,
+          directionsValue: `${latitude},${longitude}`,
+        },
+      });
+      setActiveField(field === "origin" ? "destination" : "origin");
+      if (error) {
+        setLocationError(error);
       }
+      setResolvingCoordinate(false);
     },
     [activeField, clearSearch, setField],
   );
@@ -273,56 +390,32 @@ export default function PickOnMapScreen() {
         accuracy: Location.Accuracy.Balanced,
       });
       const { latitude, longitude } = current.coords;
-      const point = {
-        displayName: "Getting current location...",
+      focusPoint({
+        displayName: "Current location",
         latitude,
         longitude,
         directionsValue: `${latitude},${longitude}`,
-      };
-      setField("origin", { query: point.displayName, point });
+      });
       setActiveField("destination");
-      focusPoint(point);
-      try {
-        const place = await reverseGeocode(latitude, longitude);
-        if (place) {
-          const displayName = getReadableAddress(place.formattedAddress);
-          setOrigin({
-            query: displayName,
-            point: {
-              displayName,
-              latitude,
-              longitude,
-              directionsValue: `${latitude},${longitude}`,
-            },
-          });
-        } else {
-          setOrigin({
-            query: "Current location",
-            point: {
-              displayName: "Current location",
-              latitude,
-              longitude,
-              directionsValue: `${latitude},${longitude}`,
-            },
-          });
-        }
-      } catch (error) {
-        setOrigin({
-          query: "Current location",
-          point: {
-            displayName: "Current location",
-            latitude,
-            longitude,
-            directionsValue: `${latitude},${longitude}`,
-          },
-        });
-        if (!(error instanceof GeocodingError && error.code === "timeout")) {
-          setLocationError(
-            error instanceof GeocodingError
-              ? error.userMessage
-              : "Could not read your current location address.",
-          );
-        }
+      const { displayName, error } = await resolveTappedPlaceName(
+        latitude,
+        longitude,
+      );
+      setOrigin({
+        query: displayName.startsWith("Pinned location")
+          ? "Current location"
+          : displayName,
+        point: {
+          displayName: displayName.startsWith("Pinned location")
+            ? "Current location"
+            : displayName,
+          latitude,
+          longitude,
+          directionsValue: `${latitude},${longitude}`,
+        },
+      });
+      if (error) {
+        setLocationError(error);
       }
     } catch {
       setField("origin", previousOrigin);
@@ -428,11 +521,58 @@ export default function PickOnMapScreen() {
       map &&
       typeof map.fitToCoordinates === "function"
     ) {
-      map.fitToCoordinates([origin.point, destination.point], {
-        edgePadding: MAP_PADDING,
+      const path =
+        route?.coordinates && route.coordinates.length >= 2
+          ? route.coordinates
+          : [origin.point, destination.point];
+      map.fitToCoordinates(path, {
+        edgePadding: mapPadding,
         animated: true,
       });
     }
+  }, [destination.point, mapPadding, origin.point, route?.coordinates]);
+
+  // Fetch the Google driving route whenever both map points are set.
+  useEffect(() => {
+    if (!origin.point || !destination.point) {
+      setRoute(null);
+      setRouteError(null);
+      setRouteLoading(false);
+      return;
+    }
+
+    const requestId = ++routeRequestId.current;
+    const controller = new AbortController();
+    setRouteLoading(true);
+    setRouteError(null);
+
+    void (async () => {
+      try {
+        const result = await getDrivingRoute(
+          origin.point!.directionsValue,
+          destination.point!.directionsValue,
+          controller.signal,
+        );
+        if (requestId !== routeRequestId.current) return;
+        setRoute(result);
+        setRouteLoading(false);
+      } catch (error) {
+        if (requestId !== routeRequestId.current || controller.signal.aborted) {
+          return;
+        }
+        setRoute(null);
+        setRouteLoading(false);
+        setRouteError(
+          error instanceof DirectionsError
+            ? error.userMessage
+            : "Couldn't load a driving route for those points.",
+        );
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
   }, [destination.point, origin.point]);
 
   if (!isSupabaseConfigured) {
@@ -443,15 +583,10 @@ export default function PickOnMapScreen() {
     );
   }
 
-  const activeLabel =
-    activeField === "origin" ? "start point (A)" : "destination (B)";
-  const activePoint = pointForField(activeField);
-  const placementHint =
-    !activePoint && activeField === "destination" && origin.point
-      ? "Tap again to place your destination (B)."
-      : activePoint
-        ? `Tap the map to replace your ${activeLabel}.`
-        : `Tap map to place your ${activeLabel}.`;
+  const overlayPad = Math.max(horizontalPadding * 0.55, spacing.md);
+  const panelMaxWidth = isWide ? Math.min(420, width * 0.42) : undefined;
+  const bottomSheetMaxWidth = isWide ? Math.min(440, width * 0.44) : undefined;
+
   const renderFieldSuggestions = (field: RouteField) => {
     const fieldQuery = queryForField(field).trim();
     const visible =
@@ -465,20 +600,16 @@ export default function PickOnMapScreen() {
       <View style={styles.suggestions}>
         {search.loading && (
           <View style={styles.searchStatus}>
-            <ActivityIndicator size="small" color={palette.success} />
-            <Text
-              style={[styles.searchStatusText, { color: theme.textSecondary }]}
-            >
+            <ActivityIndicator size="small" color={MARKER_A} />
+            <Text style={[styles.searchStatusText, { color: theme.textSecondary }]}>
               Finding suggestions…
             </Text>
           </View>
         )}
         {resolving && (
           <View style={styles.searchStatus}>
-            <ActivityIndicator size="small" color={palette.success} />
-            <Text
-              style={[styles.searchStatusText, { color: theme.textSecondary }]}
-            >
+            <ActivityIndicator size="small" color={MARKER_A} />
+            <Text style={[styles.searchStatusText, { color: theme.textSecondary }]}>
               Loading exact location…
             </Text>
           </View>
@@ -503,8 +634,7 @@ export default function PickOnMapScreen() {
                 disabled={resolving}
                 style={({ pressed }) => [
                   styles.suggestionRow,
-                  { borderColor: GasTaColors.forestGlow },
-                  pressed && styles.suggestionPressed,
+                  pressed && styles.pressed,
                 ]}
               >
                 <MaterialCommunityIcons
@@ -526,315 +656,488 @@ export default function PickOnMapScreen() {
     );
   };
 
-  return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={[styles.flex, { backgroundColor: theme.background }]}
+  const searchCard = (
+    <View style={[styles.searchCard, panelMaxWidth ? { maxWidth: panelMaxWidth, width: "100%" } : null]}>
+      <View style={styles.fieldRow}>
+        <View style={[styles.fieldBadge, { backgroundColor: MARKER_A }]}>
+          <Text style={styles.fieldBadgeText}>A</Text>
+        </View>
+        <TextInput
+          value={origin.query}
+          onChangeText={(value) => handleQueryChange("origin", value)}
+          onFocus={() => setActiveField("origin")}
+          placeholder="Search start location..."
+          placeholderTextColor={theme.textMuted}
+          style={[styles.input, { color: theme.text }]}
+          returnKeyType="search"
+          autoCorrect={false}
+        />
+        {origin.query.length > 0 && (
+          <Pressable
+            onPress={() => {
+              setOrigin({ query: "", point: null });
+              setActiveField("origin");
+              clearSearch();
+            }}
+            hitSlop={8}
+          >
+            <MaterialCommunityIcons name="close" size={18} color={theme.textMuted} />
+          </Pressable>
+        )}
+      </View>
+      {renderFieldSuggestions("origin")}
+
+      <View style={styles.fieldDivider} />
+
+      <View style={styles.fieldRow}>
+        <View style={[styles.fieldBadge, { backgroundColor: MARKER_B }]}>
+          <Text style={styles.fieldBadgeText}>B</Text>
+        </View>
+        <TextInput
+          value={destination.query}
+          onChangeText={(value) => handleQueryChange("destination", value)}
+          onFocus={() => setActiveField("destination")}
+          placeholder="Search destination..."
+          placeholderTextColor={theme.textMuted}
+          style={[styles.input, { color: theme.text }]}
+          returnKeyType="search"
+          autoCorrect={false}
+        />
+        {destination.query.length > 0 && (
+          <Pressable
+            onPress={() => {
+              setDestination({ query: "", point: null });
+              setActiveField("destination");
+              clearSearch();
+            }}
+            hitSlop={8}
+          >
+            <MaterialCommunityIcons name="close" size={18} color={theme.textMuted} />
+          </Pressable>
+        )}
+      </View>
+      {renderFieldSuggestions("destination")}
+      {locationError ? <Text style={styles.error}>{locationError}</Text> : null}
+    </View>
+  );
+
+  const bottomSheet = (
+    <View
+      style={[
+        styles.bottomSheet,
+        {
+          paddingBottom: Math.max(insets.bottom, spacing.md),
+          maxWidth: bottomSheetMaxWidth,
+          width: isWide ? bottomSheetMaxWidth : "100%",
+          alignSelf: isWide ? "flex-start" : "stretch",
+        },
+      ]}
     >
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={10}
-          style={styles.backButton}
+      <Pressable onPress={() => setActiveField("origin")} style={styles.stepRow}>
+        <View
+          style={[
+            styles.stepBadge,
+            {
+              backgroundColor: origin.point
+                ? MARKER_A
+                : activeField === "origin"
+                  ? MARKER_A
+                  : BrandColors.border,
+            },
+          ]}
         >
-          <MaterialCommunityIcons
-            name="arrow-left"
-            size={22}
-            color={GasTaColors.forest}
+          <Text style={styles.fieldBadgeText}>A</Text>
+        </View>
+        <Text
+          style={[
+            styles.stepText,
+            {
+              color:
+                origin.point || activeField === "origin"
+                  ? GasTaColors.textPrimary
+                  : theme.textMuted,
+              fontWeight: activeField === "origin" ? "700" : "600",
+            },
+          ]}
+          numberOfLines={2}
+        >
+          {origin.point
+            ? `Start · ${origin.point.displayName}`
+            : "Tap map to place your start point"}
+        </Text>
+      </Pressable>
+
+      <Pressable
+        onPress={() => setActiveField("destination")}
+        style={styles.stepRow}
+      >
+        <View
+          style={[
+            styles.stepBadge,
+            {
+              backgroundColor: destination.point
+                ? MARKER_B
+                : activeField === "destination"
+                  ? MARKER_B
+                  : BrandColors.border,
+            },
+          ]}
+        >
+          <Text style={styles.fieldBadgeText}>B</Text>
+        </View>
+        <Text
+          style={[
+            styles.stepText,
+            {
+              color:
+                destination.point || activeField === "destination"
+                  ? GasTaColors.textPrimary
+                  : theme.textMuted,
+              fontWeight: activeField === "destination" ? "700" : "600",
+            },
+          ]}
+          numberOfLines={2}
+        >
+          {destination.point
+            ? `Destination · ${destination.point.displayName}`
+            : "Tap again to place your destination"}
+        </Text>
+        {resolvingCoordinate || routeLoading ? (
+          <ActivityIndicator size="small" color={GasTaColors.forest} />
+        ) : null}
+      </Pressable>
+
+      {bothPointsSet && route && !routeLoading ? (
+        <Text style={[styles.routeMeta, { color: theme.textSecondary }]}>
+          Road route · {route.distanceKm.toFixed(1)} km ·{" "}
+          {Math.round(route.durationMinutes)} min
+        </Text>
+      ) : null}
+      {routeError ? <Text style={styles.error}>{routeError}</Text> : null}
+
+      {bothPointsSet ? (
+        <PrimaryButton
+          label={
+            resolvingCoordinate || resolvingPlaceId || locating || routeLoading
+              ? "Finding road route…"
+              : "Use this route"
+          }
+          onPress={handleApply}
+          disabled={
+            resolvingCoordinate ||
+            resolvingPlaceId !== null ||
+            locating ||
+            routeLoading
+          }
+          style={styles.applyButton}
+        />
+      ) : null}
+    </View>
+  );
+
+  return (
+    <View style={styles.flex}>
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFill}
+        initialRegion={DEFAULT_REGION}
+        onPress={handleMapPress}
+        onRegionChangeComplete={(region) => {
+          regionRef.current = region;
+        }}
+        showsUserLocation
+        showsMyLocationButton={false}
+        showsCompass={false}
+        toolbarEnabled={false}
+        mapPadding={mapPadding}
+      >
+        {route?.coordinates && route.coordinates.length >= 2 ? (
+          <Polyline
+            coordinates={route.coordinates}
+            strokeColor={BrandColors.skyBlue}
+            strokeWidth={5}
+            lineCap="round"
+            lineJoin="round"
           />
-          <Text style={[styles.backText, { color: GasTaColors.forest }]}>
-            Cancel
-          </Text>
-        </Pressable>
-        <View style={styles.headerCopy}>
-          <Text style={[styles.title, { color: theme.text }]}>Pick on Map</Text>
-          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-            Choose your start and destination.
-          </Text>
+        ) : null}
+        {origin.point && (
+          <Marker
+            coordinate={origin.point}
+            title="A · Start"
+            description={origin.point.displayName}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={[styles.marker, { backgroundColor: MARKER_A }]}>
+              <Text style={styles.markerText}>A</Text>
+            </View>
+          </Marker>
+        )}
+        {destination.point && (
+          <Marker
+            coordinate={destination.point}
+            title="B · Destination"
+            description={destination.point.displayName}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={[styles.marker, { backgroundColor: MARKER_B }]}>
+              <Text style={styles.markerText}>B</Text>
+            </View>
+          </Marker>
+        )}
+      </MapView>
+
+      {/* Top: back + search */}
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.topOverlay,
+          {
+            paddingTop: insets.top + spacing.sm,
+            paddingHorizontal: overlayPad,
+          },
+        ]}
+      >
+        <View
+          pointerEvents="box-none"
+          style={[styles.topBar, isWide && styles.topBarWide, { gap: spacing.sm }]}
+        >
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={10}
+            style={({ pressed }) => [styles.backFab, pressed && styles.pressed]}
+          >
+            <MaterialCommunityIcons
+              name="arrow-left"
+              size={22}
+              color={GasTaColors.forest}
+            />
+          </Pressable>
+          {searchCard}
         </View>
       </View>
 
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        style={styles.panel}
-        contentContainerStyle={styles.panelContent}
-        showsVerticalScrollIndicator={false}
+      {/* Right: zoom */}
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.zoomOverlay,
+          { top: insets.top + scale(100), right: overlayPad },
+        ]}
       >
-        <Card style={styles.searchCard} elevated>
-          <View style={styles.fieldRow}>
-            <View
-              style={[styles.fieldBadge, { backgroundColor: palette.success }]}
-            >
-              <Text style={styles.fieldBadgeText}>A</Text>
-            </View>
-            <View style={styles.inputColumn}>
-              <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>
-                Search start location
-              </Text>
-              <TextInput
-                value={origin.query}
-                onChangeText={(value) => handleQueryChange("origin", value)}
-                onFocus={() => setActiveField("origin")}
-                placeholder="e.g. Quezon City Hall, Quezon City"
-                placeholderTextColor={theme.textMuted}
-                style={[
-                  styles.input,
-                  {
-                    color: theme.text,
-                    borderColor: theme.border,
-                    backgroundColor: theme.surface,
-                  },
-                ]}
-                returnKeyType="search"
-                autoCorrect={false}
-              />
-            </View>
-            {origin.query.length > 0 && (
-              <Pressable
-                onPress={() => {
-                  setOrigin({ query: "", point: null });
-                  setActiveField("origin");
-                  clearSearch();
-                }}
-                hitSlop={8}
-              >
-                <MaterialCommunityIcons
-                  name="close-circle"
-                  size={20}
-                  color={theme.textMuted}
-                />
-              </Pressable>
-            )}
-          </View>
-          {renderFieldSuggestions("origin")}
+        <View style={styles.zoomCard}>
+          <Pressable
+            onPress={() => zoomBy(0.55)}
+            style={({ pressed }) => [styles.zoomBtn, pressed && styles.pressed]}
+          >
+            <MaterialCommunityIcons name="plus" size={20} color={GasTaColors.forest} />
+          </Pressable>
+          <View style={styles.zoomDivider} />
+          <Pressable
+            onPress={() => zoomBy(1.8)}
+            style={({ pressed }) => [styles.zoomBtn, pressed && styles.pressed]}
+          >
+            <MaterialCommunityIcons name="minus" size={20} color={GasTaColors.forest} />
+          </Pressable>
+        </View>
+      </View>
 
-          <View style={styles.fieldRow}>
-            <View
-              style={[styles.fieldBadge, { backgroundColor: palette.warning }]}
-            >
-              <Text style={styles.fieldBadgeText}>B</Text>
-            </View>
-            <View style={styles.inputColumn}>
-              <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>
-                Search destination
-              </Text>
-              <TextInput
-                value={destination.query}
-                onChangeText={(value) =>
-                  handleQueryChange("destination", value)
-                }
-                onFocus={() => setActiveField("destination")}
-                placeholder="e.g. Makati Avenue, Makati"
-                placeholderTextColor={theme.textMuted}
-                style={[
-                  styles.input,
-                  {
-                    color: theme.text,
-                    borderColor: theme.border,
-                    backgroundColor: theme.surface,
-                  },
-                ]}
-                returnKeyType="search"
-                autoCorrect={false}
-              />
-            </View>
-            {destination.query.length > 0 && (
-              <Pressable
-                onPress={() => {
-                  setDestination({ query: "", point: null });
-                  setActiveField("destination");
-                  clearSearch();
-                }}
-                hitSlop={8}
-              >
-                <MaterialCommunityIcons
-                  name="close-circle"
-                  size={20}
-                  color={theme.textMuted}
-                />
-              </Pressable>
-            )}
-          </View>
-          {renderFieldSuggestions("destination")}
-
+      {/* Bottom: locate + sheet */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        pointerEvents="box-none"
+        style={[
+          styles.bottomOverlay,
+          {
+            paddingHorizontal: overlayPad,
+            paddingBottom: spacing.sm,
+          },
+        ]}
+      >
+        <View
+          pointerEvents="box-none"
+          style={[styles.bottomStack, isWide && styles.bottomStackWide]}
+        >
           <Pressable
             onPress={handleUseCurrentLocation}
             disabled={locating}
             style={({ pressed }) => [
-              styles.locateRow,
-              {
-                borderColor: GasTaColors.forestGlow,
-                backgroundColor: theme.overlay,
-              },
+              styles.locateBar,
               pressed && styles.pressed,
               locating && styles.disabled,
+              isWide ? { alignSelf: "flex-start", width: 52 } : null,
             ]}
           >
-            <MaterialCommunityIcons
-              name="crosshairs-gps"
-              size={18}
-              color={GasTaColors.forest}
-            />
-            <Text style={[styles.locateText, { color: GasTaColors.forest }]}>
-              {locating
-                ? "Finding your location…"
-                : "Use current location for start"}
-            </Text>
+            {locating ? (
+              <ActivityIndicator size="small" color={GasTaColors.forest} />
+            ) : (
+              <MaterialCommunityIcons
+                name="navigation-variant"
+                size={22}
+                color={GasTaColors.forest}
+              />
+            )}
           </Pressable>
-
-          {locationError && <Text style={styles.error}>{locationError}</Text>}
-        </Card>
-
-        <View style={styles.summary}>
-          <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>
-            Route points
-          </Text>
-          <Text style={[styles.summaryText, { color: theme.text }]}>
-            {origin.point ? "A · Start set" : "A · Tap or search for start"}
-          </Text>
-          <Text style={[styles.summaryText, { color: theme.text }]}>
-            {destination.point
-              ? "B · Destination set"
-              : "B · Tap or search for destination"}
-          </Text>
+          {bottomSheet}
         </View>
-
-        <PrimaryButton
-          label={
-            bothPointsSet
-              ? resolvingCoordinate || resolvingPlaceId || locating
-                ? "Resolving location…"
-                : "Use this route"
-              : "Set both points to continue"
-          }
-          onPress={handleApply}
-          disabled={
-            !bothPointsSet ||
-            resolvingCoordinate ||
-            resolvingPlaceId !== null ||
-            locating
-          }
-          style={styles.applyButton}
-        />
-      </ScrollView>
-
-      <View style={styles.mapWrap}>
-        <MapView
-          ref={mapRef}
-          style={StyleSheet.absoluteFill}
-          initialRegion={DEFAULT_REGION}
-          onPress={handleMapPress}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          toolbarEnabled={false}
-        >
-          {origin.point && (
-            <Marker
-              coordinate={origin.point}
-              title="A · Start"
-              description={origin.point.displayName}
-              anchor={{ x: 0.5, y: 1 }}
-            >
-              <View
-                style={[styles.marker, { backgroundColor: palette.success }]}
-              >
-                <Text style={styles.markerText}>A</Text>
-              </View>
-            </Marker>
-          )}
-          {destination.point && (
-            <Marker
-              coordinate={destination.point}
-              title="B · Destination"
-              description={destination.point.displayName}
-              anchor={{ x: 0.5, y: 1 }}
-            >
-              <View
-                style={[styles.marker, { backgroundColor: palette.warning }]}
-              >
-                <Text style={styles.markerText}>B</Text>
-              </View>
-            </Marker>
-          )}
-        </MapView>
-        <View style={styles.mapHint} pointerEvents="none">
-          <View
-            style={[
-              styles.hintIcon,
-              {
-                backgroundColor:
-                  activeField === "origin" ? palette.success : palette.warning,
-              },
-            ]}
-          >
-            <Text style={styles.hintLetter}>
-              {activeField === "origin" ? "A" : "B"}
-            </Text>
-          </View>
-          <Text style={styles.hintText}>{placementHint}</Text>
-          {resolvingCoordinate && (
-            <ActivityIndicator size="small" color={GasTaColors.forest} />
-          )}
-        </View>
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-    backgroundColor: GasTaColors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: GasTaColors.glassBorderSubtle,
-    zIndex: 3,
-  },
-  backButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginRight: spacing.md,
-  },
-  backText: { fontSize: 15, fontWeight: "700" },
-  headerCopy: { flex: 1 },
-  title: { ...typography.title, fontSize: 23 },
-  subtitle: { ...typography.caption, marginTop: 2 },
-  mapWrap: { flex: 1, minHeight: 240, overflow: "hidden" },
-  mapHint: {
+  flex: { flex: 1, backgroundColor: GasTaColors.cream },
+  topOverlay: {
     position: "absolute",
-    top: spacing.md,
-    left: spacing.md,
-    right: spacing.md,
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 5,
+  },
+  topBar: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  topBarWide: {
+    maxWidth: 520,
+  },
+  backFab: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GasTaColors.white,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  searchCard: {
+    flex: 1,
+    backgroundColor: GasTaColors.white,
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  fieldRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.md,
-    backgroundColor: "rgba(255,255,255,0.94)",
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
+    minHeight: 40,
   },
-  hintIcon: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+  fieldDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: BrandColors.border,
+    marginVertical: spacing.xs,
+    marginLeft: 38,
+  },
+  fieldBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  hintLetter: { color: GasTaColors.white, fontSize: 13, fontWeight: "800" },
-  hintText: {
+  fieldBadgeText: { color: GasTaColors.white, fontSize: 13, fontWeight: "800" },
+  input: {
     flex: 1,
-    color: GasTaColors.forestDark,
+    fontSize: 15,
+    fontWeight: "600",
+    paddingVertical: Platform.OS === "ios" ? 8 : 6,
+  },
+  zoomOverlay: {
+    position: "absolute",
+    zIndex: 5,
+  },
+  zoomCard: {
+    backgroundColor: GasTaColors.white,
+    borderRadius: radii.md,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  zoomBtn: {
+    width: 44,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  zoomDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: BrandColors.border,
+  },
+  bottomOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 5,
+  },
+  bottomStack: {
+    gap: spacing.sm,
+  },
+  bottomStackWide: {
+    alignItems: "flex-start",
+  },
+  locateBar: {
+    alignSelf: "center",
+    width: 52,
+    height: 44,
+    borderRadius: radii.pill,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GasTaColors.white,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  bottomSheet: {
+    backgroundColor: GasTaColors.white,
+    borderRadius: radii.xl,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  stepRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    minHeight: 32,
+  },
+  stepBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  routeMeta: {
     fontSize: 13,
     fontWeight: "700",
+    marginTop: 2,
   },
+  applyButton: { marginTop: spacing.xs },
   marker: {
     width: 32,
     height: 32,
@@ -843,61 +1146,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 3,
     borderColor: GasTaColors.white,
-    shadowColor: GasTaColors.forest,
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 4,
   },
   markerText: { color: GasTaColors.white, fontSize: 14, fontWeight: "800" },
-  panel: {
-    maxHeight: "58%",
-    backgroundColor: GasTaColors.white,
-    borderTopLeftRadius: radii.lg,
-    borderTopRightRadius: radii.lg,
-  },
-  panelContent: { padding: spacing.md, paddingBottom: spacing.xl },
-  searchCard: { padding: spacing.md, marginBottom: spacing.md },
-  fieldRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  fieldBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  fieldBadgeText: { color: GasTaColors.white, fontSize: 14, fontWeight: "800" },
-  inputColumn: { flex: 1 },
-  inputLabel: { ...typography.label, marginBottom: 4 },
-  input: {
-    borderWidth: 1.5,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 11,
-    fontSize: 15,
-  },
-  locateRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderRadius: radii.md,
-    paddingVertical: spacing.sm,
-  },
-  locateText: { fontSize: 14, fontWeight: "700" },
   suggestions: {
-    marginTop: -spacing.xs,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
+    marginTop: spacing.xs,
+    marginBottom: spacing.xs,
     borderRadius: radii.md,
-    backgroundColor: GasTaColors.white,
+    backgroundColor: GasTaColors.creamLight,
     overflow: "hidden",
   },
   suggestionRow: {
@@ -906,22 +1166,18 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: GasTaColors.forestGlow,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: BrandColors.border,
   },
-  suggestionPressed: { opacity: 0.7 },
   suggestionText: { flex: 1, fontSize: 14, fontWeight: "600", lineHeight: 19 },
   searchStatus: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    marginTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   searchStatusText: { fontSize: 13 },
-  summary: { paddingHorizontal: spacing.xs, marginBottom: spacing.md },
-  summaryLabel: { ...typography.label, marginBottom: spacing.xs },
-  summaryText: { fontSize: 14, fontWeight: "600", lineHeight: 21 },
-  applyButton: { marginTop: spacing.xs },
   error: {
     color: palette.danger,
     fontSize: 13,
@@ -929,7 +1185,11 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: spacing.sm,
   },
-  empty: { fontSize: 13, marginTop: spacing.sm },
+  empty: {
+    fontSize: 13,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
   pressed: { opacity: 0.75 },
   disabled: { opacity: 0.5 },
 });

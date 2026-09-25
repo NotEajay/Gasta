@@ -129,8 +129,10 @@ export default function TabLayout() {
   }, [animateTabBar]);
 
   useEffect(() => {
-    resetTabBar();
-  }, [pathname, resetTabBar]);
+    previousOffset.current = 0;
+    const hideForMapPicker = pathname.includes('pick-map');
+    animateTabBar(!hideForMapPicker);
+  }, [pathname, animateTabBar]);
 
   const tabBarStyle = useMemo(
     () => ({
