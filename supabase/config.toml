@@ -26,3 +26,11 @@ site_url = "http://127.0.0.1:3000"
 # also validates the session so auth failures use the DirectionsError contract.
 [functions.google-directions]
 verify_jwt = true
+
+# Location search and reverse lookup use the same server-side key and auth gate.
+[functions.google-geocode]
+verify_jwt = true
+
+# Places Autocomplete uses the same server-side key and auth gate.
+[functions.google-places-autocomplete]
+verify_jwt = true

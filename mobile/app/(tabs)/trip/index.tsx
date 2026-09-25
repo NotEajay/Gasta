@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -29,6 +29,10 @@ import {
   type DirectionsRoute,
 } from '@/lib/services/googleMaps';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import {
+  consumeRouteSelection,
+  type RouteLocation,
+} from '@/lib/services/routeSelection';
 import { useTheme } from '@/lib/useTheme';
 import type { MCDAWeights } from '@/types/mcda';
 import type { Vehicle } from '@/types';
@@ -47,7 +51,11 @@ export default function TripOptimizerScreen() {
   const { user } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
   const [origin, setOrigin] = useState('');
+  const [originLocation, setOriginLocation] = useState<RouteLocation | null>(
+    null,
+  );
   const [destination, setDestination] = useState('');
+  const [destinationRouteValue, setDestinationRouteValue] = useState('');
   const [templateName, setTemplateName] = useState('');
   const [efficiency, setEfficiency] = useState('14');
   const [manualLastRefillPrice, setManualLastRefillPrice] = useState('');
@@ -64,9 +72,26 @@ export default function TripOptimizerScreen() {
   const [lastOptimizeElapsedMs, setLastOptimizeElapsedMs] = useState<number | null>(null);
   const [result, setResult] = useState<ReturnType<typeof calculateTripRecommendation> | null>(null);
 
+  useFocusEffect(
+    useCallback(() => {
+      const selection = consumeRouteSelection();
+      if (!selection) return;
+      setOrigin(selection.origin.displayName);
+      setOriginLocation(selection.origin);
+      setDestination(selection.destination.displayName);
+      setDestinationRouteValue(selection.destination.directionsValue);
+    }, [])
+  );
+
   useEffect(() => {
-    if (params.origin) setOrigin(params.origin);
-    if (params.destination) setDestination(params.destination);
+    if (params.origin) {
+      setOrigin(params.origin);
+      setOriginLocation(null);
+    }
+    if (params.destination) {
+      setDestination(params.destination);
+      setDestinationRouteValue('');
+    }
     if (params.templateName) setTemplateName(params.templateName);
     if (params.vehicleId) {
       setSelectedVehicleId(params.vehicleId === 'manual' ? 'manual' : params.vehicleId);
@@ -157,12 +182,14 @@ export default function TripOptimizerScreen() {
     setRouteDurationMinutes(null);
     setLastOptimizeElapsedMs(null);
   }, [
-    origin,
     destination,
+    destinationRouteValue,
     efficiency,
-    manualLastRefillPrice,
-    lastRefillPrice,
     hasRegisteredVehicles,
+    lastRefillPrice,
+    manualLastRefillPrice,
+    origin,
+    originLocation,
     selectedVehicleId,
     weights,
   ]);
@@ -186,6 +213,10 @@ export default function TripOptimizerScreen() {
         setRouteError('Enter both an origin and a destination before optimizing.');
         return;
       }
+      const originForDirections = originLocation
+        ? `${originLocation.latitude},${originLocation.longitude}`
+        : origin;
+      const destinationForDirections = destinationRouteValue || destination;
 
       const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
       const price = lastRefillPrice;
@@ -211,7 +242,7 @@ export default function TripOptimizerScreen() {
         return;
       }
 
-      routeResult = await getDrivingRoute(origin, destination);
+      routeResult = await getDrivingRoute(originForDirections, destinationForDirections);
       if (requestId !== optimizeRequestId.current) return;
 
       setRouteDistanceKm(routeResult.distanceKm);
@@ -251,11 +282,13 @@ export default function TripOptimizerScreen() {
     }
   }, [
     destination,
+    destinationRouteValue,
     efficiency,
     hasRegisteredVehicles,
     lastRefillPrice,
     optimizing,
     origin,
+    originLocation,
     selectedVehicle,
     weights,
   ]);
@@ -391,8 +424,38 @@ export default function TripOptimizerScreen() {
       />
 
       <FormSection title="Route" subtitle="Enter specific locations; route data is retrieved on Optimize" module="trip">
-        <LabeledInput label="Origin" value={origin} onChangeText={setOrigin} placeholder="e.g. Quezon City Hall, Quezon City" />
-        <LabeledInput label="Destination" value={destination} onChangeText={setDestination} placeholder="e.g. Makati Avenue, Makati" />
+        <LabeledInput
+          label="Origin"
+          value={origin}
+          onChangeText={(value) => {
+            setOrigin(value);
+            setOriginLocation(null);
+          }}
+          placeholder="e.g. Quezon City Hall, Quezon City"
+        />
+        <LabeledInput
+          label="Destination"
+          value={destination}
+          onChangeText={(value) => {
+            setDestination(value);
+            setDestinationRouteValue('');
+          }}
+          placeholder="e.g. Makati Avenue, Makati"
+        />
+        <PrimaryButton
+          label="Pick on Map"
+          variant="secondary"
+          onPress={() =>
+            router.push({
+              pathname: '/(tabs)/trip/pick-map' as never,
+              params: {
+                origin: origin.trim() || undefined,
+                destination: destination.trim() || undefined,
+              },
+            })
+          }
+          style={styles.pickMapBtn}
+        />
         {routeDistanceKm != null && routeDurationMinutes != null && (
           <View style={[styles.routeSummary, { backgroundColor: theme.overlay }]}>
             <Text style={[styles.meta, { color: theme.textSecondary }]}>Google Maps route</Text>
@@ -567,4 +630,5 @@ const styles = StyleSheet.create({
   timing: { fontSize: 12, marginTop: spacing.xs },
   error: { color: palette.danger, marginBottom: spacing.sm, fontWeight: '700' },
   actionBtn: { marginTop: spacing.sm },
+  pickMapBtn: { marginBottom: spacing.sm },
 });

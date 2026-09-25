@@ -25,6 +25,12 @@
       "expo-router",
       "expo-web-browser",
       [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow GasTa! to use your location to set your trip start."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash.png",
