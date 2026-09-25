@@ -106,6 +106,41 @@ https://xzslsklecloqiitcirtw.supabase.co/auth/v1/callback
 3. Paste the **new** Client ID and Client secret (replace any old values)
 4. Save
 
+#### How people use GasTa (no Apple Developer needed)
+
+**End users never log into an Apple Developer account.** That account is only for *you* later if you publish to the App Store.
+
+### Test on Expo Go first (recommended while building)
+
+1. **Unpause Vercel** so `https://gasta-kappa.vercel.app` loads (needed for Google return URL).
+2. Supabase Redirect URLs include `https://gasta-kappa.vercel.app/**` and Site URL is that same URL with `https://`.
+3. From `mobile/`:
+   ```bash
+   npm run start:go
+   ```
+   Same Wi‑Fi as the phone, or use tunnel if LAN fails: `npx expo start --tunnel`.
+4. Open **Expo Go** → scan QR → test the app.
+5. **Google:** Continue with Google → after account pick, the sheet should close back into Expo Go (callback is the live site, not localhost).
+6. **Email:** works without Vercel.
+
+| Who | Easiest access | Google login |
+|-----|----------------|--------------|
+| Anyone (Windows / iPhone / Android) | Open **https://gasta-kappa.vercel.app** | Works in the browser |
+| You while coding | **Expo Go** + live Vercel as OAuth return | Needs Vercel **unpaused** |
+| Optional later | Installable Android APK / App Store iOS | Native `gasta://` (Apple Dev only for *publishing* iOS) |
+
+### Optional later: native install (App Store / Play Store)
+
+Only the **developer** needs Apple/Google publisher accounts. Downloaders use the store like any other app.
+
+```bash
+# Android APK (no Apple account)
+npm run build:dev:android
+
+# iOS App Store / device IPA (Apple Developer account required for YOU, not for users)
+npm run build:dev:ios
+```
+
 #### C. Allow app redirect URLs (all devices)
 
 **Authentication → URL Configuration → Redirect URLs** — add:
@@ -116,14 +151,19 @@ exp://**
 https://*.exp.direct/**
 http://localhost:8081/**
 http://127.0.0.1:8081/**
+https://gasta-kappa.vercel.app/**
 ```
 
-Also add your production web origin if you deploy (e.g. `https://your-app.vercel.app/**`).
+Site URL (required for Google on phone + web):
 
-Site URL can stay your primary web URL (or `http://localhost:8081` for local web).
+```text
+https://gasta-kappa.vercel.app
+```
+
+Keep Vercel **unpaused** while testing Google from Expo Go or sharing the link with others.
 
 **Must include the scheme** (`https://` or `http://`).  
-Wrong: `gasta-kappa.vercel.app` → causes `{"error":"requested path is invalid"}` on `….supabase.co/gasta-kappa.vercel.app`.  
+Wrong: `gasta-kappa.vercel.app` → `requested path is invalid`.  
 Right: `https://gasta-kappa.vercel.app`
 
 #### D. Allow anyone to use Google (not only test users)

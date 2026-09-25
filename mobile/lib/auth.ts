@@ -29,28 +29,35 @@ function getRedirectUrl() {
   return Linking.createURL('/');
 }
 
+function looksLikeLanIp(url: string) {
+  return /\d{1,3}(\.\d{1,3}){3}/.test(url);
+}
+
+/**
+ * OAuth return URL (Google-first, no Apple Developer required):
+ * - Web: current origin (Vercel / localhost)
+ * - Expo Go / phone: https://EXPO_PUBLIC_SITE_URL/auth/callback (live web app)
+ * - Future native install (optional): gasta://auth/callback
+ */
 export function getOAuthRedirectUrl() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     return `${window.location.origin}/auth/callback`;
   }
 
-  // Expo Go often produces exp://LAN-IP/… redirects. Supabase may reject those and
-  // fall back to Site URL — if Site URL lacks https:// you get
-  // {"error":"requested path is invalid"} on *.supabase.co/<host>.
-  // Prefer the deployed HTTPS callback (captured by openAuthSessionAsync).
-  if (Constants.appOwnership === 'expo' && PUBLIC_SITE_URL.startsWith('http')) {
+  // Prefer live HTTPS app URL so Google works in Expo Go without an Apple/EAS install.
+  if (PUBLIC_SITE_URL.startsWith('https://')) {
     return `${PUBLIC_SITE_URL}/auth/callback`;
   }
 
-  const fromLinking = Linking.createURL('auth/callback', { scheme: 'gasta' });
-  if (fromLinking) {
-    return fromLinking;
+  // Optional: custom native build with scheme registered on the app.
+  if (Constants.appOwnership !== 'expo') {
+    return 'gasta://auth/callback';
   }
 
-  return makeRedirectUri({
-    scheme: 'gasta',
-    path: 'auth/callback',
-  });
+  return (
+    makeRedirectUri({ scheme: 'gasta', path: 'auth/callback' }) ||
+    Linking.createURL('auth/callback', { scheme: 'gasta' })
+  );
 }
 
 function withRedirectTo(oauthUrl: string, redirectTo: string) {
@@ -125,14 +132,23 @@ export async function createSessionFromUrl(url: string | null): Promise<AuthResu
       }
 
       if (usedAuthCodes.has(code)) {
-        const waited = await waitForSession(2500);
+        const waited = await waitForSession(800);
         return { error: waited ? null : 'Sign-in did not finish. Try again.', session: waited };
       }
 
       usedAuthCodes.add(code);
       const { data, error } = await supabase.auth.exchangeCodeForSession(code);
       if (error) {
-        const waited = await waitForSession(2500);
+        const message = error.message.toLowerCase();
+        if (
+          message.includes('verifier') ||
+          message.includes('pkce') ||
+          message.includes('code challenge')
+        ) {
+          return { error: null, session: null };
+        }
+
+        const waited = await waitForSession(800);
         if (waited) {
           return { error: null, session: waited };
         }
@@ -143,10 +159,10 @@ export async function createSessionFromUrl(url: string | null): Promise<AuthResu
     })().finally(() => {
       setTimeout(() => {
         oauthCompletion = null;
-      }, 1000);
+      }, 500);
     });
 
-    return withTimeout(oauthCompletion, 8000, {
+    return withTimeout(oauthCompletion, 5000, {
       error: 'Sign-in is taking too long. Try again.',
       session: null,
     });
@@ -198,7 +214,27 @@ export async function signInWithGoogle(): Promise<AuthResult> {
   }
 
   try {
+    if (Platform.OS !== 'web') {
+      void WebBrowser.warmUpAsync();
+    }
+
     const redirectTo = getOAuthRedirectUrl();
+
+    if (__DEV__) {
+      console.log('[auth] OAuth redirectTo =', redirectTo);
+    }
+
+    if (
+      Platform.OS !== 'web' &&
+      !redirectTo.startsWith('https://') &&
+      !redirectTo.startsWith('gasta://')
+    ) {
+      return {
+        error:
+          'Google sign-in needs a live web app. Set EXPO_PUBLIC_SITE_URL=https://gasta-kappa.vercel.app and unpause Vercel, or use email sign-in.',
+      };
+    }
+
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
@@ -222,11 +258,19 @@ export async function signInWithGoogle(): Promise<AuthResult> {
       showInRecents: true,
     });
 
+    if (Platform.OS === 'android') {
+      void WebBrowser.coolDownAsync();
+    }
+
     if (result.type === 'success' && result.url) {
       return createSessionFromUrl(result.url);
     }
 
     if (result.type === 'cancel' || result.type === 'dismiss') {
+      const waited = await waitForSession(3000);
+      if (waited) {
+        return { error: null, session: waited };
+      }
       return { error: null };
     }
 
@@ -284,8 +328,6 @@ function looksLikeExistingAccount(user: User | null): boolean {
     return false;
   }
 
-  // With email confirmation enabled, Supabase returns a user with no identities
-  // instead of an error when the email is already registered.
   return Array.isArray(user.identities) && user.identities.length === 0;
 }
 

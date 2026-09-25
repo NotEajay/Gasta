@@ -9,7 +9,11 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.gasta.app",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "CFBundleAllowMixedLocalizations": true,
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.gasta.app",
@@ -19,10 +23,28 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "gasta",
+              "host": "*",
+              "pathPrefix": "/"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
       "expo-web-browser",
       [
         "expo-splash-screen",
@@ -31,7 +53,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#F8F0E5"
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
@@ -39,6 +63,13 @@
     "web": {
       "bundler": "metro",
       "output": "static"
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d74ca585-f61f-4238-b902-85f6c18be5dd"
+      }
+    },
+    "owner": "eajay"
   }
 }

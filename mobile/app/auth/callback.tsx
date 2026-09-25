@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { useGlobalSearchParams, useRouter, type Href } from 'expo-router';
 import * as Linking from 'expo-linking';
@@ -20,9 +20,16 @@ export default function AuthCallbackScreen() {
     error_description?: string;
   }>();
   const started = useRef(false);
+  const [statusText, setStatusText] = useState('Signing you in…');
 
   useEffect(() => {
-    WebBrowser.maybeCompleteAuthSession();
+    // If this page was opened inside Expo's auth browser, close it and let the
+    // native app finish PKCE exchange (it has the code verifier).
+    const completion = WebBrowser.maybeCompleteAuthSession();
+    if (completion.type === 'success') {
+      setStatusText('Returning to the app…');
+      return;
+    }
 
     if (started.current) {
       return;
@@ -61,15 +68,20 @@ export default function AuthCallbackScreen() {
         return;
       }
 
-      const message = result.error ?? 'Sign-in did not finish. Try again.';
-      router.replace(`/(auth)?error=${encodeURIComponent(message)}` as Href);
+      if (!result.error) {
+        // Native Expo Go owns the verifier — don't spin forever in the browser.
+        setStatusText('You can close this window and return to GasTa.');
+        return;
+      }
+
+      router.replace(`/(auth)?error=${encodeURIComponent(result.error)}` as Href);
     })();
   }, [params.code, params.error, params.error_description, router]);
 
   return (
     <View style={styles.container}>
       <ActivityIndicator color={GasTaColors.forest} size="large" />
-      <Text style={styles.text}>Signing you in…</Text>
+      <Text style={styles.text}>{statusText}</Text>
     </View>
   );
 }
@@ -81,9 +93,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
     backgroundColor: GasTaColors.cream,
+    paddingHorizontal: 24,
   },
   text: {
     color: GasTaColors.textMuted,
     fontWeight: '600',
+    textAlign: 'center',
   },
 });
