@@ -46,8 +46,8 @@ export function getOAuthRedirectUrl() {
   const nativeReturn = getNativeOAuthReturnUrl();
 
   if (PUBLIC_SITE_URL.startsWith('https://')) {
-    // Must be an allow-listed HTTPS URL. Page JS (and oauth-bridge.html) deep-link to Expo Go.
-    return `${PUBLIC_SITE_URL}/auth/callback?native=${encodeURIComponent(nativeReturn)}`;
+    // Static bridge page (no React). Deep-links into Expo Go with the OAuth code.
+    return `${PUBLIC_SITE_URL}/oauth-bridge.html?native=${encodeURIComponent(nativeReturn)}`;
   }
 
   return nativeReturn;

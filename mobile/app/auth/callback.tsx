@@ -42,6 +42,24 @@ export default function AuthCallbackScreen() {
   const [statusText, setStatusText] = useState('Signing you in…');
 
   useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      try {
+        const current = new URL(window.location.href);
+        const native = current.searchParams.get('native');
+        if (native) {
+          const dest = new URL(native);
+          current.searchParams.forEach((value, key) => {
+            if (key === 'native') return;
+            dest.searchParams.set(key, value);
+          });
+          window.location.replace(dest.toString());
+          return;
+        }
+      } catch {
+        // continue with normal callback
+      }
+    }
+
     const tryClose = () => {
       const completion = WebBrowser.maybeCompleteAuthSession();
       if (completion.type === 'success') {

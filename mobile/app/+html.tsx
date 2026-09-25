@@ -14,7 +14,7 @@ export default function Root({ children }: { children: ReactNode }) {
         <ScrollViewStyleReset />
 
         <style dangerouslySetInnerHTML={{ __html: responsiveBackground }} />
-        {/* Expo Go OAuth: deep-link back before React hydrates (avoids stuck spinner). */}
+        {/* Expo Go OAuth: deep-link back before React hydrates. */}
         <script dangerouslySetInnerHTML={{ __html: authNativeBridge }} />
       </head>
       <body>{children}</body>
@@ -28,29 +28,26 @@ body {
 }`;
 
 /**
- * If Supabase redirected to Vercel with ?native=exp://...&code=...,
- * immediately open Expo Go. Runs before the React "Signing you in…" UI.
+ * If Supabase redirected with ?native=exp://...&code=..., open Expo Go immediately.
+ * Do NOT replace documentElement.innerHTML — that aborts the script and dumps JS as text.
  */
 const authNativeBridge = `
 (function () {
   try {
-    var params = new URLSearchParams(window.location.search || '');
-    var native = params.get('native');
+    var params = new URLSearchParams(window.location.search || "");
+    var native = params.get("native");
     if (!native) return;
 
     var dest = new URL(native);
     params.forEach(function (value, key) {
-      if (key === 'native') return;
+      if (key === "native") return;
       dest.searchParams.set(key, value);
     });
     if (window.location.hash && window.location.hash.length > 1) {
       dest.hash = window.location.hash;
     }
 
-    document.documentElement.innerHTML =
-      '<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F8F0E5;color:#014421;font-family:system-ui,sans-serif;font-weight:600;text-align:center;padding:24px">Returning to GasTa…</body>';
-
     window.location.replace(dest.toString());
-  } catch (e) {}
+  } catch (err) {}
 })();
 `;

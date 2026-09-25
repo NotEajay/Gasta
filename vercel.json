@@ -4,9 +4,10 @@
   "installCommand": "npm install --prefix mobile",
   "buildCommand": "npm run build:web --prefix mobile",
   "outputDirectory": "mobile/dist",
-  "routes": [
-    { "src": "/oauth-bridge.html", "dest": "/oauth-bridge.html" },
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/index.html" }
+  "rewrites": [
+    {
+      "source": "/((?!oauth-bridge\\.html|_expo/|assets/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
