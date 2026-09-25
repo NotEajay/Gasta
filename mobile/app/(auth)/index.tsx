@@ -141,19 +141,28 @@ export default function AuthScreen() {
   const handleGoogleAuth = async () => {
     setError(null);
     setGoogleLoading(true);
-    const result = await signInWithGoogle();
-    setGoogleLoading(false);
+    try {
+      const result = await signInWithGoogle();
 
-    if (result.error) {
-      setError(result.error);
-      return;
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      if (result.pendingRedirect) {
+        return;
+      }
+
+      if (result.session) {
+        goHome();
+        return;
+      }
+
+      // Session may land via onAuthStateChange a moment after the browser closes.
+      goHome();
+    } finally {
+      setGoogleLoading(false);
     }
-
-    if (result.pendingRedirect) {
-      return;
-    }
-
-    goHome();
   };
 
   return (

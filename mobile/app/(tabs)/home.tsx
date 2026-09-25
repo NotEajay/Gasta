@@ -9,7 +9,7 @@ import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import LoadingState from '@/components/ui/LoadingState';
 import { HomeColors } from '@/constants/home';
-import { BrandColors, radii, shadow, spacing } from '@/constants/Theme';
+import { GasTaColors, radii, shadow, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate, transportModeLabel } from '@/lib/format';
@@ -172,7 +172,7 @@ export default function HomeScreen() {
           <View style={styles.brandCopy}>
             <Text style={styles.brandName}>
               <Text style={styles.brandPrimary}>Gas</Text>
-              <Text style={styles.brandNavy}>ta!</Text>
+              <Text style={styles.brandForest}>ta!</Text>
             </Text>
             <Text style={styles.greeting}>
               {getGreeting()}, {firstName}
@@ -200,11 +200,11 @@ export default function HomeScreen() {
         <View style={[styles.statCard, shadow(theme.scheme, 'sm')]}>
           <View style={styles.statLabelRow}>
             <View style={styles.statIconNavy}>
-              <Ionicons name="wallet-outline" size={15} color={BrandColors.navy} />
+              <Ionicons name="wallet-outline" size={15} color={GasTaColors.forest} />
             </View>
             <Text style={styles.statLabel}>Budget left this month</Text>
           </View>
-          <Text style={[styles.statValue, { color: BrandColors.navy }, !budget?.hasBudget && styles.emptyValue]}>
+          <Text style={[styles.statValue, { color: GasTaColors.forest }, !budget?.hasBudget && styles.emptyValue]}>
             {budgetValue}
           </Text>
           <Text style={styles.statMeta} numberOfLines={2}>
@@ -296,9 +296,9 @@ const styles = StyleSheet.create({
     letterSpacing: -0.8,
   },
   brandPrimary: { color: HomeColors.primary },
-  brandNavy: { color: BrandColors.navy },
+  brandForest: { color: GasTaColors.forest },
   greeting: {
-    color: BrandColors.muted,
+    color: GasTaColors.textMuted,
     fontSize: 13,
     lineHeight: 19,
     marginTop: 2,
@@ -314,7 +314,7 @@ const styles = StyleSheet.create({
     minHeight: 154,
     padding: spacing.md,
     borderRadius: radii.md,
-    backgroundColor: BrandColors.white,
+    backgroundColor: GasTaColors.white,
   },
   statLabelRow: {
     flexDirection: 'row',
@@ -336,12 +336,12 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: BrandColors.navySoft,
+    backgroundColor: GasTaColors.forestGlow,
     marginRight: spacing.xs,
   },
   statLabel: {
     flex: 1,
-    color: BrandColors.muted,
+    color: GasTaColors.textMuted,
     fontSize: 11,
     lineHeight: 15,
     fontWeight: '700',
@@ -360,13 +360,13 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
   },
   statMeta: {
-    color: BrandColors.muted,
+    color: GasTaColors.textMuted,
     fontSize: 12,
     lineHeight: 17,
     marginTop: spacing.xs,
   },
   sectionLabel: {
-    color: BrandColors.muted,
+    color: GasTaColors.textMuted,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
@@ -383,7 +383,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     borderWidth: 1.5,
     borderColor: HomeColors.primaryBorder,
-    backgroundColor: BrandColors.white,
+    backgroundColor: GasTaColors.white,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -394,7 +394,7 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   actionText: {
-    color: BrandColors.navy,
+    color: GasTaColors.forest,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -403,17 +403,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xl,
     borderRadius: radii.md,
-    backgroundColor: BrandColors.white,
+    backgroundColor: GasTaColors.white,
   },
   emptyTitle: {
-    color: BrandColors.navy,
+    color: GasTaColors.forest,
     fontSize: 16,
     lineHeight: 21,
     fontWeight: '800',
     marginTop: spacing.sm,
   },
   emptyMessage: {
-    color: BrandColors.muted,
+    color: GasTaColors.textMuted,
     fontSize: 13,
     lineHeight: 19,
     textAlign: 'center',
@@ -421,7 +421,7 @@ const styles = StyleSheet.create({
   },
   activityCard: {
     borderRadius: radii.md,
-    backgroundColor: BrandColors.white,
+    backgroundColor: GasTaColors.white,
     paddingHorizontal: spacing.md,
   },
   activityRow: {
@@ -431,7 +431,7 @@ const styles = StyleSheet.create({
   },
   activityDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: BrandColors.border,
+    borderBottomColor: GasTaColors.glassBorderSubtle,
   },
   activityIcon: {
     width: 38,
@@ -444,13 +444,13 @@ const styles = StyleSheet.create({
   },
   activityCopy: { flex: 1, minWidth: 0 },
   activityTitle: {
-    color: BrandColors.navy,
+    color: GasTaColors.forest,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '800',
   },
   activitySubtitle: {
-    color: BrandColors.muted,
+    color: GasTaColors.textMuted,
     fontSize: 12,
     lineHeight: 17,
     marginTop: 2,

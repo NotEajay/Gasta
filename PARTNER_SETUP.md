@@ -68,7 +68,7 @@ npm run android
 **Or Expo Go on a physical phone** (same Wi‑Fi):
 
 ```bash
-npx expo start
+npx expo start --go
 ```
 
 Scan the QR code with Expo Go.
@@ -106,6 +106,41 @@ https://xzslsklecloqiitcirtw.supabase.co/auth/v1/callback
 3. Paste the **new** Client ID and Client secret (replace any old values)
 4. Save
 
+#### How people use GasTa (no Apple Developer needed)
+
+**End users never log into an Apple Developer account.** That account is only for *you* later if you publish to the App Store.
+
+### Test on Expo Go first (recommended while building)
+
+1. Supabase → **Authentication → URL Configuration**:
+   - **Site URL:** `https://gasta-kappa.vercel.app` (must include `https://`)
+   - **Redirect URLs** include: `https://gasta-kappa.vercel.app/**` (and `exp://**` is fine too)
+2. From `mobile/`:
+   ```bash
+   npx expo start
+   ```
+   Press **s** if it says development build, so it shows **Expo Go**. Same Wi‑Fi as the phone.
+3. Open **Expo Go** → scan QR → test Google.
+4. Flow: Google → short Vercel bridge → back into Expo Go (should not stay on “Signing you in…”).
+
+| Who | Easiest access | Google login |
+|-----|----------------|--------------|
+| Anyone (Windows / iPhone / Android) | Open **https://gasta-kappa.vercel.app** | Works in the browser |
+| You while coding | **Expo Go** (`npx expo start`) | Needs Vercel live + Site URL with `https://` |
+| Optional later | Installable Android APK / App Store iOS | Native `gasta://` (Apple Dev only for *publishing* iOS) |
+
+### Optional later: native install (App Store / Play Store)
+
+Only the **developer** needs Apple/Google publisher accounts. Downloaders use the store like any other app.
+
+```bash
+# Android APK (no Apple account)
+npm run build:dev:android
+
+# iOS App Store / device IPA (Apple Developer account required for YOU, not for users)
+npm run build:dev:ios
+```
+
 #### C. Allow app redirect URLs (all devices)
 
 **Authentication → URL Configuration → Redirect URLs** — add:
@@ -116,14 +151,19 @@ exp://**
 https://*.exp.direct/**
 http://localhost:8081/**
 http://127.0.0.1:8081/**
+https://gasta-kappa.vercel.app/**
 ```
 
-Also add your production web origin if you deploy (e.g. `https://your-app.vercel.app/**`).
+Site URL (required for Google on phone + web):
 
-Site URL can stay your primary web URL (or `http://localhost:8081` for local web).
+```text
+https://gasta-kappa.vercel.app
+```
+
+Keep Vercel **unpaused** while testing Google from Expo Go or sharing the website.
 
 **Must include the scheme** (`https://` or `http://`).  
-Wrong: `gasta-kappa.vercel.app` → causes `{"error":"requested path is invalid"}` on `….supabase.co/gasta-kappa.vercel.app`.  
+Wrong: `gasta-kappa.vercel.app` → `requested path is invalid`.  
 Right: `https://gasta-kappa.vercel.app`
 
 #### D. Allow anyone to use Google (not only test users)
@@ -187,8 +227,9 @@ See `docs/PROJECT_CONTEXT.md`, `mobile/AGENTS.md`, and `mobile/README.md` before
 | Empty fuel prices | Confirm `.env` is correct; check Supabase Table Editor for `fuel_prices` rows |
 | Login fails | Enable Email auth in Supabase; disable email confirmation for dev if needed |
 | Google `deleted_client` / Authorization Error | Recreate **Web** OAuth client in Google Cloud; paste new ID/secret into Supabase Auth → Google (see §5) |
-| Google `requested path is invalid` on phone | Site URL must be `https://gasta-kappa.vercel.app` (with https). Add that host under Redirect URLs. Expo Go also needs `EXPO_PUBLIC_SITE_URL` in `mobile/.env`, then restart Expo. |
-| Google works on web, not phone | Add `gasta://**`, `exp://**`, and `https://*.exp.direct/**` under Supabase Redirect URLs; prefer `npx expo start --tunnel` |
+| Google `requested path is invalid` | Site URL must be exactly `https://gasta-kappa.vercel.app`. Keep `exp://**` under Redirect URLs. Restart Expo. |
+| Google works on web, not phone | Same Site URL + `exp://**`; same Wi‑Fi; `npx expo start`. |
+| Stuck on Vercel “Signing you in…” | Old HTTPS return. Restart Expo so the app uses `exp://` return (not Vercel). Confirm Site URL has `https://`. |
 | Supabase not configured banner | Create `mobile/.env` from `.env.example` |
 | Trip optimizer shows no results | Set a last-refill price on your vehicle (My Vehicles tab) |
 | Vehicle save column error | Run the last-refill migration SQL above |

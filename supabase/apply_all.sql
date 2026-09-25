@@ -243,7 +243,6 @@ insert into public.oil_companies (name, slug) values
   ('My Gas', 'my-gas')
 on conflict (slug) do nothing;
 
-<<<<<<< Updated upstream
 -- Distinct DOE bulletin weeks per region (migration 20240812000007)
 create or replace view public.region_bulletin_weeks as
 select
@@ -260,7 +259,7 @@ join public.regions r on r.id = fp.region_id
 group by fp.region_id, r.code, b.id, b.bulletin_date, b.data_freshness_days, b.last_loaded_at;
 
 grant select on public.region_bulletin_weeks to anon, authenticated;
-=======
+
 insert into public.fuel_price_bulletins (bulletin_date, notes) values
   ('2026-08-05', 'Dev sample — current week'),
   ('2026-07-29', 'Dev sample — prior week for trend')
@@ -307,7 +306,6 @@ join public.fuel_price_bulletins b on b.id = fp.bulletin_id
 join public.fuel_price_bulletins prior_b on prior_b.bulletin_date = '2026-07-29'
 where b.bulletin_date = '2026-08-05'
 on conflict (bulletin_id, region_id, oil_company_id, fuel_type_id) do nothing;
->>>>>>> Stashed changes
 
 insert into public.vehicle_catalog (brand, model, year, fuel_type_id, fuel_efficiency_km_per_liter)
 select 'Toyota', 'Vios', 2022, ft.id, 14.5 from public.fuel_types ft where ft.code = 'RON_91'

@@ -3,7 +3,7 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Platform, StyleSheet, View, ViewProps } from 'react-native';
 
-import { BrandColors, GasTaColors, GasTaRadius } from '@/constants/Theme';
+import { GasTaColors, GasTaRadius } from '@/constants/Theme';
 
 type GlassSurfaceProps = ViewProps & {
   intensity?: number;
@@ -102,8 +102,8 @@ export function AuthBackground({ children, canvas = 'cream' }: AuthBackgroundPro
       <LinearGradient
         colors={
           isWhite
-            ? [BrandColors.white, '#EEF5FC', BrandColors.offWhite]
-            : [BrandColors.offWhite, '#EAF3FB', BrandColors.white]
+            ? [GasTaColors.white, GasTaColors.white, GasTaColors.white]
+            : [GasTaColors.creamLight, GasTaColors.cream, GasTaColors.creamDark]
         }
         locations={[0, 0.5, 1]}
         style={StyleSheet.absoluteFill}
@@ -111,9 +111,9 @@ export function AuthBackground({ children, canvas = 'cream' }: AuthBackgroundPro
 
       <LinearGradient
         colors={[
-          'rgba(74, 144, 217, 0)',
+          'rgba(1, 68, 33, 0)',
           GasTaColors.forestGlow,
-          'rgba(74, 144, 217, 0)',
+          'rgba(1, 68, 33, 0)',
         ]}
         locations={[0, 0.46, 1]}
         start={{ x: 0.5, y: 0 }}
@@ -132,8 +132,8 @@ export function AuthBackground({ children, canvas = 'cream' }: AuthBackgroundPro
       <LinearGradient
         colors={
           isWhite
-            ? ['rgba(255,255,255,0)', 'rgba(74,144,217,0.12)', BrandColors.offWhite]
-            : ['rgba(74,144,217,0)', 'rgba(74,144,217,0.10)', BrandColors.offWhite]
+            ? ['rgba(255,255,255,0)', 'rgba(255,255,255,0.4)', GasTaColors.white]
+            : ['rgba(248,240,229,0)', 'rgba(248,240,229,0.35)', GasTaColors.cream]
         }
         locations={[0, 0.7, 1]}
         style={bgStyles.vignette}
@@ -166,14 +166,14 @@ const bgStyles = StyleSheet.create({
     height: 240,
     bottom: 80,
     left: -90,
-    backgroundColor: BrandColors.skySoft,
+    backgroundColor: 'rgba(1, 68, 33, 0.08)',
   },
   orbPomelo: {
     width: 200,
     height: 200,
     top: '35%',
     right: '15%',
-    backgroundColor: 'rgba(169, 212, 245, 0.55)',
+    backgroundColor: 'rgba(248, 240, 229, 0.85)',
   },
   vignette: {
     ...StyleSheet.absoluteFill,
