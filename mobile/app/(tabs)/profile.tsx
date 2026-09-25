@@ -9,7 +9,7 @@ import FormSection from '@/components/ui/FormSection';
 import LoadingState from '@/components/ui/LoadingState';
 import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import { BrandColors, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: spacing.md,
     borderWidth: 1,
-    borderColor: BrandColors.border,
+    borderColor: GasTaColors.glassBorderSubtle,
   },
   avatarText: {
     fontSize: 22,
