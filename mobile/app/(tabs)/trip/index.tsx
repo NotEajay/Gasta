@@ -54,6 +54,7 @@ export default function TripOptimizerScreen() {
   const [loading, setLoading] = useState(true);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [loggingHistory, setLoggingHistory] = useState(false);
+  const [result, setResult] = useState<ReturnType<typeof calculateTripRecommendation> | null>(null);
 
   useEffect(() => {
     if (params.origin) setOrigin(params.origin);
@@ -87,17 +88,20 @@ export default function TripOptimizerScreen() {
         return;
       }
       try {
-        if (user) {
-          const list = await fetchVehicles(user.id);
-          setVehicles(list);
-          const paramVehicle =
-            params.vehicleId && params.vehicleId !== 'manual' ? params.vehicleId : null;
-          if (paramVehicle && list.some((v) => v.id === paramVehicle)) {
-            setSelectedVehicleId(paramVehicle);
-          } else if (!params.vehicleId && list[0]) {
-            setSelectedVehicleId(list[0].id);
-          }
+        if (!user) {
+          setVehicles([]);
+          setSelectedVehicleId('manual');
+          return;
         }
+        const list = await fetchVehicles(user.id);
+        setVehicles(list);
+        const paramVehicle =
+          params.vehicleId && params.vehicleId !== 'manual' ? params.vehicleId : null;
+        const nextVehicle =
+          paramVehicle && list.some((vehicle) => vehicle.id === paramVehicle)
+            ? paramVehicle
+            : list[0]?.id ?? 'manual';
+        setSelectedVehicleId(nextVehicle);
       } finally {
         setLoading(false);
       }
@@ -105,42 +109,98 @@ export default function TripOptimizerScreen() {
     load();
   }, [user, params.vehicleId]);
 
-  const selectedVehicle = vehicles.find((v) => v.id === selectedVehicleId);
+  const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId);
+  const hasRegisteredVehicles = vehicles.length > 0;
+
+  useEffect(() => {
+    if (!hasRegisteredVehicles) {
+      if (selectedVehicleId !== 'manual') setSelectedVehicleId('manual');
+      return;
+    }
+    if (!vehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
+      setSelectedVehicleId(vehicles[0].id);
+    }
+  }, [hasRegisteredVehicles, selectedVehicleId, vehicles]);
 
   useEffect(() => {
     if (!selectedVehicle) return;
     setEfficiency(String(selectedVehicle.fuel_efficiency_km_per_liter));
-    if (selectedVehicle.last_refill_price != null) {
-      setManualLastRefillPrice(String(selectedVehicle.last_refill_price));
-    } else {
-      setManualLastRefillPrice('');
-    }
   }, [selectedVehicle]);
 
   const lastRefillPrice = useMemo(() => {
-    if (selectedVehicleId !== 'manual' && selectedVehicle) {
-      return selectedVehicle.last_refill_price;
+    if (hasRegisteredVehicles) {
+      return selectedVehicle?.last_refill_price ?? null;
     }
     const manual = parseFloat(manualLastRefillPrice);
     return Number.isFinite(manual) && manual > 0 ? manual : null;
-  }, [selectedVehicleId, selectedVehicle, manualLastRefillPrice]);
+  }, [hasRegisteredVehicles, selectedVehicle, manualLastRefillPrice]);
 
   const missingLastRefillPrice =
-    selectedVehicleId !== 'manual' && selectedVehicle != null && selectedVehicle.last_refill_price == null;
+    hasRegisteredVehicles && selectedVehicle?.last_refill_price == null;
 
-  const result = useMemo(() => {
+  // Inputs are editable without recalculating. Any calculation input change
+  // invalidates the previous result until the user taps Optimize again.
+  useEffect(() => {
+    setResult(null);
+  }, [
+    origin,
+    destination,
+    distance,
+    efficiency,
+    manualLastRefillPrice,
+    lastRefillPrice,
+    hasRegisteredVehicles,
+    selectedVehicleId,
+    weights,
+  ]);
+
+  const handleOptimize = useCallback(() => {
     const distanceKm = parseFloat(distance);
     const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
-    const price = lastRefillPrice ?? 0;
-    if (!distanceKm || distanceKm <= 0 || !price) return null;
-    if (!weightsSumToOne(weights)) return null;
-    return calculateTripRecommendation({
-      distanceKm,
-      fuelPricePerLiter: price,
-      fuelEfficiencyKmPerLiter: fuelEfficiencyKmPerLiter || 1,
-      weights,
-    });
-  }, [distance, efficiency, lastRefillPrice, weights]);
+    const price = lastRefillPrice;
+
+    if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+      Alert.alert('Invalid distance', 'Enter a distance greater than zero.');
+      return;
+    }
+    if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
+      Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
+      return;
+    }
+    if (!weightsSumToOne(weights)) {
+      Alert.alert('Invalid weights', 'Criterion weights must sum to 1.0.');
+      return;
+    }
+    if (hasRegisteredVehicles && !selectedVehicle) {
+      Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
+      return;
+    }
+    if (price == null || price <= 0) {
+      Alert.alert(
+        'Last-refill price required',
+        hasRegisteredVehicles
+          ? 'Add a last-refill price to this vehicle before optimizing.'
+          : 'Enter your last fuel price before optimizing.'
+      );
+      return;
+    }
+
+    setResult(
+      calculateTripRecommendation({
+        distanceKm,
+        fuelPricePerLiter: price,
+        fuelEfficiencyKmPerLiter,
+        weights,
+      })
+    );
+  }, [
+    distance,
+    efficiency,
+    hasRegisteredVehicles,
+    lastRefillPrice,
+    selectedVehicle,
+    weights,
+  ]);
 
   const maxScore = result?.evaluations[0]?.weightedScore ?? 1;
 
@@ -228,13 +288,10 @@ export default function TripOptimizerScreen() {
 
   if (loading) return <LoadingState message="Loading trip data…" />;
 
-  const vehicleOptions = [
-    { value: 'manual' as const, label: 'Manual entry' },
-    ...vehicles.map((v) => ({
-      value: v.id as string,
-      label: v.nickname ?? `${v.brand} ${v.model}`,
-    })),
-  ];
+  const vehicleOptions = vehicles.map((vehicle) => ({
+    value: vehicle.id,
+    label: vehicle.nickname ?? `${vehicle.brand} ${vehicle.model}`,
+  }));
 
   const routeLabel =
     origin.trim() || destination.trim()
@@ -269,47 +326,58 @@ export default function TripOptimizerScreen() {
       </FormSection>
 
       <FormSection title="Vehicle & fuel" module="trip">
-        {user && vehicles.length > 0 && (
-          <ChipSelect
-            label="Your vehicle"
-            options={vehicleOptions}
-            value={selectedVehicleId}
-            onChange={(v) => setSelectedVehicleId(v)}
-          />
-        )}
-        <LabeledInput
-          label="Fuel efficiency (km/L)"
-          value={efficiency}
-          onChangeText={setEfficiency}
-          keyboardType="decimal-pad"
-          editable={selectedVehicleId === 'manual'}
-        />
-        {selectedVehicleId === 'manual' ? (
-          <LabeledInput
-            label="Last refill price (₱/L)"
-            value={manualLastRefillPrice}
-            onChangeText={setManualLastRefillPrice}
-            keyboardType="decimal-pad"
-          />
-        ) : missingLastRefillPrice ? (
-          <Card style={{ backgroundColor: palette.warningSoft, borderColor: palette.warning }}>
-            <Text style={[styles.warningText, { color: theme.text }]}>
-              This vehicle has no last-refill price. Add one in My Vehicles before running SAW.
-            </Text>
-            <PrimaryButton
-              label="Go to My Vehicles"
-              variant="secondary"
-              onPress={() => router.push('/(tabs)/vehicles')}
-              style={styles.warningBtn}
+        {hasRegisteredVehicles ? (
+          <>
+            <ChipSelect
+              label="Your vehicle"
+              options={vehicleOptions}
+              value={selectedVehicle?.id ?? null}
+              onChange={(vehicleId) => setSelectedVehicleId(vehicleId)}
             />
-          </Card>
+            <LabeledInput
+              label="Fuel efficiency (km/L)"
+              value={efficiency}
+              editable={false}
+            />
+            {missingLastRefillPrice ? (
+              <Card style={{ backgroundColor: palette.warningSoft, borderColor: palette.warning }}>
+                <Text style={[styles.warningText, { color: theme.text }]}>
+                  This vehicle has no last-refill price. Add one in My Vehicles before running SAW.
+                </Text>
+                <PrimaryButton
+                  label="Go to My Vehicles"
+                  variant="secondary"
+                  onPress={() => router.push('/(tabs)/vehicles')}
+                  style={styles.warningBtn}
+                />
+              </Card>
+            ) : (
+              <View style={[styles.refillPill, { backgroundColor: theme.overlay }]}>
+                <Text style={[styles.meta, { color: theme.textSecondary }]}>Last refill</Text>
+                <Text style={[styles.refillValue, { color: theme.text }]}>
+                  {formatCurrency(lastRefillPrice!)}/L
+                </Text>
+              </View>
+            )}
+          </>
         ) : (
-          <View style={[styles.refillPill, { backgroundColor: theme.overlay }]}>
-            <Text style={[styles.meta, { color: theme.textSecondary }]}>Last refill</Text>
-            <Text style={[styles.refillValue, { color: theme.text }]}>
-              {formatCurrency(lastRefillPrice!)}/L
+          <>
+            <Text style={[styles.manualNotice, { color: theme.textSecondary }]}>
+              No vehicle registered — enter your last fuel price manually.
             </Text>
-          </View>
+            <LabeledInput
+              label="Fuel efficiency (km/L)"
+              value={efficiency}
+              onChangeText={setEfficiency}
+              keyboardType="decimal-pad"
+            />
+            <LabeledInput
+              label="Last fuel price (₱/L)"
+              value={manualLastRefillPrice}
+              onChangeText={setManualLastRefillPrice}
+              keyboardType="decimal-pad"
+            />
+          </>
         )}
       </FormSection>
 
@@ -330,6 +398,8 @@ export default function TripOptimizerScreen() {
           <Text style={styles.error}>Weights must sum to 1.0</Text>
         )}
       </FormSection>
+
+      <PrimaryButton label="Optimize" onPress={handleOptimize} style={styles.actionBtn} />
 
       {result?.recommended && (
         <>
@@ -400,6 +470,7 @@ const styles = StyleSheet.create({
   },
   refillValue: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
   warningText: { fontSize: 14, lineHeight: 21, marginBottom: spacing.sm },
+  manualNotice: { fontSize: 14, lineHeight: 20, marginBottom: spacing.md },
   warningBtn: { marginTop: spacing.xs },
   routeLabel: { fontSize: 15, fontWeight: '700', marginBottom: spacing.sm },
   error: { color: palette.danger, marginBottom: spacing.sm, fontWeight: '700' },
