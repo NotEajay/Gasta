@@ -223,6 +223,60 @@ export interface Database {
         };
         Relationships: [];
       };
+      profiles: {
+        Row: {
+          id: string;
+          full_name: string | null;
+          email: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id: string;
+          full_name?: string | null;
+          email?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          full_name?: string | null;
+          email?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      vehicle_shares: {
+        Row: {
+          "ShareID": string;
+          "vehicleID": string;
+          shared_by: string;
+          shared_with: string;
+          role: string;
+          created_at: string;
+          revoked: boolean;
+        };
+        Insert: {
+          "ShareID"?: string;
+          "vehicleID": string;
+          shared_by: string;
+          shared_with: string;
+          role: string;
+          created_at?: string;
+          revoked?: boolean;
+        };
+        Update: {
+          "ShareID"?: string;
+          "vehicleID"?: string;
+          shared_by?: string;
+          shared_with?: string;
+          role?: string;
+          created_at?: string;
+          revoked?: boolean;
+        };
+        Relationships: [];
+      };
       transport_modes: {
         Row: {
           id: string;
@@ -523,6 +577,15 @@ export interface Database {
           p_name: string;
         };
         Returns: string;
+      };
+      find_user_by_email: {
+        Args: {
+          lookup_email: string;
+        };
+        Returns: {
+          id: string;
+          full_name: string | null;
+        }[];
       };
     };
     Enums: Record<string, never>;

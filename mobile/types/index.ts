@@ -53,6 +53,36 @@ export interface VehicleCatalogEntry {
   fuel_type?: { code: string; name: string };
 }
 
+export type VehicleShareRole = 'Driver' | 'Operator';
+
+export interface UserProfile {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+}
+
+export interface UserProfileLookup {
+  id: string;
+  full_name: string | null;
+}
+
+export interface VehicleShare {
+  "ShareID": string;
+  "vehicleID": string;
+  shared_by: string;
+  shared_with: string;
+  role: VehicleShareRole;
+  created_at: string;
+  revoked: boolean;
+}
+
+export interface SharedVehicle {
+  vehicleId: string;
+  brand: string;
+  model: string;
+  role: VehicleShareRole;
+}
+
 export interface Vehicle {
   id: string;
   user_id: string;

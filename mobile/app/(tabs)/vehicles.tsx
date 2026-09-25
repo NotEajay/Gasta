@@ -4,6 +4,7 @@ import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'rea
 
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import VehicleSharePanel from '@/components/VehicleSharePanel';
 import Card from '@/components/ui/Card';
 import ChipSelect from '@/components/ui/ChipSelect';
 import EmptyState from '@/components/ui/EmptyState';
@@ -21,6 +22,7 @@ import {
   createVehicle,
   deleteVehicle,
   fetchFuelTypeIdByCode,
+  fetchSharedVehicles,
   fetchVehicleCatalog,
   fetchVehicles,
   updateVehicle,
@@ -28,13 +30,14 @@ import {
 } from '@/lib/services/vehicles';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
-import type { Vehicle, VehicleCatalogEntry } from '@/types';
+import type { SharedVehicle, Vehicle, VehicleCatalogEntry } from '@/types';
 
 export default function VehiclesScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [sharedVehicles, setSharedVehicles] = useState<SharedVehicle[]>([]);
   const [catalog, setCatalog] = useState<VehicleCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -79,6 +82,12 @@ export default function VehiclesScreen() {
       ]);
       setVehicles(vehicleList);
       setCatalog(catalogList);
+
+      try {
+        setSharedVehicles(await fetchSharedVehicles(user.id));
+      } catch {
+        setSharedVehicles([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -438,6 +447,8 @@ export default function VehiclesScreen() {
                   <Text style={styles.missingRefill}>No last-refill price set</Text>
                 )}
 
+                <VehicleSharePanel vehicleId={v.id} ownerId={user.id} />
+
                 {editingVehicleId === v.id ? (
                   <>
                     <LabeledInput
@@ -498,6 +509,47 @@ export default function VehiclesScreen() {
           )}
         </>
       )}
+
+      <SectionHeader
+        title="Shared with me"
+        subtitle={`${sharedVehicles.length} shared vehicle${sharedVehicles.length !== 1 ? 's' : ''}`}
+        module="vehicles"
+      />
+      {sharedVehicles.length === 0 ? (
+        <EmptyState
+          title="No shared vehicles"
+          message="Vehicles shared with you will appear here."
+        />
+      ) : (
+        sharedVehicles.map((sharedVehicle) => (
+          <TouchableOpacity
+            key={sharedVehicle.vehicleId}
+            onPress={() =>
+              router.push({
+                pathname: '/shared-vehicle-history',
+                params: {
+                  vehicleId: sharedVehicle.vehicleId,
+                  vehicleLabel: `${sharedVehicle.brand} ${sharedVehicle.model}`,
+                },
+              })
+            }
+            style={styles.sharedVehicleButton}>
+            <Card elevated compact>
+              <View style={styles.sharedVehicleRow}>
+                <View style={styles.sharedVehicleInfo}>
+                  <Text style={[styles.sharedVehicleTitle, { color: theme.text }]}>
+                    {sharedVehicle.brand} {sharedVehicle.model}
+                  </Text>
+                  <Text style={[styles.sharedVehicleRole, { color: theme.textSecondary }]}>
+                    {sharedVehicle.role}
+                  </Text>
+                </View>
+                <Text style={[styles.sharedVehicleChevron, { color: theme.textSecondary }]}>›</Text>
+              </View>
+            </Card>
+          </TouchableOpacity>
+        ))
+      )}
     </ScrollView>
   );
 }
@@ -556,6 +608,30 @@ const styles = StyleSheet.create({
   searchResultSubtext: {
     fontSize: 14,
     marginTop: 2,
+  },
+  sharedVehicleButton: {
+    width: '100%',
+  },
+  sharedVehicleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sharedVehicleInfo: {
+    flex: 1,
+  },
+  sharedVehicleTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  sharedVehicleRole: {
+    fontSize: 13,
+    marginTop: 3,
+  },
+  sharedVehicleChevron: {
+    fontSize: 28,
+    fontWeight: '300',
+    marginLeft: spacing.sm,
   },
   errorText: {
     color: palette.danger,
