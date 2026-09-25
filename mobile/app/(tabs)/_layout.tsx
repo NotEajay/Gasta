@@ -4,11 +4,23 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Animated, StyleSheet, View, type ColorValue, type ViewStyle } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Text } from '@/components/Themed';
 import { AuthBackground } from '@/components/ui/GlassSurface';
-import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarVisibility';
 import { HomeColors } from '@/constants/home';
 import { tabConfig } from '@/constants/moduleColors';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
+import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarVisibility';
+
+/**
+ * Floating nav bar metrics. Declared once so the bar geometry and the content
+ * inset that keeps screens scrollable above it can never drift apart.
+ */
+const NAV_BAR_HEIGHT = 70;
+const NAV_BAR_RADIUS = radii.lg;
+const NAV_BAR_SIDE_MARGIN = 16;
+const NAV_BAR_BOTTOM_GAP = 10;
+const NAV_ICON_SIZE = 23;
+const NAV_ICON_CHIP = 40;
 
 const tabIconNames = {
   home: { active: 'home', inactive: 'home-outline' },
@@ -30,81 +42,57 @@ function TabIcon({
   focused: boolean;
   color: ColorValue;
 }) {
-  const inactive = typeof color === 'string' ? color : GasTaColors.textSoft;
   const iconName = focused ? tabIconNames[name].active : tabIconNames[name].inactive;
 
   return (
-    <View
-      style={[
-        styles.iconWrap,
-        focused && { backgroundColor: HomeColors.primarySoft },
-      ]}>
-      <Ionicons
-        name={iconName}
-        size={22}
-        color={focused ? HomeColors.primary : inactive}
-      />
+    <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
+      <Ionicons name={iconName} size={NAV_ICON_SIZE} color={color} />
     </View>
+  );
+}
+
+/** Rendered as a function so active/inactive weight can differ per tab state. */
+function TabLabel({
+  children,
+  color,
+  focused,
+}: {
+  children: string;
+  color: ColorValue;
+  focused: boolean;
+}) {
+  return (
+    <Text numberOfLines={1} style={[styles.tabLabel, focused && styles.tabLabelActive, { color }]}>
+      {children}
+    </Text>
   );
 }
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
-  const tabBarHeight = 64 + insets.bottom;
-  const tabBarHeightValue = useRef(new Animated.Value(tabBarHeight)).current;
-  const tabBarPaddingTopValue = useRef(new Animated.Value(spacing.sm)).current;
-  const tabBarPaddingBottomValue = useRef(new Animated.Value(insets.bottom)).current;
-  const tabBarTranslateY = useRef(new Animated.Value(0)).current;
-  const tabBarOpacity = useRef(new Animated.Value(1)).current;
-  const tabBarBorderWidth = useRef(new Animated.Value(1)).current;
+  const navBarBottom = insets.bottom + NAV_BAR_BOTTOM_GAP;
+  // Sides clear the display cutout when the device is rotated into landscape.
+  const navBarInset = Math.max(NAV_BAR_SIDE_MARGIN, Math.max(insets.left, insets.right) + 8);
+  // Slides fully below the viewport when hidden, so it can never swallow taps.
+  const navBarHiddenOffset = NAV_BAR_HEIGHT + navBarBottom + spacing.sm;
+  // Reserve room under every screen so the last row scrolls clear of the bar.
+  const navBarScenePadding = NAV_BAR_HEIGHT + navBarBottom + spacing.md;
+
+  const navBarVisibility = useRef(new Animated.Value(1)).current;
   const previousOffset = useRef(0);
 
   const animateTabBar = useCallback(
     (visible: boolean) => {
-      Animated.parallel([
-        Animated.timing(tabBarHeightValue, {
-          toValue: visible ? tabBarHeight : 0,
-          duration: 220,
-          useNativeDriver: false,
-        }),
-        Animated.timing(tabBarPaddingTopValue, {
-          toValue: visible ? spacing.sm : 0,
-          duration: 220,
-          useNativeDriver: false,
-        }),
-        Animated.timing(tabBarPaddingBottomValue, {
-          toValue: visible ? insets.bottom : 0,
-          duration: 220,
-          useNativeDriver: false,
-        }),
-        Animated.timing(tabBarTranslateY, {
-          toValue: visible ? 0 : tabBarHeight,
-          duration: 220,
-          useNativeDriver: false,
-        }),
-        Animated.timing(tabBarOpacity, {
-          toValue: visible ? 1 : 0,
-          duration: 180,
-          useNativeDriver: false,
-        }),
-        Animated.timing(tabBarBorderWidth, {
-          toValue: visible ? 1 : 0,
-          duration: 180,
-          useNativeDriver: false,
-        }),
-      ]).start();
+      // One driver for the bar, so its transform, fade and the content inset
+      // that clears it can never animate out of sync.
+      Animated.timing(navBarVisibility, {
+        toValue: visible ? 1 : 0,
+        duration: 200,
+        useNativeDriver: false,
+      }).start();
     },
-    [
-      insets.bottom,
-      tabBarBorderWidth,
-      tabBarHeight,
-      tabBarHeightValue,
-      tabBarOpacity,
-      tabBarPaddingBottomValue,
-      tabBarPaddingTopValue,
-      tabBarTranslateY,
-    ],
+    [navBarVisibility],
   );
 
   const handleTabBarScroll = useCallback(
@@ -133,23 +121,46 @@ export default function TabLayout() {
   }, [pathname, resetTabBar]);
 
   const tabBarStyle = useMemo(
+    () =>
+      ({
+        ...styles.tabBar,
+        // The bar floats free of the screen edges, and the safe-area inset is
+        // folded into `bottom` so it can never sit on a home indicator.
+        start: navBarInset,
+        end: navBarInset,
+        left: navBarInset,
+        right: navBarInset,
+        bottom: navBarBottom,
+        height: NAV_BAR_HEIGHT,
+        // React Navigation injects its own inset padding; zero it so the inset
+        // is applied exactly once, via `bottom` above.
+        paddingTop: 0,
+        paddingBottom: 0,
+        paddingHorizontal: 0,
+        opacity: navBarVisibility,
+        transform: [
+          {
+            translateY: navBarVisibility.interpolate({
+              inputRange: [0, 1],
+              outputRange: [navBarHiddenOffset, 0],
+            }),
+          },
+        ],
+      }) as unknown as ViewStyle,
+    [navBarBottom, navBarHiddenOffset, navBarInset, navBarVisibility],
+  );
+
+  // Applied to every tab scene, so no screen needs its own bottom padding.
+  // Animating it keeps the reclaimed space in step with the sliding bar.
+  const sceneStyle = useMemo(
     () => ({
-      ...styles.tabBar,
-      height: tabBarHeightValue,
-      paddingTop: tabBarPaddingTopValue,
-      paddingBottom: tabBarPaddingBottomValue,
-      opacity: tabBarOpacity,
-      borderTopWidth: tabBarBorderWidth,
-      transform: [{ translateY: tabBarTranslateY }],
+      backgroundColor: 'transparent',
+      paddingBottom: navBarVisibility.interpolate({
+        inputRange: [0, 1],
+        outputRange: [spacing.lg, navBarScenePadding],
+      }),
     }),
-    [
-      tabBarHeightValue,
-      tabBarOpacity,
-      tabBarBorderWidth,
-      tabBarPaddingBottomValue,
-      tabBarPaddingTopValue,
-      tabBarTranslateY,
-    ],
+    [navBarScenePadding, navBarVisibility],
   );
 
   return (
@@ -160,15 +171,16 @@ export default function TabLayout() {
             initialRouteName="home"
             screenOptions={{
               headerShown: false,
-              sceneStyle: { backgroundColor: 'transparent' },
+              sceneStyle,
               tabBarActiveTintColor: HomeColors.primary,
-              tabBarInactiveTintColor: GasTaColors.textSoft,
+              tabBarInactiveTintColor: HomeColors.muted,
+              tabBarItemStyle: styles.tabBarItem,
               tabBarStyle: tabBarStyle as unknown as ViewStyle,
-              tabBarLabelStyle: {
-                fontSize: 11,
-                fontWeight: '700',
-                marginBottom: spacing.xs,
-              },
+              tabBarLabel: ({ children, color, focused }) => (
+                <TabLabel color={color} focused={focused}>
+                  {children}
+                </TabLabel>
+              ),
             }}>
             <Tabs.Screen
               name="home"
@@ -234,21 +246,46 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   tabBar: {
-    overflow: 'hidden',
-    backgroundColor: GasTaColors.cream,
-    borderTopColor: GasTaColors.glassBorderSubtle,
-    borderTopWidth: 1,
+    position: 'absolute',
+    // Must stay visible so the iOS shadow is not clipped by the rounded corners.
+    overflow: 'visible',
+    zIndex: 10,
+    borderRadius: NAV_BAR_RADIUS,
+    borderCurve: 'continuous',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.border,
+    backgroundColor: GasTaColors.white,
+    shadowColor: HomeColors.navy,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
     elevation: 8,
-    shadowColor: GasTaColors.forest,
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
+  },
+  tabBarItem: {
+    // Vertical centring only. The 40px chip + 2px label gap + 14px line = 56px
+    // of content in a 70px bar leaves 14px of slack, so 7px should sit above the
+    // icon and 7px below the label. React Navigation's own item padding starts
+    // the group at 5px, which leaves 9px underneath, so nudge it down 2px.
+    paddingTop: 2,
   },
   iconWrap: {
-    width: 44,
-    height: 28,
-    borderRadius: radii.pill,
+    width: NAV_ICON_CHIP,
+    height: NAV_ICON_CHIP,
+    borderRadius: NAV_ICON_CHIP / 2,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  iconWrapActive: {
+    backgroundColor: HomeColors.primarySoft,
+  },
+  tabLabel: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '500',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  tabLabelActive: {
+    fontWeight: '700',
   },
 });
