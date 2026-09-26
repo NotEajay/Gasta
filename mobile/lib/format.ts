@@ -2,6 +2,21 @@ export function formatCurrency(amount: number): string {
   return `₱${amount.toFixed(2)}`;
 }
 
+/**
+ * Peso display for headline figures: whole amounts stay clean ("₱5,000") while
+ * real cents are preserved ("₱2,250.50"). Always a leading ₱ with no space, so
+ * money reads identically everywhere on the Budget page.
+ */
+export function formatPeso(amount: number): string {
+  const safe = Number(amount);
+  const rounded = Number.isFinite(safe) ? Math.round(safe * 100) / 100 : 0;
+  const hasCents = Math.abs(rounded % 1) > 0.004;
+  return `₱${rounded.toLocaleString('en-PH', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 /** Parse a YYYY-MM-DD bulletin date without timezone shifting the calendar day. */
 function parseBulletinDate(date: string): Date {
   const [year, month, day] = date.split('-').map(Number);

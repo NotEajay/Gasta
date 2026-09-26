@@ -13,7 +13,7 @@ import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { useResponsive } from '@/hooks/useResponsive';
-import { formatCurrency, formatDate, transportModeLabel } from '@/lib/format';
+import { formatCurrency, formatDate, formatPeso, transportModeLabel } from '@/lib/format';
 import {
   DASHBOARD_FUEL_TYPE,
   fetchDashboardBudgetSummary,
@@ -224,16 +224,25 @@ export default function HomeScreen() {
       : 'DOE bulletin'
     : null;
 
-  const budgetRemaining = budget?.hasBudget ? formatCurrency(budget.remaining) : null;
-  const budgetLimit = budget?.hasBudget ? formatCurrency(budget.limitAmount) : null;
-  const budgetSpent = budget?.hasBudget ? formatCurrency(budget.spent) : null;
-
-  // Uses the spent/limit values already returned by the existing budget summary.
-  const budgetProgress =
-    budget?.hasBudget && budget.limitAmount > 0
-      ? Math.min(Math.max(budget.spent / budget.limitAmount, 0), 1)
-      : null;
+  // Budget figures are ACTUAL accepted refill spending, shared with the Budget
+  // page through fetchDashboardBudgetSummary. The trip estimate is deliberately
+  // not mixed in.
+  const budgetIsOver = (budget?.overBy ?? 0) > 0;
+  const budgetHeadroom = formatPeso(
+    budgetIsOver ? (budget?.overBy ?? 0) : (budget?.remaining ?? 0)
+  );
+  const budgetLimit = budget?.hasBudget ? formatPeso(budget.limitAmount) : null;
+  const budgetSpent = budget?.hasBudget && !budget.actualUnavailable
+    ? formatPeso(budget.spent)
+    : null;
+  const budgetProgress = budget?.hasBudget && !budget.actualUnavailable ? budget.progress : null;
   const budgetProgressWidth = `${Math.round((budgetProgress ?? 0) * 100)}%` as `${number}%`;
+  const budgetFillColor =
+    budget?.status === 'exceeded'
+      ? palette.danger
+      : budget?.status === 'warning'
+        ? palette.warning
+        : HomeColors.primary;
 
   return (
     <ScrollView
@@ -304,29 +313,48 @@ export default function HomeScreen() {
           <View style={styles.divider} />
 
           <Text style={styles.surfaceLabel}>Fuel budget</Text>
-          {budgetRemaining && budgetLimit && budgetSpent ? (
-            <>
-              <Text
-                adjustsFontSizeToFit
-                minimumFontScale={0.7}
-                numberOfLines={1}
-                style={styles.budgetValue}>
-                {budgetRemaining} left
-              </Text>
-              <Text numberOfLines={1} style={styles.budgetMeta}>
-                of {budgetLimit} this month
-              </Text>
-              {budgetProgress === null ? null : (
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: budgetProgressWidth }]} />
-                </View>
-              )}
-              <Text numberOfLines={1} style={styles.budgetSpent}>
-                {budgetSpent} spent
-              </Text>
-            </>
+          {budget?.hasBudget ? (
+            budget.actualUnavailable ? (
+              // Never claim a zero we could not verify.
+              <Text style={styles.emptyLine}>Refill spending unavailable</Text>
+            ) : (
+              <>
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.7}
+                  numberOfLines={1}
+                  style={[styles.budgetValue, budgetIsOver && styles.budgetValueOver]}>
+                  {budgetHeadroom} {budgetIsOver ? 'over' : 'left'}
+                </Text>
+                <Text numberOfLines={1} style={styles.budgetMeta}>
+                  of {budgetLimit} this month
+                </Text>
+                {budgetProgress === null ? null : (
+                  <View style={styles.progressTrack}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        { width: budgetProgressWidth, backgroundColor: budgetFillColor },
+                      ]}
+                    />
+                  </View>
+                )}
+                <Text numberOfLines={1} style={styles.budgetSpent}>
+                  {budgetSpent} spent
+                </Text>
+              </>
+            )
+          ) : budget?.actualUnavailable ? (
+            <Text style={styles.emptyLine}>Refill spending unavailable</Text>
           ) : (
-            <Text style={styles.emptyLine}>No budget set for this month</Text>
+            <>
+              <Text style={styles.emptyLine}>No monthly budget set</Text>
+              {budget ? (
+                <Text numberOfLines={1} style={styles.budgetSpent}>
+                  {formatPeso(budget.spent)} actual refill spending
+                </Text>
+              ) : null}
+            </>
           )}
         </View>
       </View>
@@ -573,6 +601,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.8,
     marginTop: spacing.xs,
+  },
+  budgetValueOver: {
+    color: palette.danger,
   },
   budgetMeta: {
     color: HomeColors.muted,

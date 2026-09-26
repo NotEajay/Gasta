@@ -1,6 +1,11 @@
 import type { DoeFuelTypeCode } from '@/constants/fuelTypes';
 import type { DoeRegionCode } from '@/constants/regions';
-import { estimateMonthlyFuelSpend, fetchBudgets } from '@/lib/services/budgets';
+import {
+  ActualSpendUnavailableError,
+  fetchBudgets,
+  getMonthlyBudgetOverview,
+  type BudgetStatus,
+} from '@/lib/services/budgets';
 import {
   fetchFreshVerifiedPrices,
   type VerifiedCommunityPrice,
@@ -23,8 +28,30 @@ export interface DashboardPriceSummary {
 export interface DashboardBudgetSummary {
   hasBudget: boolean;
   limitAmount: number;
+  /**
+   * ACTUAL personal fuel spending: accepted refill allocations assigned to this
+   * user, on refills that are not voided, for the refill's occurred month.
+   * This is the same figure the Budget page shows.
+   */
   spent: number;
+  /**
+   * Trip-based estimate. Informational only, never added to `spent`: the trips
+   * and the refills usually describe the same journeys, so summing them would
+   * double count.
+   */
+  estimatedTripSpend: number;
+  /** Never negative; use overBy instead. */
   remaining: number;
+  overBy: number;
+  /** 0..1, already clamped. */
+  progress: number;
+  status: BudgetStatus;
+  /**
+   * True when actual spending could not be read (for example the Phase 2 RPC is
+   * not deployed yet). Distinct from a real zero, so the UI never claims the
+   * user has spent nothing.
+   */
+  actualUnavailable: boolean;
 }
 
 export interface DashboardReport {
@@ -78,26 +105,52 @@ export async function fetchDashboardPriceSummary(
   return communityPriceSummary(communityRows) ?? doePriceSummary(doeRow);
 }
 
-/** Read-only current-month budget summary composed from the existing budget services. */
+/**
+ * Current-month budget summary for the Home dashboard.
+ *
+ * Composed through getMonthlyBudgetOverview, the same function the Budget page
+ * uses, so Home and Budget cannot drift apart or disagree about what "spent"
+ * means. The trip estimate is still carried, but only as a separate field.
+ */
 export async function fetchDashboardBudgetSummary(
   userId: string,
   year: number,
   month: number,
 ): Promise<DashboardBudgetSummary> {
-  const budgets = await fetchBudgets(userId);
-  const budget = budgets.find((item) => item.year === year && item.month === month);
+  try {
+    const overview = await getMonthlyBudgetOverview(userId, year, month);
+    return {
+      hasBudget: Boolean(overview.budget),
+      limitAmount: overview.limitAmount,
+      spent: overview.actualRefillSpend,
+      estimatedTripSpend: overview.estimatedTripFuelCost,
+      remaining: overview.remaining,
+      overBy: overview.overBy,
+      progress: overview.progress,
+      status: overview.status,
+      actualUnavailable: false,
+    };
+  } catch (error) {
+    if (!(error instanceof ActualSpendUnavailableError)) throw error;
 
-  if (!budget) {
-    return { hasBudget: false, limitAmount: 0, spent: 0, remaining: 0 };
+    // Actual spending is unreadable. Keep the limit visible if we can, but never
+    // substitute a fake zero -- the UI renders this as unavailable instead.
+    const budget = (await fetchBudgets(userId)).find(
+      (item) => item.year === year && item.month === month
+    );
+
+    return {
+      hasBudget: Boolean(budget),
+      limitAmount: budget?.limit_amount ?? 0,
+      spent: 0,
+      estimatedTripSpend: 0,
+      remaining: 0,
+      overBy: 0,
+      progress: 0,
+      status: budget ? 'ok' : 'unset',
+      actualUnavailable: true,
+    };
   }
-
-  const spent = await estimateMonthlyFuelSpend(userId, year, month);
-  return {
-    hasBudget: true,
-    limitAmount: budget.limit_amount,
-    spent,
-    remaining: Math.max(budget.limit_amount - spent, 0),
-  };
 }
 
 type RecentReportRow = {
