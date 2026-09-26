@@ -196,3 +196,79 @@ export interface SavedTrip {
 }
 
 export type { MCDAWeights, ModeEvaluation, TripRecord } from './mcda';
+
+/* ------------------------------------------------------------------ *
+ * Phase 2: refill expense allocation
+ * ------------------------------------------------------------------ */
+
+/**
+ * Lifecycle of one proposed share of a refill.
+ *
+ * `pending` is the only state that is waiting on a human. `accepted` is the
+ * only state that counts toward a personal budget, and it only counts if the
+ * refill itself is not voided.
+ */
+export type RefillAllocationStatus = 'pending' | 'accepted' | 'rejected' | 'cancelled';
+
+/** `cancelled` is terminal and system-driven, so it is never user-selectable. */
+export const REFILL_ALLOCATION_STATUSES: readonly RefillAllocationStatus[] = [
+  'pending',
+  'accepted',
+  'rejected',
+  'cancelled',
+];
+
+/**
+ * Declared as a `type` (not `interface`) for the same reason as VehicleRefill:
+ * only type aliases get an implicit index signature, which is what satisfies the
+ * supabase-js GenericTable/GenericFunction constraint.
+ */
+export type RefillAllocation = {
+  id: string;
+  refill_id: string;
+  /** Recipient who must accept. NOT necessarily who paid at the station. */
+  user_id: string;
+  amount: number;
+  status: RefillAllocationStatus;
+  /** Collaborator who proposed this allocation. */
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  responded_at: string | null;
+  response_note: string | null;
+};
+
+/** Server-computed figures for one refill. Never derived on the client. */
+export type RefillAllocationSummary = {
+  /** pending + accepted. The amount actually spoken for. */
+  reserved: number;
+  acceptedTotal: number;
+  pendingTotal: number;
+  unassigned: number;
+};
+
+/** A split row as the UI needs it: allocation + who the person is. */
+export type RefillAllocationRow = RefillAllocation & {
+  fullName: string;
+  role: string;
+};
+
+export type SplitDraftLine = {
+  userId: string;
+  amount: string;
+};
+
+/** One row of my_pending_refill_allocations(). */
+export type PendingRefillAllocation = {
+  allocation_id: string;
+  refill_id: string;
+  amount: number;
+  created_by: string;
+  created_by_name: string;
+  vehicle_id: string;
+  brand: string;
+  model: string;
+  refill_total: number;
+  occurred_at: string;
+  response_note: string | null;
+};

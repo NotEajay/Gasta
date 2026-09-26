@@ -20,6 +20,8 @@ import SelectField, { type SelectOption } from '@/components/ui/SelectField';
 import { HomeColors } from '@/constants/home';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency, formatDate } from '@/lib/format';
+import PendingAllocationInbox from '@/components/vehicle/PendingAllocationInbox';
+import RefillSplitSheet from '@/components/vehicle/RefillSplitSheet';
 import {
   createVehicleRefill,
   fetchVehicleMembers,
@@ -62,6 +64,8 @@ export default function VehicleRefillPanel({
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [splitFor, setSplitFor] = useState<VehicleRefill | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [totalAmount, setTotalAmount] = useState('');
   const [pricePerLiter, setPricePerLiter] = useState('');
@@ -87,6 +91,33 @@ export default function VehicleRefillPanel({
     [members],
   );
 
+  /**
+   * Splitting is offered to every non-Viewer collaborator, mirroring the server
+   * rule in can_manage_refill_allocations(). The server still enforces it, so
+   * hiding the button is presentation only, never the control.
+   */
+  /**
+   * One place that decides what the signed-in user may do, so the button label
+   * and the sheet never disagree. Mirrors the server rules in migration 027:
+   *
+   *   Owner                   manages the whole split ("Split expense")
+   *   Member/Driver/Operator  own share only ("Set my share")
+   *   Viewer                  no allocation action at all
+   */
+  const viewer = useMemo(() => {
+    const match = members.find((m) => m.user_id === currentUserId);
+    const role = match?.role ?? null;
+    const isOwner = role === 'Owner';
+    const isViewer = role === 'Viewer';
+    return {
+      role,
+      isOwner,
+      /** No button for a Viewer, and nobody at all when members could not load. */
+      canAllocate: role !== null && !isViewer,
+      actionLabel: isOwner ? 'Split expense' : 'Set my share',
+    };
+  }, [members, currentUserId]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -109,6 +140,15 @@ export default function VehicleRefillPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Opening the history sheet re-reads the vehicle's members, so a collaborator
+  // added through the sharing flow earlier in the session is picked up without
+  // an app restart. The split sheet fetches its own copy as well.
+  useEffect(() => {
+    if (historyOpen) {
+      void load();
+    }
+  }, [historyOpen, load]);
 
   // The signed-in user is always a valid member, so default to them.
   useEffect(() => {
@@ -282,6 +322,8 @@ export default function VehicleRefillPanel({
               </Pressable>
             </View>
 
+            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+
             {loading ? (
               <View style={styles.state}>
                 <ActivityIndicator color={HomeColors.primary} />
@@ -304,6 +346,7 @@ export default function VehicleRefillPanel({
                 contentContainerStyle={styles.listContent}
                 data={refills}
                 keyExtractor={(item) => item.id}
+                ListHeaderComponent={<PendingAllocationInbox onChanged={load} />}
                 ListFooterComponent={
                   <PrimaryButton
                     label="Log refill"
@@ -316,8 +359,12 @@ export default function VehicleRefillPanel({
                 }
                 renderItem={({ item }) => (
                   <RefillRow
+                    canAllocate={viewer.canAllocate}
+                    actionLabel={viewer.actionLabel}
+                    isOwnerAction={viewer.isOwner}
                     canVoid={isOwner || item.logged_by === currentUserId}
                     nameOf={nameOf}
+                    onSplit={() => setSplitFor(item)}
                     onVoid={() => requestVoid(item.id)}
                     refill={item}
                   />
@@ -326,6 +373,29 @@ export default function VehicleRefillPanel({
               />
             )}
           </View>
+
+          {/*
+            The split sheet lives INSIDE this already-presented modal on purpose.
+            It used to be rendered as a sibling with its own <Modal>, but React
+            Native cannot present a second modal while one is open, so the sheet
+            mounted and never appeared -- the button looked dead. It is a plain
+            overlay now, so it renders reliably on both platforms.
+          */}
+          {splitFor ? (
+            <RefillSplitSheet
+              currentUserId={currentUserId}
+              mode={viewer.isOwner ? 'owner' : 'self'}
+              onClose={() => setSplitFor(null)}
+              onSaved={(message) => {
+                setNotice(message);
+                void load();
+                onChanged?.();
+              }}
+              refill={splitFor}
+              vehicleId={vehicleId}
+              vehicleLabel={vehicleLabel}
+            />
+          ) : null}
         </View>
       </Modal>
 
@@ -334,8 +404,14 @@ export default function VehicleRefillPanel({
         onRequestClose={() => setFormOpen(false)}
         transparent
         visible={formOpen}>
+        {/*
+          The history sheet's own KeyboardAvoidingView is switched off while the
+          split sheet is open. Two KeyboardAvoidingViews stacked inside a
+          transparent Modal double-pad and fight each other; the split sheet
+          measures the keyboard itself, so the parent must stay out of it.
+        */}
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={splitFor ? undefined : Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.backdrop}>
           <View style={styles.sheet}>
             <View style={styles.sheetHead}>
@@ -428,13 +504,21 @@ export default function VehicleRefillPanel({
 function RefillRow({
   refill,
   canVoid,
+  canAllocate,
+  actionLabel,
+  isOwnerAction,
   nameOf,
   onVoid,
+  onSplit,
 }: {
   refill: VehicleRefill;
   canVoid: boolean;
+  canAllocate: boolean;
+  actionLabel: string;
+  isOwnerAction: boolean;
   nameOf: (id: string) => string;
   onVoid: () => void;
+  onSplit: () => void;
 }) {
   const voided = refill.voided_at !== null;
   return (
@@ -451,16 +535,35 @@ function RefillRow({
       <Text style={styles.refillWhoMuted}>Logged by {nameOf(refill.logged_by)}</Text>
       {voided ? (
         <Text style={styles.voidedTag}>Voided</Text>
-      ) : canVoid ? (
-        <Pressable
-          accessibilityLabel="Void refill"
-          accessibilityRole="button"
-          onPress={onVoid}
-          style={({ pressed }) => [styles.voidBtn, pressed && styles.voidBtnPressed]}>
-          <Ionicons name="close-circle-outline" size={15} color={palette.danger} />
-          <Text style={styles.voidBtnText}>Void refill</Text>
-        </Pressable>
-      ) : null}
+      ) : (
+        <View style={styles.rowActions}>
+          {canVoid ? (
+            <Pressable
+              accessibilityLabel="Void refill"
+              accessibilityRole="button"
+              onPress={onVoid}
+              style={({ pressed }) => [styles.voidBtn, pressed && styles.voidBtnPressed]}>
+              <Ionicons name="close-circle-outline" size={15} color={palette.danger} />
+              <Text style={styles.voidBtnText}>Void refill</Text>
+            </Pressable>
+          ) : null}
+
+          {canAllocate ? (
+            <Pressable
+              accessibilityLabel={actionLabel}
+              accessibilityRole="button"
+              onPress={onSplit}
+              style={({ pressed }) => [styles.splitBtn, pressed && styles.splitBtnPressed]}>
+              <Ionicons
+                name={isOwnerAction ? 'git-branch-outline' : 'wallet-outline'}
+                size={15}
+                color={HomeColors.primary}
+              />
+              <Text style={styles.splitBtnText}>{actionLabel}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
     </View>
   );
 }
@@ -597,14 +700,19 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   /** Compact but obvious destructive action — 40px tall, not a full-width block. */
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
   voidBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'flex-start',
     gap: 5,
     minHeight: 40,
-    marginTop: spacing.md,
     paddingHorizontal: spacing.md,
     borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
@@ -620,6 +728,28 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '700',
   },
+  splitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    minHeight: 40,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.primary,
+    backgroundColor: HomeColors.primarySoft,
+  },
+  splitBtnPressed: {
+    backgroundColor: HomeColors.primarySoft,
+    opacity: 0.7,
+  },
+  splitBtnText: {
+    color: HomeColors.primary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
   voidedTag: {
     color: HomeColors.muted,
     fontSize: 11,
@@ -628,6 +758,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
 
+  notice: {
+    color: HomeColors.primary,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
   formContent: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
