@@ -1,21 +1,19 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import VehicleSharePanel from '@/components/VehicleSharePanel';
-import Card from '@/components/ui/Card';
 import ChipSelect from '@/components/ui/ChipSelect';
-import EmptyState from '@/components/ui/EmptyState';
-import FormSection from '@/components/ui/FormSection';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
-import PageHero from '@/components/ui/PageHero';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import SectionHeader from '@/components/ui/SectionHeader';
+import { HomeColors } from '@/constants/home';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate } from '@/lib/format';
@@ -30,14 +28,15 @@ import {
   updateVehicleLastRefill,
 } from '@/lib/services/vehicles';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
 import type { SharedVehicle, Vehicle, VehicleCatalogEntry } from '@/types';
 
 export default function VehiclesScreen() {
   const router = useRouter();
-  const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const scrollRef = useRef<ScrollView>(null);
+  // The add/edit form is collapsed by default so saved vehicles lead the page.
+  const [formOpen, setFormOpen] = useState(false);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [sharedVehicles, setSharedVehicles] = useState<SharedVehicle[]>([]);
   const [catalog, setCatalog] = useState<VehicleCatalogEntry[]>([]);
@@ -45,7 +44,9 @@ export default function VehiclesScreen() {
   const [saving, setSaving] = useState(false);
 
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
-  const [selectedCatalogEntry, setSelectedCatalogEntry] = useState<VehicleCatalogEntry | null>(null);
+  const [selectedCatalogEntry, setSelectedCatalogEntry] = useState<VehicleCatalogEntry | null>(
+    null,
+  );
   const [vehicleName, setVehicleName] = useState('');
   const [brand, setBrand] = useState('');
   const [model, setModel] = useState('');
@@ -66,9 +67,8 @@ export default function VehiclesScreen() {
     }
 
     const query = catalogSearchQuery.toLowerCase();
-    return catalog.filter((c) =>
-      c.brand.toLowerCase().includes(query) ||
-      c.model.toLowerCase().includes(query)
+    return catalog.filter(
+      (c) => c.brand.toLowerCase().includes(query) || c.model.toLowerCase().includes(query),
     );
   }, [catalog, catalogSearchQuery, selectedCatalogEntry]);
 
@@ -123,12 +123,23 @@ export default function VehiclesScreen() {
   };
 
   const clearFieldError = (fieldName: string) => {
-    setFieldErrors(prev => {
+    setFieldErrors((prev) => {
       const newErrors = { ...prev };
       delete newErrors[fieldName];
       return newErrors;
     });
   };
+
+  /** Scrolls the form into view so Edit never leaves the user mid-page. */
+  const revealForm = useCallback(() => {
+    setFormOpen(true);
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }, []);
+
+  const handleOpenAdd = useCallback(() => {
+    setEditingVehicle(null);
+    revealForm();
+  }, [revealForm]);
 
   const handleEditVehicle = (vehicle: Vehicle) => {
     setEditingVehicle(vehicle);
@@ -139,6 +150,7 @@ export default function VehiclesScreen() {
     setEfficiency(String(vehicle.fuel_efficiency_km_per_liter));
     setLastRefillPrice(vehicle.last_refill_price ? String(vehicle.last_refill_price) : '');
     setFieldErrors({});
+    revealForm();
   };
 
   const handleCancelEdit = () => {
@@ -152,6 +164,7 @@ export default function VehiclesScreen() {
     setCatalogSearchQuery('');
     setSelectedCatalogEntry(null);
     setFieldErrors({});
+    setFormOpen(false);
   };
 
   const handleAdd = async () => {
@@ -212,8 +225,12 @@ export default function VehiclesScreen() {
       setSelectedCatalogEntry(null);
       setFieldErrors({});
       setEditingVehicle(null);
+      setFormOpen(false);
       await load();
-      Alert.alert('Saved', editingVehicle ? 'Vehicle updated successfully.' : 'Vehicle added to your profile.');
+      Alert.alert(
+        'Saved',
+        editingVehicle ? 'Vehicle updated successfully.' : 'Vehicle added to your profile.',
+      );
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save vehicle');
     } finally {
@@ -280,253 +297,332 @@ export default function VehiclesScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
-      style={[styles.flex, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.padding}>
-      <PageHero
-        module="vehicles"
-        title="My Vehicles"
-        subtitle={`${vehicles.length} Vehicle${vehicles.length !== 1 ? 's' : ''} Saved`}
-      />
+      style={[styles.flex, { backgroundColor: HomeColors.background }]}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>My Vehicles</Text>
+        <Text style={styles.headerSubtitle}>Manage your vehicles and fuel details.</Text>
+      </View>
 
-      <FormSection title={editingVehicle ? "Edit vehicle" : "Add vehicle"} subtitle={editingVehicle ? "Update vehicle details" : "Search catalog or enter manually"} module="vehicles">
-        <LabeledInput
-          label="Search catalog"
-          value={catalogSearchQuery}
-          onChangeText={setCatalogSearchQuery}
-          placeholder="Type brand or model to search..."
-          editable={!selectedCatalogEntry}
-        />
-        {selectedCatalogEntry && (
-          <View style={[styles.selectedVehicleChip, { backgroundColor: palette.primary }]}>
-            <Text style={styles.selectedVehicleText}>
-              {selectedCatalogEntry.brand} {selectedCatalogEntry.model} ({selectedCatalogEntry.year})
+      {formOpen ? (
+        <View style={styles.formCard}>
+          <View style={styles.formCardHead}>
+            <Text style={styles.formCardTitle}>
+              {editingVehicle ? 'Edit vehicle' : 'Add vehicle'}
             </Text>
-            <TouchableOpacity onPress={handleClearSelection} style={styles.clearButton}>
-              <Text style={styles.clearButtonText}>✕</Text>
-            </TouchableOpacity>
+            <Pressable
+              accessibilityLabel="Close"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={handleCancelEdit}
+              style={styles.formClose}>
+              <Ionicons name="close" size={18} color={HomeColors.muted} />
+            </Pressable>
           </View>
-        )}
-        {searchResults.length > 0 && (
-          <View style={styles.searchResults}>
-            {searchResults.map((entry) => (
-              <TouchableOpacity
-                key={entry.id}
-                style={[styles.searchResultItem, { backgroundColor: theme.overlay }]}
-                onPress={() => handleSelectCatalogEntry(entry)}
-              >
-                <Text style={[styles.searchResultText, { color: theme.text }]}>
-                  {entry.brand} {entry.model} ({entry.year})
-                </Text>
-                <Text style={[styles.searchResultSubtext, { color: theme.textSecondary }]}>
-                  {entry.fuel_efficiency_km_per_liter} km/L
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-        <ChipSelect
-          label="Fuel type"
-          options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
-          value={fuelType}
-          onChange={(value) => {
-            setFuelType(value);
-            clearFieldError('fuelType');
-          }}
-          module="vehicles"
-        />
-        {fieldErrors.fuelType && <Text style={styles.errorText}>{fieldErrors.fuelType}</Text>}
-        <LabeledInput
-          label="Brand"
-          value={brand}
-          onChangeText={(text) => {
-            setBrand(text);
-            clearFieldError('brand');
-          }}
-          placeholder="e.g. Toyota"
-          style={fieldErrors.brand ? { borderColor: palette.danger } : undefined}
-        />
-        {fieldErrors.brand && <Text style={styles.errorText}>{fieldErrors.brand}</Text>}
 
-        <LabeledInput
-          label="Model"
-          value={model}
-          onChangeText={(text) => {
-            setModel(text);
-            clearFieldError('model');
-          }}
-          placeholder="e.g. Vios"
-          style={fieldErrors.model ? { borderColor: palette.danger } : undefined}
-        />
-        {fieldErrors.model && <Text style={styles.errorText}>{fieldErrors.model}</Text>}
-
-        <LabeledInput
-          label="Year"
-          value={year}
-          onChangeText={(text) => {
-            setYear(text);
-            clearFieldError('year');
-          }}
-          keyboardType="number-pad"
-          placeholder="e.g. 2022"
-          style={fieldErrors.year ? { borderColor: palette.danger } : undefined}
-        />
-        {fieldErrors.year && <Text style={styles.errorText}>{fieldErrors.year}</Text>}
-
-        <LabeledInput
-          label="Fuel efficiency (km/L)"
-          value={efficiency}
-          onChangeText={(text) => {
-            setEfficiency(text);
-            clearFieldError('efficiency');
-          }}
-          keyboardType="decimal-pad"
-          placeholder="e.g. 14"
-          style={fieldErrors.efficiency ? { borderColor: palette.danger } : undefined}
-        />
-        {fieldErrors.efficiency && <Text style={styles.errorText}>{fieldErrors.efficiency}</Text>}
-
-        <LabeledInput
-          label="Last refill price (₱/L)"
-          value={lastRefillPrice}
-          onChangeText={(text) => {
-            setLastRefillPrice(text);
-            clearFieldError('lastRefillPrice');
-          }}
-          keyboardType="decimal-pad"
-          placeholder="e.g. 65.50"
-          style={fieldErrors.lastRefillPrice ? { borderColor: palette.danger } : undefined}
-        />
-        {fieldErrors.lastRefillPrice && <Text style={styles.errorText}>{fieldErrors.lastRefillPrice}</Text>}
-
-        <LabeledInput
-          label="Vehicle name"
-          value={vehicleName}
-          onChangeText={(text) => {
-            setVehicleName(text);
-            clearFieldError('vehicleName');
-          }}
-          placeholder="e.g. My Car"
-          style={fieldErrors.vehicleName ? { borderColor: palette.danger } : undefined}
-        />
-        {fieldErrors.vehicleName && <Text style={styles.errorText}>{fieldErrors.vehicleName}</Text>}
-        <PrimaryButton label={saving ? 'Saving…' : (editingVehicle ? 'Update vehicle' : 'Add vehicle')} onPress={handleAdd} disabled={saving} />
-        {editingVehicle && (
-          <PrimaryButton
-            label="Cancel"
-            variant="secondary"
-            onPress={handleCancelEdit}
-            style={styles.cancelEditBtn}
+          <LabeledInput
+            label="Vehicle name"
+            value={vehicleName}
+            onChangeText={(text) => {
+              setVehicleName(text);
+              clearFieldError('vehicleName');
+            }}
+            placeholder="e.g. My Car"
+            style={fieldErrors.vehicleName ? { borderColor: palette.danger } : undefined}
           />
-        )}
-      </FormSection>
+          {fieldErrors.vehicleName && (
+            <Text style={styles.errorText}>{fieldErrors.vehicleName}</Text>
+          )}
 
-      {!editingVehicle && (
-        <>
-          <SectionHeader title="Saved vehicles" subtitle={`${vehicles.length} registered`} module="vehicles" />
-          {vehicles.length === 0 ? (
-            <EmptyState
-              title="No vehicles yet"
-              message="Add your car above to use it in the Trip Optimizer."
+          <LabeledInput
+            label="Search vehicle catalog"
+            value={catalogSearchQuery}
+            onChangeText={setCatalogSearchQuery}
+            placeholder="Type brand or model to search..."
+            editable={!selectedCatalogEntry}
+          />
+          {selectedCatalogEntry && (
+            <View style={[styles.selectedVehicleChip, { backgroundColor: HomeColors.primary }]}>
+              <Text style={styles.selectedVehicleText}>
+                {selectedCatalogEntry.brand} {selectedCatalogEntry.model} (
+                {selectedCatalogEntry.year})
+              </Text>
+              <Pressable onPress={handleClearSelection} style={styles.clearButton}>
+                <Ionicons name="close" size={16} color={HomeColors.onPrimary} />
+              </Pressable>
+            </View>
+          )}
+          {searchResults.length > 0 && (
+            <View style={styles.searchResults}>
+              {searchResults.map((entry) => (
+                <Pressable
+                  key={entry.id}
+                  style={[styles.searchResultItem, { backgroundColor: HomeColors.navySoft }]}
+                  onPress={() => handleSelectCatalogEntry(entry)}>
+                  <Text style={styles.searchResultText}>
+                    {entry.brand} {entry.model} ({entry.year})
+                  </Text>
+                  <Text style={styles.searchResultSubtext}>
+                    {entry.fuel_efficiency_km_per_liter} km/L
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+          <ChipSelect
+            label="Fuel type"
+            options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
+            value={fuelType}
+            onChange={(value) => {
+              setFuelType(value);
+              clearFieldError('fuelType');
+            }}
+            module="vehicles"
+          />
+          {fieldErrors.fuelType && <Text style={styles.errorText}>{fieldErrors.fuelType}</Text>}
+          <LabeledInput
+            label="Brand"
+            value={brand}
+            onChangeText={(text) => {
+              setBrand(text);
+              clearFieldError('brand');
+            }}
+            placeholder="e.g. Toyota"
+            style={fieldErrors.brand ? { borderColor: palette.danger } : undefined}
+          />
+          {fieldErrors.brand && <Text style={styles.errorText}>{fieldErrors.brand}</Text>}
+
+          <LabeledInput
+            label="Model"
+            value={model}
+            onChangeText={(text) => {
+              setModel(text);
+              clearFieldError('model');
+            }}
+            placeholder="e.g. Vios"
+            style={fieldErrors.model ? { borderColor: palette.danger } : undefined}
+          />
+          {fieldErrors.model && <Text style={styles.errorText}>{fieldErrors.model}</Text>}
+
+          <LabeledInput
+            label="Year"
+            value={year}
+            onChangeText={(text) => {
+              setYear(text);
+              clearFieldError('year');
+            }}
+            keyboardType="number-pad"
+            placeholder="e.g. 2022"
+            style={fieldErrors.year ? { borderColor: palette.danger } : undefined}
+          />
+          {fieldErrors.year && <Text style={styles.errorText}>{fieldErrors.year}</Text>}
+
+          <LabeledInput
+            label="Fuel efficiency (km/L)"
+            value={efficiency}
+            onChangeText={(text) => {
+              setEfficiency(text);
+              clearFieldError('efficiency');
+            }}
+            keyboardType="decimal-pad"
+            placeholder="e.g. 14"
+            style={fieldErrors.efficiency ? { borderColor: palette.danger } : undefined}
+          />
+          {fieldErrors.efficiency && <Text style={styles.errorText}>{fieldErrors.efficiency}</Text>}
+
+          <LabeledInput
+            label="Last refill price (₱/L)"
+            value={lastRefillPrice}
+            onChangeText={(text) => {
+              setLastRefillPrice(text);
+              clearFieldError('lastRefillPrice');
+            }}
+            keyboardType="decimal-pad"
+            placeholder="e.g. 65.50"
+            style={fieldErrors.lastRefillPrice ? { borderColor: palette.danger } : undefined}
+          />
+          {fieldErrors.lastRefillPrice && (
+            <Text style={styles.errorText}>{fieldErrors.lastRefillPrice}</Text>
+          )}
+
+          <PrimaryButton
+            label={saving ? 'Saving…' : editingVehicle ? 'Update vehicle' : 'Add vehicle'}
+            onPress={handleAdd}
+            disabled={saving}
+          />
+          {editingVehicle ? (
+            <PrimaryButton
+              label="Cancel"
+              variant="secondary"
+              onPress={handleCancelEdit}
+              style={styles.cancelEditBtn}
             />
-          ) : (
-            vehicles.map((v) => (
-              <Card key={v.id} elevated>
-                <Text style={[styles.vehicleTitle, { color: theme.text }]}>
-                  {v.nickname ?? `${v.brand} ${v.model}`}
-                </Text>
-                <Text style={[styles.vehicleMeta, { color: theme.textSecondary }]}>
-                  {v.brand} {v.model} · {v.year} · {v.fuel_efficiency_km_per_liter} km/L
-                </Text>
-                {v.last_refill_price != null ? (
-                  <View style={[styles.refillRow, { backgroundColor: theme.overlay }]}>
-                    <Text style={[styles.refillLabel, { color: theme.textSecondary }]}>Last refill</Text>
-                    <Text style={[styles.refillValue, { color: theme.text }]}>
-                      {formatCurrency(v.last_refill_price)}/L
+          ) : null}
+        </View>
+      ) : (
+        <Pressable
+          accessibilityLabel="Add vehicle"
+          accessibilityRole="button"
+          onPress={handleOpenAdd}
+          style={({ pressed }) => [styles.addAction, pressed && styles.addActionPressed]}>
+          <View style={styles.addActionIcon}>
+            <Ionicons name="add" size={20} color={HomeColors.primary} />
+          </View>
+          <Text style={styles.addActionLabel}>Add vehicle</Text>
+          <Ionicons name="chevron-forward" size={16} color={HomeColors.primary} />
+        </Pressable>
+      )}
+
+      {vehicles.length === 0 ? (
+        <View style={styles.emptyBlock}>
+          <Ionicons name="car-outline" size={22} color={HomeColors.muted} />
+          <Text style={styles.emptyTitle}>No vehicles yet</Text>
+          <Text style={styles.emptyMessage}>
+            Add your first vehicle to use it in the Trip Optimizer.
+          </Text>
+        </View>
+      ) : (
+        <>
+          <Text style={styles.sectionLabel}>Saved vehicles</Text>
+          {vehicles.map((v) => {
+            const hasRefill = v.last_refill_price != null;
+            const showRefillForm = editingVehicleId === v.id;
+            const isEditingThis = editingVehicle?.id === v.id;
+
+            return (
+              <View key={v.id} style={styles.vehicleCard}>
+                <View style={styles.vehicleCardHead}>
+                  <View style={styles.vehicleIcon}>
+                    <Ionicons name="car-outline" size={18} color={HomeColors.primary} />
+                  </View>
+                  <View style={styles.vehicleCardTitles}>
+                    <Text numberOfLines={1} style={styles.vehicleName}>
+                      {v.nickname ?? `${v.brand} ${v.model}`}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.vehicleMeta}>
+                      {v.brand} {v.model} · {v.year} · {v.fuel_efficiency_km_per_liter} km/L
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.cardDivider} />
+
+                {hasRefill ? (
+                  <View style={styles.refillRow}>
+                    <Text style={styles.refillLabel}>Last refill</Text>
+                    <Text numberOfLines={1} style={styles.refillValue}>
+                      {formatCurrency(v.last_refill_price as number)}/L
                       {v.last_refill_at ? ` · ${formatDate(v.last_refill_at)}` : ''}
                     </Text>
                   </View>
                 ) : (
-                  <Text style={styles.missingRefill}>No last-refill price set</Text>
+                  <View style={styles.refillRow}>
+                    <Text style={styles.refillLabel}>Last refill</Text>
+                    <Text numberOfLines={1} style={styles.missingRefill}>
+                      No refill price yet
+                    </Text>
+                  </View>
                 )}
 
-                <VehicleSharePanel vehicleId={v.id} ownerId={user.id} />
-
-                {editingVehicleId === v.id ? (
-                  <>
+                {showRefillForm ? (
+                  <View style={styles.inlineForm}>
                     <LabeledInput
-                      label="Update last refill price (₱/L)"
+                      label="Last refill price (₱/L)"
                       value={editLastRefillPrice}
                       onChangeText={setEditLastRefillPrice}
                       keyboardType="decimal-pad"
                     />
-                    <PrimaryButton
-                      label={updatingRefill ? 'Saving…' : 'Save last refill'}
-                      onPress={() => handleUpdateLastRefill(v.id)}
-                      disabled={updatingRefill}
-                      style={styles.actionBtn}
-                    />
-                    <PrimaryButton
-                      label="Cancel"
-                      variant="secondary"
-                      onPress={() => {
-                        setEditingVehicleId(null);
-                        setEditLastRefillPrice('');
-                      }}
-                      style={styles.actionBtn}
-                    />
-                  </>
-                ) : editingVehicle === null ? (
-                  <>
-                    <PrimaryButton
-                      label={v.last_refill_price != null ? 'Update last refill' : 'Set last refill'}
-                      variant="secondary"
-                      size="sm"
-                      onPress={() => {
-                        setEditingVehicleId(v.id);
-                        setEditLastRefillPrice(
-                          v.last_refill_price != null ? String(v.last_refill_price) : ''
-                        );
-                      }}
-                      style={styles.actionBtn}
-                    />
-                    <PrimaryButton
-                      label="Edit"
-                      variant="secondary"
-                      size="sm"
-                      onPress={() => handleEditVehicle(v)}
-                      style={styles.actionBtn}
-                    />
-                  </>
+                    <View style={styles.inlineFormActions}>
+                      <PrimaryButton
+                        label={updatingRefill ? 'Saving…' : 'Save'}
+                        onPress={() => handleUpdateLastRefill(v.id)}
+                        disabled={updatingRefill}
+                        style={styles.inlineFormAction}
+                      />
+                      <PrimaryButton
+                        label="Cancel"
+                        variant="secondary"
+                        onPress={() => {
+                          setEditingVehicleId(null);
+                          setEditLastRefillPrice('');
+                        }}
+                        style={styles.inlineFormAction}
+                      />
+                    </View>
+                  </View>
                 ) : null}
 
-                <PrimaryButton
-                  label="Delete"
-                  variant="danger"
-                  size="sm"
-                  onPress={() => handleDelete(v.id)}
-                  style={styles.deleteBtn}
-                />
-              </Card>
-            ))
-          )}
+                <VehicleSharePanel vehicleId={v.id} ownerId={user.id} />
+
+                {isEditingThis ? (
+                  <View style={styles.editingNote}>
+                    <Ionicons name="pencil" size={13} color={HomeColors.primary} />
+                    <Text style={styles.editingNoteText}>
+                      Editing above — tap Cancel to discard.
+                    </Text>
+                  </View>
+                ) : null}
+
+                {showRefillForm || isEditingThis ? null : (
+                  <View style={styles.cardActions}>
+                    <Pressable
+                      accessibilityLabel="Update last refill"
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setEditingVehicleId(v.id);
+                        setEditLastRefillPrice(hasRefill ? String(v.last_refill_price) : '');
+                      }}
+                      style={({ pressed }) => [
+                        styles.cardAction,
+                        pressed && styles.cardActionPressed,
+                      ]}>
+                      <Ionicons name="cash-outline" size={14} color={HomeColors.primary} />
+                      <Text style={styles.cardActionLabel}>
+                        {hasRefill ? 'Update refill' : 'Set refill'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel="Edit vehicle"
+                      accessibilityRole="button"
+                      onPress={() => handleEditVehicle(v)}
+                      style={({ pressed }) => [
+                        styles.cardAction,
+                        pressed && styles.cardActionPressed,
+                      ]}>
+                      <Ionicons name="create-outline" size={14} color={HomeColors.muted} />
+                      <Text style={styles.cardActionLabelMuted}>Edit</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel="Delete vehicle"
+                      accessibilityRole="button"
+                      onPress={() => handleDelete(v.id)}
+                      style={({ pressed }) => [
+                        styles.cardAction,
+                        pressed && styles.cardActionPressed,
+                      ]}>
+                      <Ionicons name="trash-outline" size={14} color={palette.danger} />
+                      <Text style={styles.cardActionLabelDanger}>Delete</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            );
+          })}
         </>
       )}
 
-      <SectionHeader
-        title="Shared with me"
-        subtitle={`${sharedVehicles.length} shared vehicle${sharedVehicles.length !== 1 ? 's' : ''}`}
-        module="vehicles"
-      />
+      <Text style={styles.sectionLabel}>Shared with me</Text>
       {sharedVehicles.length === 0 ? (
-        <EmptyState
-          title="No shared vehicles"
-          message="Vehicles shared with you will appear here."
-        />
+        <View style={styles.emptyBlock}>
+          <Text style={styles.emptyMessage}>Vehicles shared with you will appear here.</Text>
+        </View>
       ) : (
         sharedVehicles.map((sharedVehicle) => (
-          <TouchableOpacity
+          <Pressable
             key={sharedVehicle.vehicleId}
             onPress={() =>
               router.push({
@@ -537,51 +633,121 @@ export default function VehiclesScreen() {
                 },
               })
             }
-            style={styles.sharedVehicleButton}>
-            <Card elevated compact>
-              <View style={styles.sharedVehicleRow}>
-                <View style={styles.sharedVehicleInfo}>
-                  <Text style={[styles.sharedVehicleTitle, { color: theme.text }]}>
-                    {sharedVehicle.brand} {sharedVehicle.model}
-                  </Text>
-                  <Text style={[styles.sharedVehicleRole, { color: theme.textSecondary }]}>
-                    {sharedVehicle.role}
-                  </Text>
-                </View>
-                <Text style={[styles.sharedVehicleChevron, { color: theme.textSecondary }]}>›</Text>
-              </View>
-            </Card>
-          </TouchableOpacity>
+            style={({ pressed }) => [styles.sharedRow, pressed && styles.cardActionPressed]}>
+            <View style={styles.vehicleCardTitles}>
+              <Text numberOfLines={1} style={styles.vehicleName}>
+                {sharedVehicle.brand} {sharedVehicle.model}
+              </Text>
+              <Text numberOfLines={1} style={styles.vehicleMeta}>
+                {sharedVehicle.role}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={HomeColors.muted} />
+          </Pressable>
         ))
       )}
     </ScrollView>
   );
 }
 
+/** Layout rhythm. Matches the Home screen so both tabs read as one app. */
+const SECTION_GAP = 28;
+const SURFACE_PAD = 18;
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: {
+  content: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xxl,
+    paddingBottom: spacing.xl,
   },
-  vehicleTitle: { fontSize: 19, fontWeight: '800', letterSpacing: -0.2, marginBottom: 6 },
-  vehicleMeta: { fontSize: 14, lineHeight: 20, marginBottom: spacing.md },
-  refillRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: spacing.md,
-    borderRadius: radii.md,
+  header: {
+    marginTop: spacing.xl,
+    marginBottom: SECTION_GAP,
+  },
+  headerTitle: {
+    color: HomeColors.navy,
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  headerSubtitle: {
+    color: HomeColors.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: spacing.xs,
+  },
+  sectionLabel: {
+    color: HomeColors.navy,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    marginTop: SECTION_GAP,
     marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
   },
-  refillLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.3, textTransform: 'uppercase' },
-  refillValue: { fontSize: 15, fontWeight: '800' },
-  missingRefill: { color: palette.warning, fontWeight: '700', marginBottom: spacing.sm },
-  actionBtn: { marginTop: spacing.sm },
-  deleteBtn: { marginTop: spacing.sm },
-  cancelEditBtn: { marginTop: spacing.sm },
+
+  // Single primary action, replacing the always-visible form.
+  addAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: SURFACE_PAD,
+    borderRadius: radii.md,
+    backgroundColor: HomeColors.primary,
+  },
+  addActionPressed: {
+    opacity: 0.85,
+  },
+  addActionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: HomeColors.onPrimary,
+  },
+  addActionLabel: {
+    flex: 1,
+    color: HomeColors.onPrimary,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+
+  // Collapsible add/edit form. Flat surface — no blur, no gradient.
+  formCard: {
+    padding: SURFACE_PAD,
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.border,
+    backgroundColor: HomeColors.onPrimary,
+  },
+  formCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  formCardTitle: {
+    color: HomeColors.navy,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  formClose: {
+    padding: 2,
+  },
+  cancelEditBtn: {
+    marginTop: spacing.sm,
+  },
+  errorText: {
+    color: palette.danger,
+    fontSize: 12,
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+  },
+
   selectedVehicleChip: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -589,73 +755,208 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radii.md,
     marginBottom: spacing.md,
-    shadowColor: palette.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 2,
   },
   selectedVehicleText: {
-    fontSize: 16,
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '700',
-    color: GasTaColors.white,
+    color: HomeColors.onPrimary,
   },
   clearButton: {
-    padding: spacing.sm,
-  },
-  clearButtonText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: GasTaColors.white,
+    padding: spacing.xs,
+    marginLeft: spacing.sm,
   },
   searchResults: {
     marginBottom: spacing.md,
   },
   searchResultItem: {
     padding: spacing.md,
-    borderRadius: radii.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
+    borderRadius: radii.sm,
+    marginBottom: spacing.xs,
   },
   searchResultText: {
-    fontSize: 16,
-    fontWeight: '700',
+    color: HomeColors.navy,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '600',
   },
   searchResultSubtext: {
+    color: HomeColors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+
+  // Compact vehicle card — flat surface, hairline border, no shadow.
+  vehicleCard: {
+    padding: SURFACE_PAD,
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.border,
+    backgroundColor: HomeColors.onPrimary,
+    marginBottom: spacing.md,
+  },
+  vehicleCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  vehicleIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: HomeColors.primarySoft,
+  },
+  vehicleCardTitles: {
+    flex: 1,
+    minWidth: 0,
+  },
+  vehicleName: {
+    color: HomeColors.navy,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  vehicleMeta: {
+    color: HomeColors.muted,
     fontSize: 13,
-    marginTop: 3,
+    lineHeight: 18,
+    marginTop: 1,
   },
-  sharedVehicleButton: {
-    width: '100%',
+  cardDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: HomeColors.border,
+    marginVertical: spacing.md,
   },
-  sharedVehicleRow: {
+  refillRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.md,
   },
-  sharedVehicleInfo: {
+  refillLabel: {
+    color: HomeColors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  refillValue: {
+    flexShrink: 1,
+    color: HomeColors.navy,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  missingRefill: {
+    flexShrink: 1,
+    color: palette.warning,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  inlineForm: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: HomeColors.border,
+  },
+  inlineFormActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  inlineFormAction: {
     flex: 1,
   },
-  sharedVehicleTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
+  editingNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radii.sm,
+    backgroundColor: HomeColors.primarySoft,
   },
-  sharedVehicleRole: {
-    fontSize: 13,
+  editingNoteText: {
+    flex: 1,
+    color: HomeColors.navy,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  // One compact action row instead of stacked full-width buttons.
+  cardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: HomeColors.border,
+  },
+  cardAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.sm,
+  },
+  cardActionPressed: {
+    backgroundColor: HomeColors.navySoft,
+  },
+  cardActionLabel: {
+    color: HomeColors.primary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
-    marginTop: 4,
   },
-  sharedVehicleChevron: {
-    fontSize: 28,
-    fontWeight: '300',
-    marginLeft: spacing.sm,
+  cardActionLabelMuted: {
+    color: HomeColors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
   },
-  errorText: {
+  cardActionLabelDanger: {
     color: palette.danger,
     fontSize: 12,
-    marginTop: -spacing.sm,
-    marginBottom: spacing.md,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  emptyBlock: {
+    alignItems: 'center',
+    paddingHorizontal: SURFACE_PAD,
+    paddingVertical: spacing.xl,
+    borderRadius: radii.md,
+    backgroundColor: HomeColors.navySoft,
+    marginTop: SECTION_GAP,
+  },
+  emptyTitle: {
+    color: HomeColors.navy,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    marginTop: spacing.sm,
+  },
+  emptyMessage: {
+    color: HomeColors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  sharedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: SURFACE_PAD,
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.border,
+    backgroundColor: HomeColors.onPrimary,
+    marginBottom: spacing.sm,
   },
 });

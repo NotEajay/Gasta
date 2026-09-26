@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import LabeledInput from '@/components/ui/LabeledInput';
@@ -182,16 +183,21 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
 
   return (
     <View style={styles.wrap}>
-      <PrimaryButton
-        label={expanded ? 'Hide sharing' : 'Share'}
-        variant={expanded ? 'secondary' : 'primary'}
-        size="sm"
+      <Pressable
+        accessibilityLabel="Share vehicle"
+        accessibilityRole="button"
         onPress={() => {
           setExpanded((current) => !current);
           setMessage(null);
         }}
-        style={styles.shareButton}
-      />
+        style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}>
+        <Ionicons
+          name={expanded ? 'chevron-up' : 'share-social-outline'}
+          size={14}
+          color={palette.primary}
+        />
+        <Text style={styles.shareButtonLabel}>{expanded ? 'Hide sharing' : 'Share'}</Text>
+      </Pressable>
 
       {expanded ? (
         <View style={[styles.panel, { borderTopColor: theme.border }]}>
@@ -254,13 +260,19 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
 
           <View style={styles.sharedHeader}>
             <Text style={[styles.sharedHeading, { color: theme.text }]}>Shared with</Text>
-            <Text style={[styles.sharedCount, { color: theme.textSecondary }]}>{shares.length}</Text>
+            <Text style={[styles.sharedCount, { color: theme.textSecondary }]}>
+              {shares.length}
+            </Text>
           </View>
 
           {loadingShares ? (
-            <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>Loading shared access…</Text>
+            <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>
+              Loading shared access…
+            </Text>
           ) : shares.length === 0 ? (
-            <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>No shared access yet.</Text>
+            <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>
+              No shared access yet.
+            </Text>
           ) : (
             shares.map((share) => {
               const profile = profiles[share.shared_with];
@@ -272,7 +284,9 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
                   key={share['ShareID']}
                   style={[styles.sharedUser, { backgroundColor: theme.overlay }]}>
                   <View style={styles.sharedUserInfo}>
-                    <Text style={[styles.sharedUserName, { color: theme.text }]}>{displayName}</Text>
+                    <Text style={[styles.sharedUserName, { color: theme.text }]}>
+                      {displayName}
+                    </Text>
                     <Text style={[styles.sharedUserMeta, { color: theme.textSecondary }]}>
                       {profile?.email || 'Email unavailable'} · {share.role}
                     </Text>
@@ -300,7 +314,22 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   shareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     alignSelf: 'flex-start',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.sm,
+  },
+  shareButtonPressed: {
+    backgroundColor: palette.primarySoft,
+  },
+  shareButtonLabel: {
+    color: palette.primary,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   panel: {
     borderTopWidth: 1,
@@ -372,4 +401,3 @@ const styles = StyleSheet.create({
     marginLeft: spacing.sm,
   },
 });
-

@@ -1,20 +1,18 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
-import Card from '@/components/ui/Card';
-import EmptyState from '@/components/ui/EmptyState';
-import LoadingState from '@/components/ui/LoadingState';
-import SubPageHeader from '@/components/ui/SubPageHeader';
-import { spacing } from '@/constants/Theme';
+import { HomeColors } from '@/constants/home';
+import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency, formatDate, transportModeLabel } from '@/lib/format';
 import { fetchTripsForVehicle } from '@/lib/services/trips';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
 import type { TripRecord } from '@/types/mcda';
 
 function ownVehicleFuelCost(record: TripRecord): number | null {
@@ -22,8 +20,13 @@ function ownVehicleFuelCost(record: TripRecord): number | null {
   return own?.raw.fuelCost ?? null;
 }
 
+/** True when the trip has real location labels, so distance is not already the route. */
+function hasRouteLabels(record: TripRecord): boolean {
+  return Boolean(record.origin_label || record.destination_label);
+}
+
 function routeLabel(record: TripRecord): string {
-  if (record.origin_label || record.destination_label) {
+  if (hasRouteLabels(record)) {
     return `${record.origin_label ?? '…'} → ${record.destination_label ?? '…'}`;
   }
   return `${record.distance_km} km`;
@@ -31,7 +34,7 @@ function routeLabel(record: TripRecord): string {
 
 export default function SharedVehicleHistoryScreen() {
   const router = useRouter();
-  const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { user, loading: authLoading } = useAuth();
   const params = useLocalSearchParams<{
     vehicleId?: string;
@@ -44,6 +47,7 @@ export default function SharedVehicleHistoryScreen() {
       : 'Shared vehicle';
   const [records, setRecords] = useState<TripRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!user || !isSupabaseConfigured || !vehicleId) {
@@ -52,12 +56,12 @@ export default function SharedVehicleHistoryScreen() {
     }
 
     try {
+      setError(null);
       setRecords(await fetchTripsForVehicle(vehicleId));
-    } catch (error) {
-      Alert.alert(
-        'Unable to load trips',
-        error instanceof Error ? error.message : 'Please try again.',
-      );
+    } catch (e) {
+      // Surfaced in the list, so a failure is never mistaken for "no trips".
+      setRecords([]);
+      setError(e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setLoading(false);
     }
@@ -67,15 +71,111 @@ export default function SharedVehicleHistoryScreen() {
     void load();
   }, [load]);
 
+  const handleRetry = useCallback(() => {
+    setLoading(true);
+    void load();
+  }, [load]);
+
+  const renderItem = useCallback(({ item }: { item: TripRecord }) => {
+    const fuel = ownVehicleFuelCost(item);
+    // routeLabel already falls back to the distance, so only repeat it when a
+    // real origin/destination pair exists.
+    const showDistance = hasRouteLabels(item);
+
+    return (
+      <View style={styles.card}>
+        <Text numberOfLines={1} style={styles.date}>
+          {formatDate(item.created_at)}
+        </Text>
+        <Text numberOfLines={2} ellipsizeMode="tail" style={styles.route}>
+          {routeLabel(item)}
+        </Text>
+        <View style={styles.metaRow}>
+          <View style={styles.metaGroup}>
+            <View style={styles.metaItem}>
+              <Ionicons name="navigate-outline" size={14} color={HomeColors.muted} />
+              <Text numberOfLines={1} style={styles.metaText}>
+                {transportModeLabel(item.recommended_mode_code)}
+              </Text>
+            </View>
+            {showDistance ? (
+              <View style={styles.metaItem}>
+                <Ionicons name="map-outline" size={14} color={HomeColors.muted} />
+                <Text numberOfLines={1} style={styles.metaText}>
+                  {item.distance_km} km
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          {fuel != null ? (
+            <View style={styles.metaItem}>
+              <Ionicons name="cash-outline" size={14} color={HomeColors.primary} />
+              <Text numberOfLines={1} style={styles.fuelText}>
+                {formatCurrency(fuel)}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    );
+  }, []);
+
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <Pressable
+        accessibilityLabel="Go back"
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={() => router.back()}
+        style={styles.backBtn}>
+        <Ionicons name="chevron-back" size={18} color={HomeColors.primary} />
+        <Text style={styles.backText}>Back</Text>
+      </Pressable>
+      <Text numberOfLines={2} style={styles.headerTitle}>
+        {vehicleLabel}
+      </Text>
+      <Text style={styles.headerSubtitle}>
+        {records.length > 0
+          ? `Shared trip history · ${records.length} trip${records.length !== 1 ? 's' : ''}`
+          : 'Shared trip history'}
+      </Text>
+    </View>
+  );
+
+  const renderListEmpty = () => (
+    <View style={styles.stateBlock}>
+      <Text style={styles.stateTitle}>{error ? "Couldn't load trips" : 'No trips yet'}</Text>
+      <Text style={styles.stateMessage}>
+        {error ?? 'Trips recorded with this shared vehicle will appear here.'}
+      </Text>
+      {error ? (
+        <Pressable
+          accessibilityLabel="Try again"
+          accessibilityRole="button"
+          onPress={handleRetry}
+          style={styles.retryBtn}>
+          <Text style={styles.retryText}>Try again</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+
   if (!isSupabaseConfigured) {
     return (
-      <View style={styles.flex}>
+      <View style={styles.screen}>
         <SupabaseSetupBanner />
       </View>
     );
   }
 
-  if (authLoading || loading) return <LoadingState message="Loading shared trips…" />;
+  if (authLoading || loading) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator color={HomeColors.primary} />
+        <Text style={styles.loadingText}>Loading shared trips…</Text>
+      </View>
+    );
+  }
 
   if (!user) {
     return (
@@ -86,71 +186,163 @@ export default function SharedVehicleHistoryScreen() {
     );
   }
 
-  if (!vehicleId) {
-    return (
-      <View style={[styles.flex, { backgroundColor: theme.background }]}>
-        <ScrollView contentContainerStyle={styles.padding}>
-          <SubPageHeader
-            module="trip"
-            title="Shared vehicle trips"
-            subtitle="Read-only trip history for this shared vehicle."
-          />
-          <EmptyState
-            title="Vehicle unavailable"
-            message="This shared vehicle could not be found."
-          />
-        </ScrollView>
-      </View>
-    );
-  }
-
   return (
-    <ScrollView
-      style={[styles.flex, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.padding}>
-      <SubPageHeader
-        module="trip"
-        title={`${vehicleLabel} trips`}
-        subtitle="Read-only trip history for this shared vehicle."
+    <View style={styles.screen}>
+      <FlatList
+        // Status-bar clearance only: the base padding is unchanged and the inset
+        // is added on top, so the header clears the notch without extra padding.
+        contentContainerStyle={[styles.content, { paddingTop: spacing.lg + insets.top }]}
+        data={records}
+        initialNumToRender={10}
+        keyExtractor={(item) => item.id}
+        ListEmptyComponent={renderListEmpty}
+        ListHeaderComponent={renderHeader}
+        maxToRenderPerBatch={10}
+        renderItem={renderItem}
+        showsVerticalScrollIndicator={false}
+        windowSize={7}
       />
-
-      {records.length === 0 ? (
-        <EmptyState
-          title="No shared trips yet"
-          message="Trips recorded for this vehicle will appear here."
-        />
-      ) : (
-        records.map((record) => {
-          const fuel = ownVehicleFuelCost(record);
-          return (
-            <Card key={record.id}>
-              <Text style={[styles.date, { color: theme.textSecondary }]}>
-                {formatDate(record.created_at)}
-              </Text>
-              <Text style={[styles.route, { color: theme.text }]}>{routeLabel(record)}</Text>
-              <Text style={[styles.meta, { color: theme.textSecondary }]}>
-                Recommended: {transportModeLabel(record.recommended_mode_code)}
-              </Text>
-              {fuel != null ? (
-                <Text style={[styles.meta, { color: theme.textSecondary }]}>
-                  Vehicle fuel: {formatCurrency(fuel)}
-                </Text>
-              ) : null}
-              <Text style={[styles.meta, { color: theme.textSecondary }]}>
-                {record.distance_km} km
-              </Text>
-            </Card>
-          );
-        })
-      )}
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  date: { fontSize: 13 },
-  route: { fontSize: 17, fontWeight: '700', marginVertical: 4 },
-  meta: { fontSize: 14, marginTop: 2 },
+  screen: { flex: 1, backgroundColor: HomeColors.background },
+  content: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxl,
+  },
+
+  header: { marginBottom: spacing.lg },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 2,
+    paddingVertical: 4,
+  },
+  backText: {
+    color: HomeColors.primary,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  headerTitle: {
+    color: HomeColors.navy,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    marginTop: spacing.sm,
+  },
+  headerSubtitle: {
+    color: HomeColors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+
+  // Flat trip row: hairline border, no shadow, no blur, no gradient.
+  card: {
+    padding: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.border,
+    backgroundColor: GasTaColors.white,
+    marginBottom: spacing.sm,
+  },
+  date: {
+    color: HomeColors.muted,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
+  },
+  route: {
+    color: HomeColors.navy,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  metaGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 1,
+  },
+  metaText: {
+    color: HomeColors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    flexShrink: 1,
+  },
+  fuelText: {
+    color: HomeColors.primary,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+
+  stateBlock: {
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: HomeColors.border,
+    backgroundColor: GasTaColors.white,
+  },
+  stateTitle: {
+    color: HomeColors.navy,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  stateMessage: {
+    color: HomeColors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  retryBtn: {
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    backgroundColor: HomeColors.primarySoft,
+  },
+  retryText: {
+    color: HomeColors.primary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: HomeColors.background,
+  },
+  loadingText: {
+    color: HomeColors.muted,
+    fontSize: 14,
+    lineHeight: 20,
+  },
 });

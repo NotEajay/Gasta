@@ -13,7 +13,13 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const inOAuthCallback = root === 'auth';
   const onLogin = root === 'login';
   const onIndex = root === 'index' || root === undefined;
+  // Shared-vehicle history is a signed-in detail screen that lives outside (tabs).
+  const onSharedVehicle = root === 'shared-vehicle-history';
   const isAuthSurface = inAuthGroup || inOAuthCallback || onLogin || onIndex;
+  // Every route a signed-in user may actually see. Redirecting one of these
+  // unmounts the navigator while Redirect's focus effect is still pending, which
+  // spins React Navigation's state sync ("maximum update depth exceeded").
+  const isAppSurface = inTabs || onSharedVehicle;
   const isAuthenticated = Boolean(session && isEmailVerified);
 
   // Always block during loading - never render auth surface or protected routes
@@ -26,7 +32,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }
 
   // Signed-in users always land in the main app (never auth / not-found / stray routes)
-  if (isAuthenticated && !inTabs) {
+  if (isAuthenticated && !isAppSurface) {
     return <Redirect href="/(tabs)/home" />;
   }
 
@@ -77,6 +83,7 @@ export function RootStack() {
       <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="shared-vehicle-history" options={{ headerShown: false }} />
     </Stack>
   );
 }
