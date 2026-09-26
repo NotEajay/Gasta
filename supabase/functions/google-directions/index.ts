@@ -34,12 +34,19 @@ type DirectionsLeg = {
 
 type GoogleDirectionsResponse = {
   status?: string;
-  routes?: Array<{ legs?: DirectionsLeg[] }>;
+  routes?: Array<{
+    legs?: DirectionsLeg[];
+    overview_polyline?: { points?: string };
+  }>;
 };
+
+type LatLng = { latitude: number; longitude: number };
 
 type RouteResult = {
   distanceKm: number;
   durationMinutes: number;
+  /** Decoded overview polyline for map drawing (WGS84). */
+  coordinates: LatLng[];
 };
 
 const ENDPOINT = 'https://maps.googleapis.com/maps/api/directions/json';
@@ -164,6 +171,44 @@ function statusForErrorCode(code: DirectionsErrorCode): number {
     default:
       return 500;
   }
+}
+
+/** Decode Google's encoded polyline into lat/lng pairs. */
+function decodePolyline(encoded: string): LatLng[] {
+  const coordinates: LatLng[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    const deltaLat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += deltaLat;
+
+    result = 0;
+    shift = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    const deltaLng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += deltaLng;
+
+    coordinates.push({
+      latitude: lat / 1e5,
+      longitude: lng / 1e5,
+    });
+  }
+
+  return coordinates;
 }
 
 function getBearerToken(request: Request): string | null {
@@ -313,9 +358,17 @@ Deno.serve(async (request) => {
     if (distanceMeters <= 0) return errorResponse('not_found', 404);
     if (durationSeconds <= 0) return errorResponse('invalid_response', 502);
 
+    const encoded = googlePayload.routes?.[0]?.overview_polyline?.points;
+    const coordinates =
+      typeof encoded === 'string' && encoded.length > 0 ? decodePolyline(encoded) : [];
+    if (coordinates.length < 2) {
+      return errorResponse('invalid_response', 502);
+    }
+
     const result: RouteResult = {
       distanceKm: distanceMeters / 1_000,
       durationMinutes: durationSeconds / 60,
+      coordinates,
     };
     return jsonResponse(result);
   } catch (error) {
