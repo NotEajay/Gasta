@@ -52,6 +52,16 @@ export const palette = {
   dangerSoft: 'rgba(220, 38, 38, 0.1)',
 } as const;
 
+/**
+ * Feature brand accents used by the trip pick-map screen (PR #9).
+ * Only the keys that screen actually reads are defined here; pick-map imports
+ * this object from constants/Theme.
+ */
+export const BrandColors = {
+  skyBlue: '#0EA5E9',
+  border: GasTaColors.glassBorderSubtle,
+} as const;
+
 export const spacing = GasTaSpacing;
 export const radii = GasTaRadius;
 
