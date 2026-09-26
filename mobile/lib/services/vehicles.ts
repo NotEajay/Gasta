@@ -1,3 +1,5 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { supabase } from '@/lib/supabase';
 import type {
   UserProfile,
@@ -8,6 +10,29 @@ import type {
   VehicleShare,
   VehicleShareRole,
 } from '@/types';
+
+/**
+ * restore_vehicle_share() comes from 20240812000022, which has NOT been pushed
+ * to the live project, so the generated Database type does not know it yet. This
+ * tiny adapter types just that one call, keeping it fully typed without
+ * hand-editing the generated file. Delete once `supabase gen types` is re-run.
+ */
+interface ShareFunctionsDatabase {
+  public: {
+    Tables: Record<string, never>;
+    Views: Record<string, never>;
+    Functions: {
+      restore_vehicle_share: {
+        Args: { p_vehicle_id: string; p_user_id: string; p_role: string };
+        Returns: VehicleShare;
+      };
+    };
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
+}
+
+const shareDb = supabase as unknown as SupabaseClient<ShareFunctionsDatabase>;
 
 const shareColumns = '"ShareID", "vehicleID", shared_by, shared_with, role, created_at, revoked';
 
@@ -32,6 +57,19 @@ export async function fetchUserProfileById(userId: string): Promise<UserProfile 
   return (data as UserProfile | null) ?? null;
 }
 
+/**
+ * Owner-management query: every share row for this vehicle, ACTIVE *AND* REVOKED.
+ *
+ * This must NOT filter on `revoked`. The Share form uses this list to tell three
+ * states apart — never shared, currently active, previously revoked — so it can
+ * offer "Restore access" and reactivate the existing row instead of inserting a
+ * second one. With a `revoked = false` filter a revoked collaborator looks brand
+ * new, the form falls through to createVehicleShare(), and the insert dies on
+ * unique (vehicleID, shared_with) with 23505.
+ *
+ * Contrast fetchSharedVehicles(), which is the recipient's view and correctly
+ * returns active rows only.
+ */
 export async function fetchVehicleShares(
   vehicleId: string,
   ownerId: string,
@@ -41,7 +79,6 @@ export async function fetchVehicleShares(
     .select(shareColumns)
     .eq('vehicleID', vehicleId)
     .eq('shared_by', ownerId)
-    .eq('revoked', false)
     .order('created_at', { ascending: false });
 
   if (error) throw error;
@@ -58,22 +95,22 @@ export async function fetchSharedVehicles(userId: string): Promise<SharedVehicle
 
   if (shareError) throw shareError;
 
-  const shares = (shareData ?? []) as unknown as Array<
-    Pick<VehicleShare, 'vehicleID' | 'role'>
-  >;
+  const shares = (shareData ?? []) as unknown as Array<Pick<VehicleShare, 'vehicleID' | 'role'>>;
   if (shares.length === 0) return [];
 
   const vehicleIds = [...new Set(shares.map((share) => share.vehicleID))];
   const { data: vehicleData, error: vehicleError } = await supabase
     .from('vehicles')
-    .select('id, brand, model')
+    // fuel_type_id is included so a Member/Driver/Operator can log a refill for a
+    // shared vehicle with the correct fuel type. vehicles_select_shared already
+    // grants the whole row to active share recipients, so this needs no policy
+    // change and exposes nothing new.
+    .select('id, brand, model, fuel_type_id')
     .in('id', vehicleIds);
 
   if (vehicleError) throw vehicleError;
 
-  const vehiclesById = new Map(
-    (vehicleData ?? []).map((vehicle) => [vehicle.id, vehicle]),
-  );
+  const vehiclesById = new Map((vehicleData ?? []).map((vehicle) => [vehicle.id, vehicle]));
 
   return shares.flatMap((share) => {
     const vehicle = vehiclesById.get(share.vehicleID);
@@ -84,6 +121,7 @@ export async function fetchSharedVehicles(userId: string): Promise<SharedVehicle
         vehicleId: share.vehicleID,
         brand: vehicle.brand,
         model: vehicle.model,
+        fuelTypeId: vehicle.fuel_type_id,
         role: share.role,
       },
     ];
@@ -101,7 +139,7 @@ export async function createVehicleShare(input: CreateVehicleShareInput): Promis
   const { data, error } = await supabase
     .from('vehicle_shares')
     .insert({
-      "vehicleID": input.vehicleId,
+      vehicleID: input.vehicleId,
       shared_by: input.sharedBy,
       shared_with: input.sharedWith,
       role: input.role,
@@ -137,6 +175,38 @@ export async function revokeVehicleShare(
     .eq('revoked', false);
 
   if (error) throw error;
+}
+
+/**
+ * Re-grant access to a previously revoked collaborator, on the SAME vehicle_shares
+ * row (unique on vehicleID + shared_with, so a second INSERT is impossible).
+ * Ownership and the role vocabulary are re-verified server-side.
+ */
+export async function restoreVehicleShare(
+  vehicleId: string,
+  userId: string,
+  role: VehicleShareRole,
+): Promise<VehicleShare> {
+  const { data, error } = await shareDb
+    .rpc('restore_vehicle_share', {
+      p_vehicle_id: vehicleId,
+      p_user_id: userId,
+      p_role: role,
+    })
+    .single();
+
+  if (error) {
+    // 42883 = undefined_function. The RPC ships in migration
+    // 20240812000022; if it has not been applied to the project yet, PostgREST
+    // fails here. Say so plainly instead of surfacing a raw driver error.
+    if (error.code === '42883' || /restore_vehicle_share/i.test(error.message)) {
+      throw new Error(
+        'Restore access is unavailable: the restore_vehicle_share function is not deployed. Apply migration 20240812000022.',
+      );
+    }
+    throw error;
+  }
+  return data as unknown as VehicleShare;
 }
 
 export async function fetchVehicles(userId: string): Promise<Vehicle[]> {
@@ -210,7 +280,7 @@ export async function createVehicle(input: CreateVehicleInput): Promise<Vehicle>
 
 export async function updateVehicleLastRefill(
   vehicleId: string,
-  lastRefillPrice: number
+  lastRefillPrice: number,
 ): Promise<Vehicle> {
   const { data, error } = await supabase
     .from('vehicles')

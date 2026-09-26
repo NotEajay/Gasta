@@ -7,6 +7,7 @@ import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import VehicleSharePanel from '@/components/VehicleSharePanel';
+import VehicleRefillPanel from '@/components/vehicle/VehicleRefillPanel';
 import ChipSelect from '@/components/ui/ChipSelect';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
@@ -269,6 +270,21 @@ export default function VehiclesScreen() {
             await deleteVehicle(vehicleId);
             await load();
           } catch (e) {
+            // vehicle_refills.vehicle_id is ON DELETE RESTRICT, so a vehicle with
+            // refill history cannot be removed. Voiding does NOT help: a voided
+            // row still exists and still references the vehicle, so there is no
+            // in-app way to unblock this today. Say so plainly instead of
+            // leaking a Postgres foreign-key message or promising a false fix.
+            const code =
+              typeof e === 'object' && e !== null ? (e as { code?: string }).code : undefined;
+            if (code === '23503') {
+              Alert.alert(
+                'Cannot delete this vehicle',
+                'This vehicle cannot be deleted because it has refill history. ' +
+                  'Keeping the vehicle preserves its fuel records and shared history.',
+              );
+              return;
+            }
             Alert.alert('Error', e instanceof Error ? e.message : 'Failed to delete');
           }
         },
@@ -558,6 +574,17 @@ export default function VehiclesScreen() {
 
                 <VehicleSharePanel vehicleId={v.id} ownerId={user.id} />
 
+                {showRefillForm || isEditingThis ? null : (
+                  <VehicleRefillPanel
+                    currentUserId={user.id}
+                    isOwner
+                    onChanged={load}
+                    vehicleFuelTypeId={v.fuel_type_id}
+                    vehicleId={v.id}
+                    vehicleLabel={v.nickname ?? `${v.brand} ${v.model}`}
+                  />
+                )}
+
                 {isEditingThis ? (
                   <View style={styles.editingNote}>
                     <Ionicons name="pencil" size={13} color={HomeColors.primary} />
@@ -622,28 +649,37 @@ export default function VehiclesScreen() {
         </View>
       ) : (
         sharedVehicles.map((sharedVehicle) => (
-          <Pressable
-            key={sharedVehicle.vehicleId}
-            onPress={() =>
-              router.push({
-                pathname: '/shared-vehicle-history',
-                params: {
-                  vehicleId: sharedVehicle.vehicleId,
-                  vehicleLabel: `${sharedVehicle.brand} ${sharedVehicle.model}`,
-                },
-              })
-            }
-            style={({ pressed }) => [styles.sharedRow, pressed && styles.cardActionPressed]}>
-            <View style={styles.vehicleCardTitles}>
-              <Text numberOfLines={1} style={styles.vehicleName}>
-                {sharedVehicle.brand} {sharedVehicle.model}
-              </Text>
-              <Text numberOfLines={1} style={styles.vehicleMeta}>
-                {sharedVehicle.role}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={HomeColors.muted} />
-          </Pressable>
+          <View key={sharedVehicle.vehicleId} style={styles.sharedRow}>
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: '/shared-vehicle-history',
+                  params: {
+                    vehicleId: sharedVehicle.vehicleId,
+                    vehicleLabel: `${sharedVehicle.brand} ${sharedVehicle.model}`,
+                  },
+                })
+              }
+              style={({ pressed }) => [styles.sharedRowMain, pressed && styles.cardActionPressed]}>
+              <View style={styles.vehicleCardTitles}>
+                <Text numberOfLines={1} style={styles.vehicleName}>
+                  {sharedVehicle.brand} {sharedVehicle.model}
+                </Text>
+                <Text numberOfLines={1} style={styles.vehicleMeta}>
+                  {sharedVehicle.role}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={HomeColors.muted} />
+            </Pressable>
+            <VehicleRefillPanel
+              currentUserId={user.id}
+              isOwner={false}
+              onChanged={load}
+              vehicleFuelTypeId={sharedVehicle.fuelTypeId}
+              vehicleId={sharedVehicle.vehicleId}
+              vehicleLabel={`${sharedVehicle.brand} ${sharedVehicle.model}`}
+            />
+          </View>
         ))
       )}
     </ScrollView>
@@ -948,9 +984,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   sharedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
     paddingVertical: spacing.md,
     paddingHorizontal: SURFACE_PAD,
     borderRadius: radii.md,
@@ -958,5 +991,10 @@ const styles = StyleSheet.create({
     borderColor: HomeColors.border,
     backgroundColor: HomeColors.onPrimary,
     marginBottom: spacing.sm,
+  },
+  sharedRowMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
 });

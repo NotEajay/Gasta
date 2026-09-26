@@ -53,7 +53,68 @@ export interface VehicleCatalogEntry {
   fuel_type?: { code: string; name: string };
 }
 
-export type VehicleShareRole = 'Driver' | 'Operator';
+/**
+ * Access roles for a shared vehicle. The Owner is NOT one of these — ownership
+ * stays structural in vehicles.user_id and never appears in vehicle_shares.
+ */
+export type VehicleShareRole = 'Member' | 'Driver' | 'Operator' | 'Viewer';
+
+export const VEHICLE_SHARE_ROLES: readonly VehicleShareRole[] = [
+  'Member',
+  'Driver',
+  'Operator',
+  'Viewer',
+];
+
+/** Roles that may create/edit/void refills. Viewer is deliberately absent. */
+export const REFUILL_WRITE_ROLES: readonly VehicleShareRole[] = [
+  'Member',
+  'Driver',
+  'Operator',
+];
+
+/** Plain-English meaning shown under the role selector. */
+export const VEHICLE_SHARE_ROLE_DESCRIPTIONS: Record<VehicleShareRole, string> = {
+  Member: 'Regular shared access for someone who also uses this vehicle.',
+  Driver: 'For someone who drives this vehicle on behalf of the owner or as part of their work.',
+  Operator: 'For someone who helps manage the vehicle’s day-to-day operations.',
+  Viewer: 'Can view shared vehicle information and history only.',
+};
+
+/**
+ * A real refuelling event (migration 20240812000014). One row per refill, shared
+ * by every member of the vehicle.
+ *
+ * Declared as a `type` (not `interface`) on purpose: only type aliases get an
+ * implicit index signature, which is what lets it satisfy the supabase-js
+ * GenericTable constraint. types/database.ts is generated and is NOT hand-edited.
+ */
+export type VehicleRefill = {
+  id: string;
+  vehicle_id: string;
+  total_amount: number;
+  price_per_liter: number;
+  liters: number | null;
+  fuel_type_id: string | null;
+  logged_by: string;
+  paid_by: string;
+  occurred_at: string;
+  notes: string | null;
+  receipt_ref: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VehicleMemberRole = 'Owner' | VehicleShareRole;
+
+/** Returned by the vehicle_members(uuid) RPC — the only valid `paid_by` choices. */
+export type VehicleMember = {
+  user_id: string;
+  full_name: string | null;
+  role: VehicleMemberRole;
+};
 
 export interface UserProfile {
   id: string;
@@ -67,8 +128,8 @@ export interface UserProfileLookup {
 }
 
 export interface VehicleShare {
-  "ShareID": string;
-  "vehicleID": string;
+  ShareID: string;
+  vehicleID: string;
   shared_by: string;
   shared_with: string;
   role: VehicleShareRole;
@@ -76,12 +137,14 @@ export interface VehicleShare {
   revoked: boolean;
 }
 
-export interface SharedVehicle {
+export type SharedVehicle = {
   vehicleId: string;
   brand: string;
   model: string;
+  /** Real fuel type from the vehicle row, so shared refills record it correctly. */
+  fuelTypeId: string | null;
   role: VehicleShareRole;
-}
+};
 
 export interface Vehicle {
   id: string;

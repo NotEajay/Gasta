@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
@@ -12,16 +12,25 @@ import {
   fetchUserProfileById,
   fetchVehicleShares,
   findUserByEmail,
+  restoreVehicleShare,
   revokeVehicleShare,
 } from '@/lib/services/vehicles';
 import { useTheme } from '@/lib/useTheme';
-import type { UserProfile, UserProfileLookup, VehicleShare, VehicleShareRole } from '@/types';
+import {
+  VEHICLE_SHARE_ROLE_DESCRIPTIONS,
+  type UserProfile,
+  type UserProfileLookup,
+  type VehicleShare,
+  type VehicleShareRole,
+} from '@/types';
 
 type RoleValue = VehicleShareRole | '';
 
 const roleOptions: readonly SelectOption<RoleValue>[] = [
+  { value: 'Member', label: 'Member' },
   { value: 'Driver', label: 'Driver' },
   { value: 'Operator', label: 'Operator' },
+  { value: 'Viewer', label: 'Viewer' },
 ];
 
 interface VehicleSharePanelProps {
@@ -30,9 +39,21 @@ interface VehicleSharePanelProps {
 }
 
 type PanelMessage = {
-  kind: 'error' | 'success';
+  kind: 'error' | 'success' | 'info';
   text: string;
 };
+
+/**
+ * The one branch that decides INSERT vs RESTORE for the resolved account.
+ * Derived from the full share list (active AND revoked), never from the
+ * collaborators list, so a revoked row can never be mistaken for a new invite.
+ */
+type ShareMode =
+  | 'unresolved' // nothing looked up yet
+  | 'new' // never shared      -> createVehicleShare()
+  | 'active' // already shared  -> no submission at all
+  | 'restore' // previously revoked -> restoreVehicleShare()
+  | 'self'; // the owner
 
 export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePanelProps) {
   const theme = useTheme();
@@ -47,6 +68,32 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
   const [sharing, setSharing] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [message, setMessage] = useState<PanelMessage | null>(null);
+  const [ownerProfile, setOwnerProfile] = useState<UserProfile | null>(null);
+
+  /** Only active collaborators are listed; revoked ones are hidden. */
+  const activeShares = useMemo(() => shares.filter((s) => !s.revoked), [shares]);
+
+  /**
+   * Searched against `shares` (active AND revoked), NOT `activeShares`.
+   *
+   * The owner already holds every share row (the select policy admits
+   * shared_by = auth.uid()), so this needs no extra query.
+   */
+  const existingShare = useMemo(
+    () => shares.find((s) => s.shared_with === lookedUpUser?.id) ?? null,
+    [shares, lookedUpUser],
+  );
+
+  const shareMode: ShareMode = useMemo(() => {
+    if (!lookedUpUser) return 'unresolved';
+    if (lookedUpUser.id === ownerId) return 'self';
+    if (!existingShare) return 'new';
+    return existingShare.revoked ? 'restore' : 'active';
+  }, [existingShare, lookedUpUser, ownerId]);
+
+  const canSubmit = shareMode === 'new' || shareMode === 'restore';
+  const primaryLabel =
+    sharing ? 'Saving…' : shareMode === 'restore' ? 'Restore access' : 'Share vehicle';
 
   const loadShares = useCallback(async () => {
     setLoadingShares(true);
@@ -79,8 +126,12 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
   useEffect(() => {
     if (expanded) {
       void loadShares();
+      // The owner's own profile is always readable (own-row RLS).
+      void fetchUserProfileById(ownerId)
+        .then(setOwnerProfile)
+        .catch(() => setOwnerProfile(null));
     }
-  }, [expanded, loadShares]);
+  }, [expanded, loadShares, ownerId]);
 
   const handleLookup = async () => {
     const normalizedEmail = email.trim().toLowerCase();
@@ -105,10 +156,33 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
 
       setLookedUpUser(profile);
       setEmail(normalizedEmail);
-      setMessage({
-        kind: 'success',
-        text: `Found ${profile.full_name?.trim() || 'GasTa user'}.`,
-      });
+
+      if (profile.id === ownerId) {
+        setMessage({
+          kind: 'error',
+          text: 'That is your own account. You already own this vehicle.',
+        });
+        return;
+      }
+
+      const existing = shares.find((s) => s.shared_with === profile.id);
+      if (existing && !existing.revoked) {
+        setMessage({
+          kind: 'info',
+          text: `This user already has access to this vehicle as ${existing.role}.`,
+        });
+        return;
+      }
+      if (existing?.revoked) {
+        setShareRole(existing.role);
+        setMessage({
+          kind: 'info',
+          text: 'This user previously had access. You can restore it below.',
+        });
+        return;
+      }
+
+      setMessage({ kind: 'success', text: 'GasTa account found.' });
     } catch (error) {
       setMessage({
         kind: 'error',
@@ -124,24 +198,59 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
       setMessage({ kind: 'error', text: 'Look up the user before sharing.' });
       return;
     }
-    if (shareRole !== 'Driver' && shareRole !== 'Operator') {
-      setMessage({ kind: 'error', text: 'Choose a role before sharing.' });
+    if (!shareRole) {
+      setMessage({ kind: 'error', text: 'Choose an access role.' });
       return;
     }
+    // Self-share is blocked here for a clear message; the server also rejects it
+    // (restore_vehicle_share and the prevent_self_vehicle_share trigger).
+    if (shareMode === 'self') {
+      setMessage({
+        kind: 'error',
+        text: 'That is your own account. You already own this vehicle.',
+      });
+      return;
+    }
+    // An already-active share is never resubmitted: no INSERT, no restore.
+    if (shareMode === 'active') {
+      setMessage({
+        kind: 'error',
+        text: `This user already has access to this vehicle as ${existingShare?.role}.`,
+      });
+      return;
+    }
+    // Past this point shareMode is 'new' or 'restore' only.
+    if (!canSubmit) {
+      setMessage({ kind: 'error', text: 'Look up the user before sharing.' });
+      return;
+    }
+
+    const role = shareRole as VehicleShareRole;
+
+    // A revoked share is reactivated on its EXISTING row. It must never reach
+    // createVehicleShare(): unique (vehicleID, shared_with) would reject the
+    // insert with 23505 "This vehicle is already shared with that user."
+    const restoring = shareMode === 'restore';
 
     setSharing(true);
     setMessage(null);
     try {
-      await createVehicleShare({
-        vehicleId,
-        sharedBy: ownerId,
-        sharedWith: lookedUpUser.id,
-        role: shareRole,
-      });
+      if (restoring) {
+        // Reactivate the SAME row rather than inserting a duplicate.
+        await restoreVehicleShare(vehicleId, lookedUpUser.id, role);
+        setMessage({ kind: 'success', text: `Access restored as ${role}.` });
+      } else {
+        await createVehicleShare({
+          vehicleId,
+          sharedBy: ownerId,
+          sharedWith: lookedUpUser.id,
+          role,
+        });
+        setMessage({ kind: 'success', text: 'Vehicle shared successfully.' });
+      }
       setEmail('');
       setLookedUpUser(null);
       setShareRole('');
-      setMessage({ kind: 'success', text: 'Vehicle access shared.' });
       await loadShares();
     } catch (error) {
       setMessage({
@@ -157,28 +266,35 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
     const profile = profiles[share.shared_with];
     const displayName = profile?.full_name?.trim() || profile?.email || 'this user';
 
-    Alert.alert('Remove access', `Remove this vehicle share for ${displayName}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: async () => {
-          setRevokingId(share['ShareID']);
-          try {
-            await revokeVehicleShare(share['ShareID'], vehicleId, ownerId);
-            setMessage({ kind: 'success', text: 'Access removed.' });
-            await loadShares();
-          } catch (error) {
-            setMessage({
-              kind: 'error',
-              text: error instanceof Error ? error.message : 'Unable to remove access.',
-            });
-          } finally {
-            setRevokingId(null);
-          }
+    Alert.alert(
+      'Remove access',
+      `Remove access for ${displayName}?\n\nThey will no longer be able to view or add shared vehicle activity. Existing records will be kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove access',
+          style: 'destructive',
+          onPress: async () => {
+            setRevokingId(share['ShareID']);
+            try {
+              await revokeVehicleShare(share['ShareID'], vehicleId, ownerId);
+              setMessage({
+                kind: 'success',
+                text: `Access removed for ${displayName}.`,
+              });
+              await loadShares();
+            } catch (error) {
+              setMessage({
+                kind: 'error',
+                text: error instanceof Error ? error.message : 'Unable to remove access.',
+              });
+            } finally {
+              setRevokingId(null);
+            }
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
   return (
@@ -196,22 +312,28 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
           size={14}
           color={palette.primary}
         />
-        <Text style={styles.shareButtonLabel}>{expanded ? 'Hide sharing' : 'Share'}</Text>
+        <Text style={styles.shareButtonLabel}>
+          {expanded ? 'Hide sharing' : 'Share vehicle'}
+        </Text>
       </Pressable>
 
       {expanded ? (
         <View style={[styles.panel, { borderTopColor: theme.border }]}>
-          <Text style={[styles.panelTitle, { color: theme.text }]}>Share profile</Text>
+          <Text style={[styles.panelTitle, { color: theme.text }]}>Share vehicle</Text>
           <Text style={[styles.panelDescription, { color: theme.textSecondary }]}>
-            Invite an existing GasTa user to access trips for this vehicle.
+            Invite another GasTa user to access and collaborate on this vehicle.
+          </Text>
+          <Text style={[styles.ownerNote, { color: theme.textSecondary }]}>
+            You are the Owner.
           </Text>
 
           <LabeledInput
-            label="User email"
+            label="GasTa account email"
             value={email}
             onChangeText={(value) => {
               setEmail(value);
               setLookedUpUser(null);
+              setShareRole('');
               setMessage(null);
             }}
             placeholder="name@example.com"
@@ -220,7 +342,7 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
             autoCorrect={false}
           />
           <PrimaryButton
-            label={lookingUp ? 'Finding user…' : 'Find user'}
+            label={lookingUp ? 'Looking up…' : 'Look up account'}
             variant="secondary"
             size="sm"
             onPress={handleLookup}
@@ -229,52 +351,89 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
           />
 
           {lookedUpUser ? (
-            <Text style={[styles.foundUser, { color: theme.textSecondary }]}>
-              Selected: {lookedUpUser.full_name?.trim() || 'GasTa user'}
-            </Text>
+            <View style={[styles.foundCard, { backgroundColor: theme.overlay, borderColor: theme.border }]}>
+              <View style={styles.sharedUserInfo}>
+                <Text style={[styles.sharedUserName, { color: theme.text }]}>
+                  {lookedUpUser.full_name?.trim() || 'GasTa user'}
+                </Text>
+                <Text style={[styles.sharedUserMeta, { color: theme.textSecondary }]}>
+                  {email}
+                </Text>
+              </View>
+              {shareMode === 'active' ? (
+                <View style={[styles.stateTag, { backgroundColor: theme.border }]}>
+                  <Text style={[styles.stateTagLabel, { color: theme.textSecondary }]}>
+                    {existingShare?.role}
+                  </Text>
+                </View>
+              ) : shareMode === 'restore' ? (
+                <View style={[styles.stateTag, { backgroundColor: theme.border }]}>
+                  <Text style={[styles.stateTagLabel, { color: theme.textSecondary }]}>
+                    Previously {existingShare?.role}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           ) : null}
 
           <SelectField<RoleValue>
-            label="Role"
+            label="Access role"
             value={shareRole}
             options={roleOptions}
             onChange={setShareRole}
-            placeholder="Choose a role"
+            placeholder="Choose an access role"
           />
+          <Text style={[styles.roleHint, { color: theme.textSecondary }]}>
+            {shareRole && shareRole in VEHICLE_SHARE_ROLE_DESCRIPTIONS
+              ? VEHICLE_SHARE_ROLE_DESCRIPTIONS[shareRole as VehicleShareRole]
+              : 'Select a role to see what this person can do.'}
+          </Text>
 
           {message ? (
             <Text
               style={[
                 styles.message,
-                { color: message.kind === 'error' ? palette.danger : palette.primary },
+                {
+                  color:
+                    message.kind === 'error'
+                      ? palette.danger
+                      : message.kind === 'info'
+                        ? theme.textSecondary
+                        : palette.primary,
+                },
               ]}>
               {message.text}
             </Text>
           ) : null}
 
           <PrimaryButton
-            label={sharing ? 'Sharing…' : 'Share'}
+            label={primaryLabel}
             onPress={handleShare}
-            disabled={sharing || lookingUp || !lookedUpUser}
+            disabled={sharing || lookingUp || !lookedUpUser || !canSubmit || !shareRole}
           />
 
           <View style={styles.sharedHeader}>
-            <Text style={[styles.sharedHeading, { color: theme.text }]}>Shared with</Text>
-            <Text style={[styles.sharedCount, { color: theme.textSecondary }]}>
-              {shares.length}
+            <Text style={[styles.sharedHeading, { color: theme.text }]}>
+              Collaborators ({activeShares.length})
             </Text>
           </View>
 
+          {ownerProfile?.full_name?.trim() ? (
+            <Text style={[styles.ownerRow, { color: theme.textSecondary }]}>
+              Owner · {ownerProfile.full_name.trim()}
+            </Text>
+          ) : null}
+
           {loadingShares ? (
             <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>
-              Loading shared access…
+              Loading collaborators…
             </Text>
-          ) : shares.length === 0 ? (
+          ) : activeShares.length === 0 ? (
             <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>
-              No shared access yet.
+              No collaborators yet. Share this vehicle to get started.
             </Text>
           ) : (
-            shares.map((share) => {
+            activeShares.map((share) => {
               const profile = profiles[share.shared_with];
               const displayName = profile?.full_name?.trim() || profile?.email || 'Shared user';
               const isRevoking = revokingId === share['ShareID'];
@@ -288,8 +447,13 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
                       {displayName}
                     </Text>
                     <Text style={[styles.sharedUserMeta, { color: theme.textSecondary }]}>
-                      {profile?.email || 'Email unavailable'} · {share.role}
+                      {share.role}
                     </Text>
+                    {profile?.email ? (
+                      <Text style={[styles.sharedUserEmail, { color: theme.textSecondary }]}>
+                        {profile.email}
+                      </Text>
+                    ) : null}
                   </View>
                   <PrimaryButton
                     label={isRevoking ? 'Removing…' : 'Remove access'}
@@ -350,8 +514,37 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginBottom: spacing.md,
   },
-  foundUser: {
+  foundCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radii.md,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  stateTag: {
+    borderRadius: radii.sm,
+    paddingVertical: 3,
+    paddingHorizontal: spacing.xs,
+  },
+  stateTagLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  ownerNote: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+  },
+  ownerRow: {
     fontSize: 12,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  roleHint: {
+    fontSize: 12,
+    lineHeight: 17,
     marginTop: -spacing.sm,
     marginBottom: spacing.md,
   },
@@ -370,10 +563,6 @@ const styles = StyleSheet.create({
   sharedHeading: {
     fontSize: 15,
     fontWeight: '800',
-  },
-  sharedCount: {
-    fontSize: 13,
-    fontWeight: '700',
   },
   sharedEmpty: {
     fontSize: 13,
@@ -395,7 +584,12 @@ const styles = StyleSheet.create({
   },
   sharedUserMeta: {
     fontSize: 12,
+    fontWeight: '600',
     marginTop: 2,
+  },
+  sharedUserEmail: {
+    fontSize: 12,
+    marginTop: 1,
   },
   removeButton: {
     marginLeft: spacing.sm,
