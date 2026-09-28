@@ -23,8 +23,16 @@ import {
   fetchRefillAllocationSummary,
   fetchRefillAllocations,
   saveRefillSplit,
-  type SplitAllocationInput,
 } from '@/lib/services/refillAllocations';
+import {
+  buildSplitPayload,
+  fromCents,
+  memberLabel,
+  sortEligibleMembers,
+  splitSheetStyles,
+  SplitMemberRow,
+  toCents,
+} from './refillSplitShared';
 import type {
   RefillAllocation,
   RefillAllocationStatus,
@@ -63,9 +71,13 @@ const STATUS_COLOR: Record<RefillAllocationStatus, string> = {
   cancelled: HomeColors.muted,
 };
 
-/** Money is compared in cents to avoid float drift on 2dp amounts. */
-const toCents = (value: number) => Math.round((Number(value) || 0) * 100);
-const fromCents = (cents: number) => cents / 100;
+/**
+ * Money is compared in cents to avoid float drift on 2dp amounts.
+ *
+ * toCents / fromCents are imported from refillSplitShared so the pre-save split
+ * draft and this saved-refill sheet round money through the exact same
+ * function and cannot drift apart.
+ */
 
 const EMPTY_SUMMARY: RefillAllocationSummary = {
   reserved: 0,
@@ -178,23 +190,10 @@ export default function RefillSplitSheet({
   );
 
   /**
-   * Eligible recipients: Owner, Member, Driver, Operator.
-   *
-   * vehicle_members() already returns the owner plus ACTIVE shares only, so
-   * revoked collaborators are absent by construction. Viewer is returned by the
-   * RPC and filtered out here, because a read-only role must never be charged.
+   * Eligible recipients, from the shared rule so this sheet and the pre-save
+   * draft offer exactly the same people in exactly the same order.
    */
-  const eligibleMembers = useMemo(
-    () =>
-      members
-        .filter((m) => m.role !== 'Viewer')
-        .sort((a, b) => {
-          if (a.role === 'Owner') return -1;
-          if (b.role === 'Owner') return 1;
-          return (a.full_name ?? '').localeCompare(b.full_name ?? '');
-        }),
-    [members],
-  );
+  const eligibleMembers = useMemo(() => sortEligibleMembers(members), [members]);
 
   /**
    * Every open refetches the CURRENT eligible collaborators alongside the
@@ -301,9 +300,10 @@ export default function RefillSplitSheet({
 
   // Name only. The role is shown on the second line, so appending "· Owner"
   // here as well would read "Dad · Owner" over "Owner · Accepted".
-  const labelFor = useCallback((member: VehicleMember) => {
-    return member.full_name?.trim() || 'Team member';
-  }, []);
+  const labelFor = useCallback(
+    (member: VehicleMember) => memberLabel(member),
+    [],
+  );
 
   // What the user is typing right now, in cents.
   const draftCents = useMemo(
@@ -323,17 +323,24 @@ export default function RefillSplitSheet({
   const hasUnsavedEdits = draftCents !== toCents(summary.reserved);
 
   const handleSave = async () => {
-    // Only send rows this user is permitted to write. Zeros are meaningful: they
-    // mean "retire this proposal" and the server cancels the row, which frees the
-    // money back to unassigned and clears it from the recipient's inbox.
+    // Only send rows this user is permitted to write.
     const editable = eligibleMembers.filter((m) => canEditRow(m, allocationByUser.get(m.user_id)));
 
-    const payload: SplitAllocationInput[] = editable.map((m) => ({
-      userId: m.user_id,
-      amount: Number.parseFloat(draft[m.user_id] ?? '') || 0,
-    }));
+    // ONLY positive amounts go on the wire, via the same shared builder the
+    // pre-save draft uses.
+    //
+    // save_refill_split() rejects any entry with amount <= 0 ("Allocation
+    // amounts must be greater than zero."), so sending a zero made the whole
+    // call fail. A brand-new refill has an empty draft, so every eligible member
+    // the user did not type for produced a zero.
+    //
+    // Omitting a row IS how the server retires it: its trailing update cancels
+    // every `pending` row whose user_id is absent from p_allocations. Filtering
+    // here therefore preserves the intended "zero retires a proposal" behaviour
+    // using the server's own mechanism instead of contradicting it.
+    const payload = buildSplitPayload(draft, editable);
 
-    const hasPositive = payload.some((line) => line.amount > 0);
+    const hasPositive = payload.length > 0;
     // All-zero is only meaningful if it actually retires an existing row.
     const hasExisting =
       editable.some((m) => allocationByUser.get(m.user_id)?.status === 'accepted') ||
@@ -351,6 +358,20 @@ export default function RefillSplitSheet({
     setSaving(true);
     setError(null);
     try {
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.log('[RefillSplitSheet] save', {
+          refillId: refill.id,
+          vehicleId,
+          mode,
+          currentUserId,
+          totalAmount: refill.total_amount,
+          refillCents,
+          draftCents,
+          members: members.map((m) => ({ user_id: m.user_id, role: m.role })),
+          payload,
+        });
+      }
       const saved = await saveRefillSplit(refill.id, payload);
       const needsApproval = saved.some(
         (row) => row.status === 'pending' && row.user_id !== currentUserId,
@@ -358,11 +379,35 @@ export default function RefillSplitSheet({
       onSaved(needsApproval ? 'Split saved. Waiting for approval.' : 'Split saved.');
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unable to save the split.');
+      // A non-Error throw (a raw PostgREST object, for instance) still carries a
+      // usable message, so never collapse it into a generic string.
+      const message = e instanceof Error ? e.message : `Unable to save the split. ${String(e)}`;
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.error('[RefillSplitSheet] save failed', { payload, error: e });
+      }
+      setError(message);
     } finally {
       setSaving(false);
     }
   };
+
+  /**
+   * Abandon the draft and close.
+   *
+   * `draft` is local state, so unmounting the sheet is what actually discards
+   * the edits: the next open re-seeds it from the server in `load()`. Nothing
+   * here writes -- no saveRefillSplit, no allocation write, no void. For a
+   * refill created moments ago through "Save & split" the refill itself simply
+   * stays saved with no split attached, which is what cancelling means.
+   *
+   * The header Close/X and the footer Cancel both run this same path. There is
+   * no confirmation on either, matching the sheet's existing behaviour.
+   */
+  const handleCancel = useCallback(() => {
+    if (saving) return;
+    onClose();
+  }, [saving, onClose]);
 
   return (
     // Deliberately NOT a <Modal>.
@@ -377,7 +422,7 @@ export default function RefillSplitSheet({
       <Pressable
         accessibilityLabel="Close split sheet"
         accessibilityRole="button"
-        onPress={onClose}
+        onPress={handleCancel}
         style={styles.backdrop}
       />
       <View style={styles.sheetWrap} pointerEvents="box-none">
@@ -385,12 +430,12 @@ export default function RefillSplitSheet({
             pushed up by exactly the right amount and the ScrollView shrinks
             into whatever space is left. */}
         <View style={[styles.sheet, { paddingBottom: keyboardHeight }]}>
-          <View style={styles.sheetHead}>
-            <View style={styles.sheetTitles}>
-              <Text style={styles.sheetTitle}>
+          <View style={styles.head}>
+            <View style={styles.titles}>
+              <Text style={styles.title}>
                 {mode === 'owner' ? 'Split expense' : 'Set my share'}
               </Text>
-              <Text numberOfLines={1} style={styles.sheetSubtitle}>
+              <Text numberOfLines={1} style={styles.subtitle}>
                 {vehicleLabel} · {formatDate(refill.occurred_at)}
               </Text>
             </View>
@@ -398,7 +443,7 @@ export default function RefillSplitSheet({
               label="Close"
               variant="secondary"
               size="sm"
-              onPress={onClose}
+              onPress={handleCancel}
               disabled={saving}
             />
           </View>
@@ -562,52 +607,22 @@ export default function RefillSplitSheet({
                 const locked = !editable && status === 'accepted';
 
                 return (
-                  <View
+                  <SplitMemberRow
                     key={member.user_id}
-                    style={[styles.personRow, isSelf && styles.personRowSelf]}>
-                    <View style={styles.personInfo}>
-                      <Text style={styles.personName}>
-                        {labelFor(member)}
-                        {isSelf ? ' · You' : ''}
-                      </Text>
-                      <View style={styles.personMetaRow}>
-                        <Text style={styles.personRole}>{member.role}</Text>
-                        {status ? (
-                          <>
-                            <Text style={styles.metaDot}>·</Text>
-                            <Text style={[styles.personStatus, { color: STATUS_COLOR[status] }]}>
-                              {STATUS_TEXT[status]}
-                              {locked ? ' · Locked' : ''}
-                            </Text>
-                          </>
-                        ) : null}
-                      </View>
-                    </View>
-
-                    {editable ? (
-                      <View style={styles.amountWrap}>
-                        <Text style={styles.currencyPrefix}>₱</Text>
-                        <TextInput
-                          style={styles.amountInput}
-                          value={draft[member.user_id] ?? ''}
-                          onChangeText={(text) =>
-                            setDraft((prev) => ({ ...prev, [member.user_id]: text }))
-                          }
-                          placeholder="0"
-                          keyboardType="decimal-pad"
-                          placeholderTextColor={HomeColors.muted}
-                          accessibilityLabel={`Amount for ${labelFor(member)}`}
-                          onFocus={() => handleFocus(member.user_id)}
-                        />
-                      </View>
-                    ) : (
-                      <View style={styles.amountWrap}>
-                        <Text style={styles.amountStatic}>
-                          {existing ? formatCurrency(existing.amount) : '—'}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
+                    editable={editable}
+                    isSelf={isSelf}
+                    member={member}
+                    onChangeText={(text) =>
+                      setDraft((prev) => ({ ...prev, [member.user_id]: text }))
+                    }
+                    onFocus={() => handleFocus(member.user_id)}
+                    staticText={existing ? formatCurrency(existing.amount) : undefined}
+                    statusColor={status ? STATUS_COLOR[status] : undefined}
+                    statusText={
+                      status ? `${STATUS_TEXT[status]}${locked ? ' · Locked' : ''}` : undefined
+                    }
+                    value={draft[member.user_id] ?? ''}
+                  />
                 );
               })}
                 </>
@@ -646,12 +661,21 @@ export default function RefillSplitSheet({
                   </Text>
                 </View>
 
-                <PrimaryButton
-                  label={saving ? 'Saving…' : 'Save split'}
-                  onPress={handleSave}
-                  disabled={saving || loading || eligibleMembers.length === 0 || overBudget}
-                  style={styles.saveBtn}
-                />
+                <View style={styles.actionRow}>
+                  <PrimaryButton
+                    label="Cancel"
+                    onPress={handleCancel}
+                    disabled={saving}
+                    style={styles.cancelBtn}
+                    variant="secondary"
+                  />
+                  <PrimaryButton
+                    label={saving ? 'Saving…' : 'Save split'}
+                    onPress={handleSave}
+                    disabled={saving || loading || eligibleMembers.length === 0 || overBudget}
+                    style={styles.saveBtn}
+                  />
+                </View>
               </>
             ) : (
               <>
@@ -674,12 +698,21 @@ export default function RefillSplitSheet({
                   </Text>
                 </View>
 
-                <PrimaryButton
-                  label={saving ? 'Saving…' : 'Save my share'}
-                  onPress={handleSave}
-                  disabled={saving || loading || !myMember || myDraftCents > refillCents}
-                  style={styles.saveBtn}
-                />
+                <View style={styles.actionRow}>
+                  <PrimaryButton
+                    label="Cancel"
+                    onPress={handleCancel}
+                    disabled={saving}
+                    style={styles.cancelBtn}
+                    variant="secondary"
+                  />
+                  <PrimaryButton
+                    label={saving ? 'Saving…' : 'Save my share'}
+                    onPress={handleSave}
+                    disabled={saving || loading || !myMember || myDraftCents > refillCents}
+                    style={styles.saveBtn}
+                  />
+                </View>
               </>
             )}
           </View>
@@ -691,6 +724,17 @@ export default function RefillSplitSheet({
 
 
 const styles = StyleSheet.create({
+  /**
+   * Sheet shape, header, tinted total card, summary rows, member rows, amount
+   * fields, footer and the Cancel/primary pair all come from splitSheetStyles,
+   * which the pre-save draft sheet composes from too. Spreading it in here is
+   * what keeps the two split screens from drifting apart again.
+   *
+   * Spread FIRST, so the genuinely history-specific styles below override it:
+   * its loading / load-error states and the self-mode share card.
+   */
+  ...splitSheetStyles,
+
   root: {
     position: 'absolute',
     top: 0,
@@ -698,102 +742,18 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
   },
-  backdrop: {
-    // Written out rather than StyleSheet.absoluteFillObject, which is missing
-    // from this project's react-native type surface.
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(7, 18, 38, 0.45)',
-  },
-  /** Full-area wrapper that pins the sheet to the bottom. */
-  sheetWrap: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    maxHeight: '88%',
-    // Must be allowed to shrink when the keyboard opens, otherwise the list
-    // keeps its full height and the focused amount field stays behind the
-    // keyboard and the footer.
-    flexShrink: 1,
-    backgroundColor: GasTaColors.white,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: spacing.md,
-  },
-  sheetHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  /** The "Unsaved" marker beside the draft figures. */
+  unsavedTag: { color: palette.warning, fontSize: 11, fontWeight: '700' },
+
+  body: { flexShrink: 1 },
+  /** Measured viewport wrapper; must be able to shrink with the keyboard. */
+  viewport: { flexShrink: 1 },
+  bodyContent: {
     paddingHorizontal: spacing.lg,
+    // Guarantees the last row can always scroll clear of the footer.
     paddingBottom: spacing.md,
   },
-  sheetTitles: { flex: 1, minWidth: 0 },
-  sheetTitle: {
-    color: HomeColors.navy,
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '800',
-  },
-  sheetSubtitle: {
-    color: HomeColors.muted,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 1,
-  },
-  totalCard: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.md,
-    backgroundColor: HomeColors.primarySoft,
-  },
-  totalRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-  },
-  totalLabel: {
-    color: HomeColors.muted,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-  },
-  totalValue: {
-    color: HomeColors.primary,
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: '800',
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: HomeColors.border,
-    marginVertical: spacing.sm,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 3,
-  },
-  summaryLabel: { color: HomeColors.muted, fontSize: 13 },
-  summaryValue: { color: HomeColors.navy, fontSize: 14, fontWeight: '700' },
-  unsavedTag: {
-    color: palette.warning,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  totalHint: {
-    color: HomeColors.muted,
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: spacing.xs,
-  },
+
   summaryLoading: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -851,6 +811,9 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: spacing.sm,
   },
+  /** Heading + lead-in for the self-mode share card. */
+  helperTitle: { color: HomeColors.navy, fontSize: 13, fontWeight: '800' },
+  helperBody: { color: HomeColors.muted, fontSize: 12, lineHeight: 17, marginTop: 2 },
   proposedBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -890,114 +853,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  readOnlyAmount: {
-    color: HomeColors.navy,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  body: { flexShrink: 1 },
-  /** Measured viewport wrapper; must be able to shrink with the keyboard. */
-  viewport: {
-    flexShrink: 1,
-  },
-  bodyContent: {
-    paddingHorizontal: spacing.lg,
-    // Guarantees the last row can always scroll clear of the footer.
-    paddingBottom: spacing.md,
-  },
-  helperBox: {
-    paddingBottom: spacing.sm,
-    marginBottom: spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: HomeColors.border,
-  },
-  helperTitle: {
-    color: HomeColors.navy,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  helperBody: {
-    color: HomeColors.muted,
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 2,
-  },
-  empty: {
-    color: HomeColors.muted,
-    fontSize: 13,
-    textAlign: 'center',
-    paddingVertical: spacing.lg,
-  },
-  personRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: HomeColors.border,
-  },
-  /** A very light tint so the caller's own row is findable without a badge. */
-  personRowSelf: {
-    backgroundColor: HomeColors.primarySoft,
-    borderRadius: radii.sm,
-  },
-  personInfo: { flex: 1, minWidth: 0 },
-  amountWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  currencyPrefix: {
-    color: HomeColors.muted,
-    fontSize: 13,
-    fontWeight: '700',
-    marginRight: 2,
-  },
-  amountStatic: {
-    color: HomeColors.navy,
-    fontSize: 14,
-    fontWeight: '700',
-    minWidth: 92,
-    textAlign: 'right',
-  },
-  personName: {
-    color: HomeColors.navy,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  personMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 1,
-  },
-  personRole: { color: HomeColors.muted, fontSize: 12 },
-  metaDot: { color: HomeColors.muted, fontSize: 12 },
-  personStatus: { fontSize: 12, fontWeight: '700' },
-  amountInput: {
-    width: 84,
-    height: 44,
-    borderRadius: radii.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
-    paddingHorizontal: spacing.sm,
-    color: HomeColors.navy,
-    fontSize: 15,
-    fontWeight: '700',
-    textAlign: 'right',
-  },
-  footer: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: HomeColors.border,
-  },
-  saveBtn: { marginTop: spacing.sm },
-  /** Keyboard-up footer: just the action, no figures. */
-  footerCompact: {
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.sm,
-  },
+  readOnlyAmount: { color: HomeColors.navy, fontSize: 14, fontWeight: '700' },
 });
 

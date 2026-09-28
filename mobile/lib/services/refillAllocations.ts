@@ -124,6 +124,27 @@ export async function fetchRefillAllocationSummary(
  * Persist a whole split. The server re-derives eligibility and the total cap,
  * so this is a proposal, not a command.
  */
+/**
+ * PostgREST returns errors as plain typed objects, NOT `Error` subclasses. That
+ * makes `err instanceof Error` false at every `catch`, so callers were silently
+ * swapping the real database message for a generic fallback and the actual cause
+ * was never visible on screen or in a bug report.
+ *
+ * Re-throwing as a real `Error` keeps the message (and the PostgREST code) intact
+ * for the caller. Only the RPC error fields are included; no auth material is
+ * read or attached.
+ */
+function toRpcError(
+  label: string,
+  error: { message: string; code?: string; details?: string | null; hint?: string | null },
+): Error {
+  const parts = [`${label}: ${error.message}`];
+  if (error.code) parts.push(`(code ${error.code})`);
+  if (error.details) parts.push(`details: ${error.details}`);
+  if (error.hint) parts.push(`hint: ${error.hint}`);
+  return new Error(parts.join(' '));
+}
+
 export async function saveRefillSplit(
   refillId: string,
   allocations: SplitAllocationInput[],
@@ -136,8 +157,19 @@ export async function saveRefillSplit(
   });
 
   if (error) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.error('[saveRefillSplit] RPC failed', {
+        refillId,
+        payload,
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+    }
     if (isMissingObject(error, 'save_refill_split')) throw MISSING('Splitting');
-    throw error;
+    throw toRpcError('Unable to save the split.', error);
   }
   return data ?? [];
 }

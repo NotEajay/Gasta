@@ -16,6 +16,12 @@ type SelectFieldProps<T extends string> = {
   options: readonly SelectOption<T>[];
   onChange: (value: T) => void;
   placeholder?: string;
+  /**
+   * Optional inline validation message. Its presence switches the selector to its
+   * error state (danger border, faint danger tint) and renders the reason
+   * directly underneath, so it is readable text rather than a colour cue alone.
+   */
+  error?: string;
 };
 
 export default function SelectField<T extends string>({
@@ -24,9 +30,11 @@ export default function SelectField<T extends string>({
   options,
   onChange,
   placeholder = 'Choose…',
+  error,
 }: SelectFieldProps<T>) {
   const theme = useTheme();
   const [open, setOpen] = useState(false);
+  const invalid = Boolean(error);
   const selected = useMemo(
     () => options.find((option) => option.value === value)?.label ?? placeholder,
     [options, placeholder, value]
@@ -34,7 +42,9 @@ export default function SelectField<T extends string>({
 
   return (
     <View style={styles.wrap}>
-      <Text style={[styles.label, { color: theme.textSecondary }]}>{label}</Text>
+      <Text style={[styles.label, { color: invalid ? palette.danger : theme.textSecondary }]}>
+        {label}
+      </Text>
       <Pressable
         accessibilityRole="button"
         onPress={() => setOpen(true)}
@@ -45,12 +55,14 @@ export default function SelectField<T extends string>({
             borderColor: theme.border,
             opacity: pressed ? 0.9 : 1,
           },
+          invalid && { borderColor: palette.danger, backgroundColor: palette.dangerSoft },
         ]}>
         <Text style={[styles.value, { color: theme.text }]} numberOfLines={1}>
           {selected}
         </Text>
         <Text style={[styles.chevron, { color: theme.textSecondary }]}>▾</Text>
       </Pressable>
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
@@ -98,6 +110,12 @@ export default function SelectField<T extends string>({
 
 const styles = StyleSheet.create({
   wrap: { marginBottom: spacing.md },
+  errorText: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 16,
+    color: palette.danger,
+  },
   label: {
     ...typography.label,
     textTransform: 'uppercase',

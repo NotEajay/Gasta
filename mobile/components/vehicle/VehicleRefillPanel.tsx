@@ -20,6 +20,7 @@ import SelectField, { type SelectOption } from '@/components/ui/SelectField';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency, formatDate } from '@/lib/format';
 import PendingAllocationInbox from '@/components/vehicle/PendingAllocationInbox';
+import RefillSplitDraftSheet from '@/components/vehicle/RefillSplitDraftSheet';
 import RefillSplitSheet from '@/components/vehicle/RefillSplitSheet';
 import {
   createVehicleRefill,
@@ -27,6 +28,7 @@ import {
   fetchVehicleRefills,
   voidVehicleRefill,
 } from '@/lib/services/vehicleRefills';
+import { saveRefillSplit, type SplitAllocationInput } from '@/lib/services/refillAllocations';
 import type { VehicleMember, VehicleRefill } from '@/types';
 
 /**
@@ -46,6 +48,29 @@ const todayInput = () => {
   const day = String(now.getDate()).padStart(2, '0');
   return `${now.getFullYear()}-${month}-${day}`;
 };
+
+/**
+ * Who carries the personal-budget charge for a refill just logged.
+ *
+ *   mine   — the whole amount is this person's own responsibility
+ *   split  — open the existing split sheet for the new refill afterwards
+ *   owner  — create no allocation at all; leave it for the owner
+ *
+ * This is deliberately NOT derived from `paid_by`. Paying at the station and
+ * being charged for it are two different facts.
+ */
+type Responsibility = 'mine' | 'split' | 'owner';
+
+/**
+ * The refill form's own fields, used to key the inline validation state.
+ *
+ * These are exactly the fields the form has always validated. No new rule is
+ * introduced here -- this type only names them so each one can carry its own
+ * error message instead of a single message at the bottom of the sheet.
+ */
+type FieldKey = 'total' | 'price' | 'liters' | 'paidBy' | 'date';
+
+type FieldErrors = Partial<Record<FieldKey, string>>;
 
 /** Faint forest tint, matching the vehicle card and the auth surfaces. */
 const TINT_BG = 'rgba(1, 68, 33, 0.06)';
@@ -82,8 +107,36 @@ export default function VehicleRefillPanel({
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  /**
+   * Per-field validation, populated only after a Save attempt so untouched
+   * fields are never red before the user has tried. `formError` stays reserved
+   * for failures the form cannot attach to a field: RPC errors, network
+   * failures, and anything raised while creating the refill.
+   */
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [splitFor, setSplitFor] = useState<VehicleRefill | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  /**
+   * The PRE-SAVE split step, held while the user is still deciding.
+   *
+   * `null` means the flow is not in the split step. When set, no refill row
+   * exists yet: the refill form has already validated, but persistence has NOT
+   * started. That is what makes Cancel able to mean "back to my form, keep
+   * editing" against an empty database.
+   *
+   * Deliberately separate from `splitFor`, which points at an ALREADY SAVED
+   * refill and drives the real RefillSplitSheet from history. The two are never
+   * mixed: see §14 of the change request.
+   */
+  const [splitDraft, setSplitDraft] = useState<{ totalAmount: number } | null>(null);
+  const [splitDraftError, setSplitDraftError] = useState<string | null>(null);
+  /**
+   * Set only after the refill was created but its allocation failed. The refill
+   * row exists at that point, so the split step is no longer "pre-save" and the
+   * recovery has to reuse the real id rather than create anything again.
+   */
+  const [splitRecoveryRefill, setSplitRecoveryRefill] = useState<VehicleRefill | null>(null);
 
   const [totalAmount, setTotalAmount] = useState('');
   const [pricePerLiter, setPricePerLiter] = useState('');
@@ -91,6 +144,8 @@ export default function VehicleRefillPanel({
   const [paidBy, setPaidBy] = useState<string | null>(null);
   const [occurredAt, setOccurredAt] = useState(todayInput);
   const [notes, setNotes] = useState('');
+  /** Defaults to "Mine" for every role, and is always visible before Save. */
+  const [responsibility, setResponsibility] = useState<Responsibility>('mine');
 
   const nameOf = useCallback(
     (userId: string) => {
@@ -190,63 +245,203 @@ export default function VehicleRefillPanel({
     setOccurredAt(todayInput());
     setNotes('');
     setFormError(null);
+    setFieldErrors({});
+    setResponsibility('mine');
   }, []);
 
-  const activeRefills = useMemo(() => refills.filter((r) => r.voided_at === null), [refills]);
-
-  const handleSave = useCallback(async () => {
-    if (saving) return; // blocks double taps
+  /**
+   * Every required-field rule the form has always applied, collected in one pass.
+   *
+   * It deliberately returns a map rather than reporting the first problem, so a
+   * single Save marks every offending field at once instead of making the user
+   * discover them one tap at a time. The messages are the existing ones,
+   * unchanged, and no rule is new here:
+   *
+   *   total     required, must parse and be > 0
+   *   price     required, must parse and be > 0
+   *   liters    OPTIONAL -- only flagged when it was filled in with a bad value
+   *   paidBy    required
+   *   date      required, must be YYYY-MM-DD
+   */
+  const validateForm = useCallback((): FieldErrors => {
+    const next: FieldErrors = {};
     const total = Number.parseFloat(totalAmount);
     const price = Number.parseFloat(pricePerLiter);
     const literValue = liters.trim() ? Number.parseFloat(liters) : derivedLiters;
 
     if (!Number.isFinite(total) || total <= 0) {
-      setFormError('Enter the total amount paid.');
-      return;
+      next.total = 'Enter the total amount paid.';
     }
     if (!Number.isFinite(price) || price <= 0) {
-      setFormError('Enter the price per liter.');
-      return;
+      next.price = 'Enter the price per liter.';
     }
     if (liters.trim() && (!Number.isFinite(literValue) || (literValue ?? 0) <= 0)) {
-      setFormError('Liters must be greater than zero.');
-      return;
+      next.liters = 'Liters must be greater than zero.';
     }
     if (!paidBy) {
-      setFormError('Choose who paid.');
-      return;
+      next.paidBy = 'Choose who paid.';
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(occurredAt.trim())) {
-      setFormError('Use the date format YYYY-MM-DD.');
+      next.date = 'Use the date format YYYY-MM-DD.';
+    }
+    return next;
+  }, [totalAmount, pricePerLiter, liters, derivedLiters, paidBy, occurredAt]);
+
+  /**
+   * Drops a single field's error as soon as the user edits it, so a field that
+   * has just been corrected stops looking invalid while the ones they have not
+   * reached yet stay marked. Returns the same object identity when nothing
+   * changes, which keeps this a no-op re-render in the common case.
+   */
+  const clearFieldError = useCallback((key: FieldKey) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  /** Opening the form always starts clean, so no stale red fields reappear. */
+  const openForm = useCallback(() => {
+    setFieldErrors({});
+    setFormError(null);
+    setFormOpen(true);
+  }, []);
+
+  const activeRefills = useMemo(() => refills.filter((r) => r.voided_at === null), [refills]);
+
+  /**
+   * Whether this person owns the vehicle. The prop is what the CALLER decided
+   * from where the panel was rendered; the member list is the fallback. Using
+   * both keeps the option set and the split-sheet mode in agreement even if the
+   * members query failed.
+   */
+  const ownerContext = isOwner || viewer.isOwner;
+
+  const responsibilityHelper =
+    responsibility === 'mine'
+      ? 'The full amount will count toward your budget.'
+      : responsibility === 'split'
+        ? ownerContext
+          ? 'Choose how the expense is divided. You will confirm the split before anything is saved.'
+          : 'Choose how much you are responsible for. You will confirm it before anything is saved.'
+        : 'No one is charged yet. You can set your share from refill history.';
+
+  const saveLabel = saving
+    ? 'Saving…'
+    : responsibility === 'split'
+      ? ownerContext
+        ? 'Continue to split'
+        : 'Continue to set my share'
+      : 'Save refill';
+
+  const handleSave = useCallback(async () => {
+    if (saving) return; // blocks double taps
+
+    // Validate everything first and show all of it at once. Nothing below this
+    // runs unless the form is valid, so no partial save is possible.
+    const invalid = validateForm();
+    setFieldErrors(invalid);
+    if (Object.keys(invalid).length > 0) return;
+
+    const total = Number.parseFloat(totalAmount);
+    const price = Number.parseFloat(pricePerLiter);
+    const literValue = liters.trim() ? Number.parseFloat(liters) : derivedLiters;
+
+    // `validateForm` has already proven the payer is set, but TypeScript cannot
+    // see across the helper, so the value is re-bound and narrowed here at the
+    // point of use. Same condition as the rule above -- not a second rule -- and
+    // it still routes the user back to the field rather than throwing.
+    const payer = paidBy;
+    if (!payer) {
+      setFieldErrors({ paidBy: 'Choose who paid.' });
       return;
     }
 
     setSaving(true);
     setFormError(null);
+
+    // Read the choice before anything can reset the form.
+    const chosen = responsibility;
+
+    // --- the split step runs BEFORE anything is persisted -------------------
+    // Splitting is the one responsibility that must NOT create the refill yet.
+    // Creating it first is what made Cancel meaningless: the row already
+    // existed, so backing out could only mean "keep the refill, drop the
+    // split". Going to a local draft instead is what lets Cancel mean "go back
+    // to my form and keep editing" with nothing written.
+    //
+    // The form is deliberately NOT reset and NOT cleared here -- every value
+    // stays in component state so Cancel can reopen it exactly as it was, and
+    // `responsibility` is still 'split' when the user comes back.
+    if (chosen === 'split') {
+      setSplitDraftError(null);
+      setSplitRecoveryRefill(null);
+      setSplitDraft({ totalAmount: total });
+      setFormOpen(false);
+      setSaving(false);
+      return;
+    }
+
+    // --- stage 1: create the refill -----------------------------------------
+    // Only reachable for 'mine' and 'owner'. Only a failure HERE is a real save
+    // failure: the form stays open and nothing needs recovering.
+    let created: VehicleRefill;
     try {
-      await createVehicleRefill({
+      created = await createVehicleRefill({
         vehicleId,
         totalAmount: total,
         pricePerLiter: price,
         liters: literValue ?? null,
         fuelTypeId: vehicleFuelTypeId,
         loggedBy: currentUserId,
-        paidBy,
+        paidBy: payer,
         occurredAt: new Date(`${occurredAt.trim()}T12:00:00`).toISOString(),
         notes: notes.trim() || null,
         receiptRef: null,
       });
-      resetForm();
-      setFormOpen(false);
-      await load();
-      onChanged?.();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : 'Unable to save this refill.');
-    } finally {
       setSaving(false);
+      return;
     }
+
+    // --- the refill now EXISTS ---------------------------------------------
+    // Nothing below may delete it or re-run the create, or we would duplicate
+    // the row. Every later failure degrades to an inline notice instead.
+    resetForm();
+    setFormOpen(false);
+
+    if (chosen === 'owner') {
+      // No allocation at all. The amount stays genuinely unassigned; nothing
+      // is auto-assigned to the owner.
+      void load();
+      onChanged?.();
+      setSaving(false);
+      return;
+    }
+
+    // chosen === 'mine': assign the full amount to ourselves through the
+    // existing RPC. The server already accepts a self-allocation immediately
+    // (migration 20240812000026), so no new endpoint and no new permission.
+    try {
+      await saveRefillSplit(created.id, [{ userId: currentUserId, amount: total }]);
+      setNotice('Refill saved and added to your budget.');
+    } catch {
+      // Partial success: the refill is saved and stays. The history row keeps
+      // its Split expense / Set my share action, which is the recovery path.
+      setNotice(
+        "Refill saved, but we couldn't add it to your budget. You can set the expense from refill history.",
+      );
+    }
+    setHistoryOpen(true);
+    void load();
+    onChanged?.();
+    setSaving(false);
   }, [
     saving,
+    validateForm,
     totalAmount,
     pricePerLiter,
     liters,
@@ -254,6 +449,7 @@ export default function VehicleRefillPanel({
     paidBy,
     occurredAt,
     notes,
+    responsibility,
     vehicleId,
     vehicleFuelTypeId,
     currentUserId,
@@ -261,6 +457,163 @@ export default function VehicleRefillPanel({
     load,
     onChanged,
   ]);
+
+  /**
+   * Confirm the split. This is the FIRST moment anything is written.
+   *
+   * Order matters and is not retried: create the refill, then attach the
+   * allocations to the id that came back. A failure at the first step leaves
+   * nothing behind; a failure at the second leaves exactly one refill row and
+   * hands the user the real split sheet for it, so there is never a duplicate
+   * and never a split that exists without its refill.
+   */
+  const handleConfirmSplit = useCallback(
+    async (payload: SplitAllocationInput[]) => {
+      if (saving) return; // blocks double taps
+      setSaving(true);
+      setSplitDraftError(null);
+      setSplitRecoveryRefill(null);
+
+      const total = Number.parseFloat(totalAmount);
+      const price = Number.parseFloat(pricePerLiter);
+      const literValue = liters.trim() ? Number.parseFloat(liters) : derivedLiters;
+      const payer = paidBy;
+      if (!payer) {
+        // Unreachable: the form validated this before entering the split step.
+        // Bail back to the form rather than sending a bad request.
+        setSplitDraft(null);
+        setFormOpen(true);
+        setFieldErrors({ paidBy: 'Choose who paid.' });
+        setSaving(false);
+        return;
+      }
+
+      // --- stage 1: create the refill ---------------------------------------
+      let created: VehicleRefill;
+      try {
+        created = await createVehicleRefill({
+          vehicleId,
+          totalAmount: total,
+          pricePerLiter: price,
+          liters: literValue ?? null,
+          fuelTypeId: vehicleFuelTypeId,
+          loggedBy: currentUserId,
+          paidBy: payer,
+          occurredAt: new Date(`${occurredAt.trim()}T12:00:00`).toISOString(),
+          notes: notes.trim() || null,
+          receiptRef: null,
+        });
+      } catch (e) {
+        // Case A: nothing was written. Stay in the split step with the draft
+        // intact so the user can fix it or retry; no allocation is attempted.
+        setSplitDraftError(
+          e instanceof Error ? e.message : 'Unable to save this refill.',
+        );
+        setSaving(false);
+        return;
+      }
+
+      // --- stage 2: attach the allocation to the id we just got -------------
+      // The refill EXISTS from here on. There is deliberately no retry of the
+      // create above, in this branch or in the recovery path.
+      try {
+        await saveRefillSplit(created.id, payload);
+      } catch (e) {
+        // Case B: partial success. The refill is saved and stays. Keep the step
+        // open, remember the created row, and offer the real split sheet for
+        // that exact id so the allocation can be finished without duplicating.
+        setSplitRecoveryRefill(created);
+        setSplitDraftError(
+          `${e instanceof Error ? e.message : 'The split could not be saved.'} The refill is saved.`,
+        );
+        void load();
+        onChanged?.();
+        setSaving(false);
+        return;
+      }
+
+      // --- both succeeded ---------------------------------------------------
+      resetForm();
+      setSplitDraft(null);
+      setNotice(
+        ownerContext
+          ? 'Refill saved and the split is set.'
+          : 'Refill saved and your share is set.',
+      );
+      setHistoryOpen(true);
+      void load();
+      onChanged?.();
+      setSaving(false);
+    },
+    [
+      saving,
+      totalAmount,
+      pricePerLiter,
+      liters,
+      derivedLiters,
+      paidBy,
+      occurredAt,
+      notes,
+      vehicleId,
+      vehicleFuelTypeId,
+      currentUserId,
+      ownerContext,
+      resetForm,
+      load,
+      onChanged,
+    ],
+  );
+
+  /**
+   * Back out of the split step with nothing written.
+   *
+   * `splitDraft` was purely local, so discarding it is all that is needed. No
+   * refill was ever created, no allocation exists, and every form value is
+   * still in component state -- reopening the form shows exactly what the user
+   * typed, with `responsibility` still on Split so they can confirm or change
+   * it.
+   */
+  const handleCancelSplit = useCallback(() => {
+    if (saving) return;
+    const alreadyCreated = splitRecoveryRefill;
+
+    setSplitDraft(null);
+    setSplitDraftError(null);
+    setSplitRecoveryRefill(null);
+
+    if (alreadyCreated) {
+      // The refill was created before its allocation failed, so it EXISTS.
+      // Returning to the form here would invite a second, duplicate refill if
+      // the user pressed save again, so Cancel ends the flow at history instead,
+      // where the saved row still has its Split expense action.
+      resetForm();
+      setNotice('Refill saved, but the split could not be saved.');
+      setHistoryOpen(true);
+      void load();
+      onChanged?.();
+      return;
+    }
+
+    // Nothing was written. Straight back to the form, values intact.
+    setFormOpen(true);
+  }, [saving, splitRecoveryRefill, resetForm, load, onChanged]);
+
+  /**
+   * Abandon the split step once the refill has already been created, by
+   * handing the real RefillSplitSheet the same id.
+   *
+   * From here the refill exists, so this is genuinely a history split: Cancel
+   * from there means "keep the refill, drop the allocation edits", which is the
+   * correct semantics for an already-saved refill.
+   */
+  const handleSplitRecovery = useCallback(() => {
+    if (!splitRecoveryRefill) return;
+    setSplitDraft(null);
+    setSplitDraftError(null);
+    setSplitRecoveryRefill(null);
+    setSplitFor(splitRecoveryRefill);
+    setHistoryOpen(true);
+  }, [splitRecoveryRefill]);
 
   const handleVoid = useCallback(
     async (refillId: string) => {
@@ -325,7 +678,7 @@ export default function VehicleRefillPanel({
           <Pressable
             accessibilityLabel={`Log refill for ${vehicleLabel}`}
             accessibilityRole="button"
-            onPress={() => setFormOpen(true)}
+            onPress={openForm}
             style={({ pressed }) => [
               styles.action,
               styles.actionPrimary,
@@ -390,7 +743,7 @@ export default function VehicleRefillPanel({
                     label="Log refill"
                     onPress={() => {
                       setHistoryOpen(false);
-                      setFormOpen(true);
+                      openForm();
                     }}
                     style={styles.footerBtn}
                   />
@@ -473,23 +826,35 @@ export default function VehicleRefillPanel({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}>
               <LabeledInput
+                error={fieldErrors.total}
                 keyboardType="decimal-pad"
                 label="Total amount paid (₱)"
-                onChangeText={setTotalAmount}
+                onChangeText={(text) => {
+                  setTotalAmount(text);
+                  clearFieldError('total');
+                }}
                 placeholder="e.g. 1500"
                 value={totalAmount}
               />
               <LabeledInput
+                error={fieldErrors.price}
                 keyboardType="decimal-pad"
                 label="Price per liter (₱/L)"
-                onChangeText={setPricePerLiter}
+                onChangeText={(text) => {
+                  setPricePerLiter(text);
+                  clearFieldError('price');
+                }}
                 placeholder="e.g. 64.20"
                 value={pricePerLiter}
               />
               <LabeledInput
+                error={fieldErrors.liters}
                 keyboardType="decimal-pad"
                 label="Liters (optional)"
-                onChangeText={setLiters}
+                onChangeText={(text) => {
+                  setLiters(text);
+                  clearFieldError('liters');
+                }}
                 placeholder={derivedLiters != null ? String(derivedLiters) : 'e.g. 23.36'}
                 value={liters}
               />
@@ -498,8 +863,12 @@ export default function VehicleRefillPanel({
               ) : null}
 
               <SelectField
+                error={fieldErrors.paidBy}
                 label="Paid by"
-                onChange={setPaidBy}
+                onChange={(next) => {
+                  setPaidBy(next);
+                  clearFieldError('paidBy');
+                }}
                 options={memberOptions}
                 placeholder="Choose who paid"
                 value={paidBy ?? ''}
@@ -507,8 +876,12 @@ export default function VehicleRefillPanel({
               <LabeledInput
                 autoCapitalize="none"
                 autoCorrect={false}
+                error={fieldErrors.date}
                 label="Date (YYYY-MM-DD)"
-                onChangeText={setOccurredAt}
+                onChangeText={(text) => {
+                  setOccurredAt(text);
+                  clearFieldError('date');
+                }}
                 placeholder="2026-09-26"
                 value={occurredAt}
               />
@@ -519,23 +892,122 @@ export default function VehicleRefillPanel({
                 value={notes}
               />
 
-              <Text style={styles.hint}>
-                Logged by you automatically. Paid by can be any vehicle member.
-              </Text>
+              {/* ---- budget responsibility -------------------------------
+                  The common case is a refill that belongs entirely to the
+                  person who logged it, so that is a one-tap default rather
+                  than a trip through refill history. The choice is always
+                  visible before Save, so nothing is charged silently.
+
+                  This is a real block with its own vertical space, not a bare
+                  run of siblings. The label, the pills, the tertiary row and
+                  the helper each get their own margin, so the helper can never
+                  be pulled up into the control above it. */}
+              <View style={styles.respSection}>
+                <Text style={styles.respLabel}>Budget responsibility</Text>
+                <View style={styles.respRow}>
+                  <ResponsibilityPill
+                    label="Mine"
+                    onPress={() => setResponsibility('mine')}
+                    selected={responsibility === 'mine'}
+                  />
+                  <ResponsibilityPill
+                    label={ownerContext ? 'Split' : 'Set my share'}
+                    onPress={() => setResponsibility('split')}
+                    selected={responsibility === 'split'}
+                  />
+                </View>
+
+                {/* Quiet tertiary option: create the refill with no allocation
+                    at all and let the owner decide from refill history. */}
+                {!ownerContext ? (
+                  <Pressable
+                    accessibilityRole="radio"
+                    accessibilityLabel="Leave for owner to split"
+                    accessibilityState={{ selected: responsibility === 'owner' }}
+                    hitSlop={8}
+                    onPress={() => setResponsibility('owner')}
+                    style={styles.respQuietRow}>
+                    <Ionicons
+                      name={responsibility === 'owner' ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={14}
+                      color={GasTaColors.textSoft}
+                    />
+                    <Text
+                      style={[
+                        styles.respQuietText,
+                        responsibility === 'owner' && styles.respQuietTextOn,
+                      ]}>
+                      Leave for owner to split
+                    </Text>
+                  </Pressable>
+                ) : null}
+
+                <Text style={styles.respHelper}>{responsibilityHelper}</Text>
+              </View>
 
               {formError ? <Text style={styles.formError}>{formError}</Text> : null}
 
               <PrimaryButton
                 disabled={saving}
-                label={saving ? 'Saving…' : 'Save refill'}
+                label={saveLabel}
                 onPress={() => void handleSave()}
-                style={styles.footerBtn}
+                style={styles.formSaveBtn}
               />
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/*
+        The PRE-SAVE split step, shown only after the form has validated and only
+        while no refill row exists yet.
+
+        It is a sibling of the form modal rather than a child, so the form keeps
+        its state and this sheet gets its own KeyboardAvoidingView instead of
+        nesting two of them -- the same double-padding problem the history sheet
+        had to work around. Closing it returns to the form untouched.
+      */}
+      {splitDraft ? (
+        <RefillSplitDraftSheet
+          currentUserId={currentUserId}
+          error={splitDraftError}
+          members={members}
+          mode={ownerContext ? 'owner' : 'self'}
+          onCancel={handleCancelSplit}
+          onConfirm={(payload) => void handleConfirmSplit(payload)}
+          onRecovery={handleSplitRecovery}
+          recoveryLabel={
+            splitRecoveryRefill ? 'Finish the split in refill history' : null
+          }
+          cancelLabel={splitRecoveryRefill ? 'Close' : 'Cancel'}
+          saving={saving}
+          totalAmount={splitDraft.totalAmount}
+          vehicleLabel={vehicleLabel}
+        />
+      ) : null}
     </>
+  );
+}
+
+function ResponsibilityPill({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={label}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={[styles.respPill, selected && styles.respPillOn]}>
+      {selected ? <Ionicons name="checkmark" size={13} color={GasTaColors.textOnForest} /> : null}
+      <Text style={[styles.respPillText, selected && styles.respPillTextOn]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -726,6 +1198,64 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
   },
+  // ---- budget responsibility control ---------------------------------------
+  respLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    color: GasTaColors.textMuted,
+    marginTop: spacing.sm,
+  },
+  respRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  respPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    flex: 1,
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.pill,
+    backgroundColor: GasTaColors.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  respPillOn: {
+    backgroundColor: GasTaColors.forest,
+    borderColor: GasTaColors.forest,
+  },
+  respPillText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+  },
+  respPillTextOn: {
+    color: GasTaColors.textOnForest,
+    fontWeight: '700',
+  },
+  respQuietRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginTop: spacing.sm,
+    paddingVertical: 2,
+  },
+  respQuietText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+  },
+  respQuietTextOn: {
+    color: GasTaColors.forest,
+    fontWeight: '700',
+  },
+
   refillRow: {
     padding: spacing.md,
     borderRadius: radii.md,
@@ -839,7 +1369,10 @@ const styles = StyleSheet.create({
   },
   formContent: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl,
+    // Extra tail room so the last content (the responsibility helper) always
+    // scrolls clear of the Save button, and so a validation message appearing
+    // under the lowest field is never pinned under it.
+    paddingBottom: spacing.xl * 2,
   },
   hint: {
     color: GasTaColors.textSoft,
@@ -848,6 +1381,26 @@ const styles = StyleSheet.create({
     marginTop: -spacing.sm,
     marginBottom: spacing.md,
   },
+  /**
+   * The budget-responsibility block owns its own vertical space.
+   *
+   * The helper text used to share the `hint` style, whose negative `marginTop`
+   * is a tightening hack that only makes sense after a LabeledInput (which has
+   * its own bottom margin). Reused here, where the pills above carry no bottom
+   * margin, it dragged the helper up into the control and left the Save button
+   * with almost no breathing room -- which is what the overlap was. Every part
+   * of the block now spaces itself positively instead.
+   */
+  respSection: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  respHelper: {
+    color: GasTaColors.textSoft,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: spacing.sm,
+  },
   formError: {
     color: GasTaColors.error,
     fontSize: 12,
@@ -855,4 +1408,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   footerBtn: { marginTop: spacing.sm },
+  /** The form's primary action sits a full step below the responsibility block. */
+  formSaveBtn: { marginTop: spacing.lg },
 });
