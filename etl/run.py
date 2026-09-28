@@ -244,6 +244,8 @@ def _print_backfill_summary(reports: list) -> None:
             print(f"  ! {error}")
         for note in report.unreadable:
             print(f"  - skipped (DOE published a scan): {note}")
+        for note in report.rejected_out_of_range:
+            print(f"  - out of requested range: {note}")
         for week in report.weeks:
             for warning in week.warnings:
                 print(f"  ~ {week.week_start}: {warning}")
@@ -275,6 +277,22 @@ def cmd_backfill(args: argparse.Namespace) -> None:
     )
     print(json.dumps([r.to_dict() for r in reports], indent=2))
     _print_backfill_summary(reports)
+
+    # A week dated in the future can only be a mis-parse of a PDF DOE actually
+    # published. It is rejected rather than loaded, but it is also a real defect in
+    # what the parser read, so a production run fails loudly instead of quietly
+    # leaving the archive short a week. Dry runs report without failing.
+    for report in reports:
+        for entry in report.rejected_future:
+            print(f"REJECTED FUTURE WEEK: {entry}", file=sys.stderr)
+            print(
+                "  This week is dated after today, which means the PDF header was read "
+                "incorrectly. It was NOT loaded.",
+                file=sys.stderr,
+            )
+    if any(r.rejected_future for r in reports) and not args.dry_run:
+        sys.exit(1)
+
     if not args.dry_run and all(r.weeks_loaded == 0 and r.weeks_skipped == 0 for r in reports):
         sys.exit(1)
 

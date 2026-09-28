@@ -13,6 +13,7 @@ merging whatever sub-region files share a week.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -59,6 +60,13 @@ class BackfillReport:
     newest_week: str = ""
     weeks: list[WeekResult] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Weeks DOE published PDFs for but which lie outside the requested range. These
+    # are normal -- they are simply not what was asked for -- so they are reported
+    # apart from genuine failures.
+    rejected_out_of_range: list[str] = field(default_factory=list)
+    # Weeks dated after today. These can only be a mis-parse (South Luzon's undated
+    # numbered PDFs resolve to a "2026-12-29" week), and they are never loaded.
+    rejected_future: list[str] = field(default_factory=list)
     # Weeks DOE published only as page scans; no prices exist to load.
     unreadable: list[str] = field(default_factory=list)
 
@@ -136,6 +144,42 @@ def _group_by_stated_week(parsed: list[ParsedBulletin]) -> dict[date, list[Parse
     return weeks
 
 
+def apply_week_bounds(
+    weeks: dict[date, list[ParsedBulletin]],
+    *,
+    since: date | None,
+    until: date | None,
+    today: date,
+) -> tuple[dict[date, list[ParsedBulletin]], list[date], list[date], list[date]]:
+    """Apply date bounds to the *final parsed* bulletin weeks, not discovery metadata.
+
+    `_select_documents` can only bound a week when the filename states one. South
+    Luzon publishes its current series as undated numbered PDFs
+    (`region-iv-a-calabarzon-9-pdf`), so those always pass preselection and their
+    real week is only known after the PDF header is read. Bounding there therefore
+    has to happen again here, or `--since 2026-08-19` will happily load 2025 weeks.
+
+    Returns (kept, before_since, after_until, future). The parsed header date is
+    treated as authoritative and is never rewritten.
+    """
+    kept: dict[date, list[ParsedBulletin]] = {}
+    before_since: list[date] = []
+    after_until: list[date] = []
+    future: list[date] = []
+
+    for week_start, group in weeks.items():
+        if week_start > today:
+            future.append(week_start)
+        elif since and week_start < since:
+            before_since.append(week_start)
+        elif until and week_start > until:
+            after_until.append(week_start)
+        else:
+            kept[week_start] = group
+
+    return kept, sorted(before_since), sorted(after_until), sorted(future)
+
+
 def backfill_region(
     region_key: str,
     *,
@@ -175,7 +219,34 @@ def backfill_region(
     parsed = _parse_documents(
         selected, region_code, dest_dir, report.errors, report.unreadable
     )
-    weeks = _group_by_stated_week(parsed)
+    # Weeks DOE has not published yet. A bulletin dated in the future would sort
+    # above every real week; `20240812000007_bulletin_history.sql` deletes such rows
+    # for exactly this reason, and `fetchPriceTrend` has no date filter, so one would
+    # surface as the newest point of every trend chart. Never load one.
+    latest_published = date.today()
+    grouped = _group_by_stated_week(parsed)
+    weeks, before_since, after_until, future_weeks = apply_week_bounds(
+        grouped, since=since, until=until, today=latest_published
+    )
+
+    for week_start in future_weeks:
+        sources = sorted(
+            {
+                os.path.basename(str(getattr(b, "source_path", "") or b.source_url or "?"))
+                for b in grouped.get(week_start, [])
+            }
+        )
+        report.rejected_future.append(
+            f"{week_start.isoformat()}: {', '.join(sources) or 'unknown source'}"
+        )
+    for week_start in before_since:
+        report.rejected_out_of_range.append(
+            f"{week_start.isoformat()}: before --since {since.isoformat() if since else 'n/a'}"
+        )
+    for week_start in after_until:
+        report.rejected_out_of_range.append(
+            f"{week_start.isoformat()}: after --until {until.isoformat() if until else 'n/a'}"
+        )
 
     ordered_weeks = sorted(weeks, reverse=True)
     if max_weeks is not None:
