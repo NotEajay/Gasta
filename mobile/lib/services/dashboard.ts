@@ -139,6 +139,17 @@ export async function fetchDashboardBudgetSummary(
       (item) => item.year === year && item.month === month
     );
 
+    // Every derived figure below is deliberately meaningless. `remaining`,
+    // `overBy` and `progress` cannot be computed without `spent`, and `status`
+    // is reported as 'unset' rather than 'ok' on purpose: 'ok' would assert the
+    // user is under budget, which is exactly the claim this fallback exists to
+    // avoid making. `actualUnavailable: true` is the real signal, and Home
+    // branches on it before ever reading these fields.
+    //
+    // This is the one honest value the existing `BudgetStatus` union allows. A
+    // dedicated 'unknown' status would be clearer still, but `BudgetStatus` is a
+    // closed union consumed by `STATUS_META` in the Budget tab, so adding a
+    // member is a change to that screen too and is deliberately out of scope.
     return {
       hasBudget: Boolean(budget),
       limitAmount: budget?.limit_amount ?? 0,
@@ -147,7 +158,7 @@ export async function fetchDashboardBudgetSummary(
       remaining: 0,
       overBy: 0,
       progress: 0,
-      status: budget ? 'ok' : 'unset',
+      status: 'unset',
       actualUnavailable: true,
     };
   }

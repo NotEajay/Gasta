@@ -26,18 +26,51 @@ import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarV
  * edges, and the parent canvas shows through those strips.
  *
  * `AuthBackground canvas="white"` remains the canvas for every other tab. Only
- * the screens running the cream GasTa experiment — Profile and Budget — swap in
- * `AppBackground`. The floating tab bar is `position: absolute` over this canvas
- * and keeps its own opaque white surface, so the bar reads as floating over
- * cream rather than as a white navigation region.
+ * the screens running the cream GasTa experiment — Home, Profile, Budget and
+ * Vehicles — swap in `AppBackground`. The floating tab bar is `position:
+ * absolute` over this canvas and keeps its own opaque white surface, so the bar
+ * reads as floating over cream rather than as a white navigation region.
  */
-const CREAM_CANVAS_ROUTES = ['/profile', '/budget', '/vehicles'];
+const CREAM_CANVAS_ROUTES = ['/home', '/profile', '/budget', '/vehicles'];
+
+function isCreamCanvasRoute(pathname: string) {
+  return CREAM_CANVAS_ROUTES.some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`)
+  );
+}
+
+/**
+ * The opaque fill for a tab scene, derived from the same route list the canvas
+ * uses so the two can never disagree.
+ *
+ * WHY A SCENE MUST BE OPAQUE
+ *
+ * React Navigation's bottom tabs render every mounted scene in the same slot,
+ * absolutely positioned on top of each other, with the focused scene at zIndex 0
+ * and the rest at zIndex -1. Hiding the losers is `react-native-screens`' job.
+ *
+ * On native that works: `screensEnabled()` is true, so each scene is wrapped in a
+ * real `Screen`, which detaches the inactive ones. On WEB it does not:
+ * `screensEnabled()` returns `isNativePlatformSupported`, which is false for
+ * `Platform.OS === 'web'`, so `MaybeScreen` silently degrades to a plain `View`
+ * and every mounted scene stays painted. With a transparent scene background
+ * that means the previously-visited tabs show straight through the active one —
+ * the "previous page visible underneath" artefact, and the reason it was so much
+ * more obvious in a browser than on a phone.
+ *
+ * An opaque per-scene background is the platform-agnostic fix: the focused
+ * scene covers everything behind it everywhere. The trade-off is deliberate and
+ * documented — the AppBackground gradient and its two 0.04-opacity orbs now sit
+ * behind opaque scenes rather than showing through them. Both are far too faint
+ * to carry the design, and correctness of "one visible page" outranks them.
+ */
+function canvasColorFor(pathname: string) {
+  return isCreamCanvasRoute(pathname) ? GasTaColors.cream : GasTaColors.white;
+}
 
 function TabCanvas({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const isCreamCanvas = CREAM_CANVAS_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`)
-  );
+  const isCreamCanvas = isCreamCanvasRoute(pathname);
 
   if (isCreamCanvas) {
     return <AppBackground>{children}</AppBackground>;
@@ -56,6 +89,19 @@ const NAV_BAR_SIDE_MARGIN = 16;
 const NAV_BAR_BOTTOM_GAP = 10;
 const NAV_ICON_SIZE = 23;
 const NAV_ICON_CHIP = 40;
+
+/**
+ * Bottom clearance a screen's own scroll content must reserve so its last row can
+ * be scrolled clear of the floating bar.
+ *
+ * Exported because a screen may opt OUT of the scene-level padding below (the
+ * Home tab does, so its content scrolls behind the bar instead of stopping at a
+ * painted strip). When it does, it must reserve exactly the same distance, and
+ * this is the single place that number is defined so the two can never drift.
+ */
+export function floatingNavContentInset(bottomInset: number): number {
+  return NAV_BAR_HEIGHT + bottomInset + NAV_BAR_BOTTOM_GAP + spacing.md;
+}
 
 const tabIconNames = {
   home: { active: 'home', inactive: 'home-outline' },
@@ -188,16 +234,23 @@ export default function TabLayout() {
   );
 
   // Applied to every tab scene, so no screen needs its own bottom padding.
-  // Animating it keeps the reclaimed space in step with the sliding bar.
   const sceneStyle = useMemo(
     () => ({
-      backgroundColor: 'transparent',
-      paddingBottom: navBarVisibility.interpolate({
-        inputRange: [0, 1],
-        outputRange: [spacing.lg, navBarScenePadding],
-      }),
+      // Opaque, and keyed to the route so the active scene always covers the
+      // scenes stacked behind it. See `canvasColorFor` for why this matters, and
+      // why it is specifically worse on web.
+      backgroundColor: canvasColorFor(pathname),
+      // Deliberately a static number rather than an Animated interpolation.
+      //
+      // `sceneStyle` is consumed as a plain style object by React Navigation, not
+      // by an Animated component, so an interpolation here was never actually
+      // animating; on web it serialised an interpolation object into a CSS
+      // length. The bar itself still slides -- only this inset is now fixed,
+      // which is the "correctness over animation" trade. The value is always the
+      // fully-visible-bar padding, so the last row clears the bar in both states.
+      paddingBottom: navBarScenePadding,
     }),
-    [navBarScenePadding, navBarVisibility],
+    [navBarScenePadding, pathname],
   );
 
   return (
@@ -223,6 +276,26 @@ export default function TabLayout() {
               name="home"
               options={{
                 title: 'Home',
+                /*
+                 * Home opts out of the scene-level bottom padding.
+                 *
+                 * That padding is a strip of SCENE BACKGROUND below the screen's
+                 * own scroll view, and it is what produced the cream band above
+                 * the floating bar: Home's dashboard body is `creamLight` while
+                 * the scene is `cream`, so the two met in a hard horizontal line
+                 * and the page looked like it stopped instead of scrolling.
+                 *
+                 * With no scene strip the ScrollView fills the screen and the
+                 * dashboard body continues behind the floating bar, so there is
+                 * no seam at all. Home then reserves the identical distance on
+                 * its own content via `floatingNavContentInset`, which keeps the
+                 * last row reachable. Every other tab keeps the scene padding, so
+                 * this is a Home-only change.
+                 *
+                 * The scene background is untouched: it stays opaque so the
+                 * previous-page stacking fix is preserved.
+                 */
+                sceneStyle: styles.homeScene,
                 tabBarIcon: ({ color, focused }) => (
                   <TabIcon name="home" focused={focused} color={color} />
                 ),
@@ -282,6 +355,12 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+  /**
+   * Home's scene: still opaque (the stacking fix depends on it), but with no
+   * painted bottom strip. Home reserves that clearance on its own scroll content
+   * instead, so the dashboard body runs behind the floating bar.
+   */
+  homeScene: { backgroundColor: GasTaColors.cream, paddingBottom: 0 },
   tabBar: {
     position: 'absolute',
     // Must stay visible so the iOS shadow is not clipped by the rounded corners.
