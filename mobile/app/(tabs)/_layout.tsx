@@ -1,7 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, usePathname } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { Animated, StyleSheet, View, type ColorValue, type ViewStyle } from 'react-native';
+import {
+  Animated,
+  Platform,
+  StyleSheet,
+  View,
+  type ColorValue,
+  type ViewStyle,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
@@ -188,16 +195,20 @@ export default function TabLayout() {
   );
 
   // Applied to every tab scene, so no screen needs its own bottom padding.
-  // Animating it keeps the reclaimed space in step with the sliding bar.
+  // IMPORTANT: keep this a plain style object (not Animated). On web, an
+  // Animated value in `sceneStyle` breaks inactive-scene hiding, so Vehicles /
+  // Budget / Profile all paint on top of each other. The floating tab bar still
+  // animates on its own via `tabBarStyle`.
   const sceneStyle = useMemo(
     () => ({
       backgroundColor: 'transparent',
-      paddingBottom: navBarVisibility.interpolate({
-        inputRange: [0, 1],
-        outputRange: [spacing.lg, navBarScenePadding],
-      }),
+      flex: 1,
+      paddingBottom: navBarScenePadding,
+      // Web: inactive scenes must leave the layout entirely. Without this,
+      // transparent cream screens stack and their titles/content overlap.
+      ...(Platform.OS === 'web' ? ({ width: '100%', height: '100%' } as const) : null),
     }),
-    [navBarScenePadding, navBarVisibility],
+    [navBarScenePadding],
   );
 
   return (
@@ -206,9 +217,14 @@ export default function TabLayout() {
         <SafeAreaView edges={['top']} style={styles.fill}>
           <Tabs
             initialRouteName="home"
+            // Detach inactive screens so prior tabs cannot remain visible
+            // underneath the focused cream/transparent scene (esp. on web).
+            detachInactiveScreens
             screenOptions={{
               headerShown: false,
+              freezeOnBlur: true,
               sceneStyle,
+              lazy: true,
               tabBarActiveTintColor: HomeColors.primary,
               tabBarInactiveTintColor: HomeColors.muted,
               tabBarItemStyle: styles.tabBarItem,

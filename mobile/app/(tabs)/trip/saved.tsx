@@ -5,12 +5,13 @@ import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import TripSectionHeader from '@/components/trip/TripSectionHeader';
 import Card from '@/components/ui/Card';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import SubPageHeader from '@/components/ui/SubPageHeader';
 import { spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatDate } from '@/lib/format';
 import { deleteSavedTrip, fetchSavedTrips } from '@/lib/services/savedTrips';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -27,6 +28,7 @@ function routeLabel(trip: SavedTrip): string {
 export default function SavedTripsScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const { user, loading: authLoading } = useAuth();
   const [trips, setTrips] = useState<SavedTrip[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,19 +102,17 @@ export default function SavedTripsScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}>
-      <SubPageHeader
-        module="trip"
-        title="Saved Trips"
-        subtitle="Re-run templates with the latest route, vehicle refill price, and SAW weights."
-      />
+      <TripSectionHeader active="saved" />
 
       {trips.length === 0 ? (
         <Card>
-          <Text>No saved trips yet. Save a template from the Trip Optimizer.</Text>
+          <Text>No saved trips yet. Save a template from New trip.</Text>
           <PrimaryButton
-            label="Go to optimizer"
+            label="New trip"
             variant="secondary"
             onPress={() => router.push('/(tabs)/trip')}
             style={styles.actionBtn}
@@ -124,7 +124,8 @@ export default function SavedTripsScreen() {
             <Text style={styles.title}>{trip.name}</Text>
             <Text style={styles.meta}>{routeLabel(trip)}</Text>
             <Text style={styles.meta}>
-              {trip.distance_km} km · weights {trip.mcda_weights.fuelCost}/{trip.mcda_weights.travelTime}
+              {trip.distance_km} km · weights {trip.mcda_weights.fuelCost}/
+              {trip.mcda_weights.travelTime}
             </Text>
             <Text style={styles.meta}>Updated {formatDate(trip.updated_at)}</Text>
             <PrimaryButton
