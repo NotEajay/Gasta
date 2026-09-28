@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -5,7 +6,6 @@ import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
-import Card from '@/components/ui/Card';
 import ChipSelect from '@/components/ui/ChipSelect';
 import SubPageHeader from '@/components/ui/SubPageHeader';
 import FormSection from '@/components/ui/FormSection';
@@ -14,7 +14,7 @@ import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import { DOE_REGIONS, REGION_CENTROIDS, type DoeRegionCode } from '@/constants/regions';
-import { GasTaColors, palette, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency } from '@/lib/format';
 import {
@@ -206,9 +206,33 @@ export default function ReportPriceScreen() {
     label: `${s.name} (${s.brand_label || s.oil_company.name})`,
   }));
 
+  /*
+   * Per-field errors, derived from exactly the checks `handleSubmit` already
+   * runs. The order here mirrors the submit order (brand -> station -> price),
+   * and only the first failing check surfaces, so this is presentation of the
+   * existing rules -- no rule is added, removed, or reordered, and the submit
+   * path itself is untouched.
+   */
+  const trimmedName = stationName.trim();
+  const trimmedBrand = stationType.trim();
+  const hasBrand = Boolean(trimmedBrand || companyId);
+  const priceNum = parseFloat(price);
+  const priceInvalid = !Number.isFinite(priceNum) || priceNum <= 0;
+
+  const brandError =
+    formError && !hasBrand ? 'Type the brand (Petron, Shell, and so on) or pick one.' : undefined;
+  const stationError =
+    formError && hasBrand && !trimmedName
+      ? 'Type the station name, or pick one from the list.'
+      : undefined;
+  const priceError =
+    formError && hasBrand && trimmedName && priceInvalid
+      ? 'Enter a valid price per liter.'
+      : undefined;
+
   return (
     <ScrollView
-      style={[styles.flex, { backgroundColor: theme.background }]}
+      style={styles.flex}
       contentContainerStyle={styles.padding}>
       <SubPageHeader
         module="community"
@@ -216,10 +240,26 @@ export default function ReportPriceScreen() {
         subtitle="Type the station and what you paid. 3 confirmations makes it verified."
       />
 
+      {/* WHERE */}
+      {/*
+        Section heads get a small fuel mark and a pale forest rule so the form
+        reads as a fuel report rather than a generic form. `FormSection` is
+        shared, so the identity is added around it instead of changing it.
+      */}
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionIcon}>
+          <MaterialCommunityIcons name="map-marker-outline" size={14} color={GasTaColors.forest} />
+        </View>
+        <View style={styles.sectionHeadCopy}>
+          <Text style={styles.sectionTitle}>Where</Text>
+          <Text style={styles.sectionHint}>
+            Region, brand, and the station you filled up at.
+          </Text>
+        </View>
+      </View>
       <FormSection
-        title="Station"
-        subtitle="Type the brand and full station name (street + city). New stations stay in this region only."
-        module="community">
+        module="community"
+        style={styles.formBlock}>
         <ChipSelect
           label="Region"
           options={DOE_REGIONS.map((r) => ({ value: r.code, label: r.name }))}
@@ -228,8 +268,9 @@ export default function ReportPriceScreen() {
           module="community"
         />
         <LabeledInput
-          label="Station type"
+          label="Brand / station type"
           value={stationType}
+          error={brandError}
           onChangeText={(text) => {
             setStationType(text);
             const match = companies.find((c) => c.name.toLowerCase() === text.trim().toLowerCase());
@@ -253,8 +294,9 @@ export default function ReportPriceScreen() {
           />
         ) : null}
         <LabeledInput
-          label="Station name"
+          label="Station"
           value={stationName}
+          error={stationError}
           onChangeText={(text) => {
             setStationName(text);
             setListedStationId(null);
@@ -271,13 +313,23 @@ export default function ReportPriceScreen() {
             module="community"
           />
         ) : (
-          <Text style={[styles.hint, { color: theme.textSecondary }]}>
+          <Text style={styles.hint}>
             New stations are saved only for this region. They will not appear in other regions.
           </Text>
         )}
       </FormSection>
 
-      <FormSection title="Price" module="community">
+      {/* WHAT */}
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionIcon}>
+          <MaterialCommunityIcons name="gas-station" size={14} color={GasTaColors.forest} />
+        </View>
+        <View style={styles.sectionHeadCopy}>
+          <Text style={styles.sectionTitle}>What</Text>
+          <Text style={styles.sectionHint}>Fuel grade and the price per liter.</Text>
+        </View>
+      </View>
+      <FormSection module="community" style={styles.formBlock}>
         <ChipSelect
           label="Fuel type"
           options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
@@ -288,22 +340,39 @@ export default function ReportPriceScreen() {
         <LabeledInput
           label="Price you paid (₱/L)"
           value={price}
+          error={priceError}
           onChangeText={setPrice}
           keyboardType="decimal-pad"
           placeholder="e.g. 62.50"
         />
+      </FormSection>
+
+      {/* OPTIONAL */}
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionIcon}>
+          <MaterialCommunityIcons name="note-text-outline" size={14} color={GasTaColors.textSoft} />
+        </View>
+        <View style={styles.sectionHeadCopy}>
+          <Text style={[styles.sectionTitle, styles.sectionTitleMuted]}>Optional</Text>
+          <Text style={styles.sectionHint}>Anything that helps others confirm this price.</Text>
+        </View>
+      </View>
+      <FormSection module="community" style={styles.formBlock}>
         <LabeledInput
-          label="Notes (optional)"
+          label="Notes"
           value={notes}
           onChangeText={setNotes}
           placeholder="Cash price, promo, etc."
         />
       </FormSection>
 
-      {formError ? (
-        <Card style={{ borderColor: palette.danger, backgroundColor: palette.dangerSoft }}>
-          <Text style={{ color: palette.danger, fontWeight: '600' }}>{formError}</Text>
-        </Card>
+      {/* Non-field failures (fuel-type lookup, submit errors) still surface as
+          a single notice; field-level messages render inline above. */}
+      {formError && !brandError && !stationError && !priceError ? (
+        <View style={styles.errorBox}>
+          <MaterialCommunityIcons name="alert-circle-outline" size={14} color={palette.danger} />
+          <Text style={styles.errorText}>{formError}</Text>
+        </View>
       ) : null}
 
       <PrimaryButton
@@ -355,8 +424,75 @@ export default function ReportPriceScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  hint: { fontSize: 13, lineHeight: 18, marginBottom: spacing.sm },
+  // The form keeps a narrower column than the list screens, since inputs and
+  // chip rows read worse when they get too wide.
+  padding: {
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
+    maxWidth: 560,
+    alignSelf: 'center',
+    width: '100%',
+  },
+  hint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: GasTaColors.textSoft,
+    marginBottom: spacing.sm,
+  },
+  /* Fuel identity for the form's section heads, added around the shared
+     FormSection rather than by changing it. */
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: GasTaColors.forestGlow,
+  },
+  sectionIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  sectionHeadCopy: { flex: 1, minWidth: 0 },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+    color: GasTaColors.forestDark,
+  },
+  sectionTitleMuted: { color: GasTaColors.textMuted },
+  sectionHint: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: GasTaColors.textSoft,
+    marginTop: 1,
+  },
+  formBlock: { marginTop: 0 },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: GasTaColors.error,
+    backgroundColor: palette.dangerSoft,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: palette.danger,
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(1, 68, 33, 0.35)',
