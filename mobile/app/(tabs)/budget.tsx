@@ -15,6 +15,7 @@ import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import { Text } from '@/components/Themed';
 import AnimatedPressable from '@/components/auth/AnimatedPressable';
+import HideWhenBlurred from '@/components/navigation/HideWhenBlurred';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
@@ -295,6 +296,7 @@ export default function BudgetScreen() {
   }
 
   return (
+    <HideWhenBlurred>
     <View style={styles.flex}>
       <ScrollView
         contentContainerStyle={styles.content}
@@ -735,6 +737,7 @@ export default function BudgetScreen() {
 
       </ScrollView>
     </View>
+    </HideWhenBlurred>
   );
 }
 

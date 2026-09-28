@@ -5,12 +5,13 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import TripSectionHeader from '@/components/trip/TripSectionHeader';
 import Card from '@/components/ui/Card';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import SubPageHeader from '@/components/ui/SubPageHeader';
 import { spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate, transportModeLabel } from '@/lib/format';
 import { fetchRecentTrips } from '@/lib/services/trips';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -32,6 +33,7 @@ function routeLabel(record: TripRecord): string {
 export default function TripHistoryScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const { user, loading: authLoading } = useAuth();
   const [records, setRecords] = useState<TripRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,19 +75,17 @@ export default function TripHistoryScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}>
-      <SubPageHeader
-        module="trip"
-        title="Trip History"
-        subtitle="Logged SAW runs — budget spending comes from these."
-      />
+      <TripSectionHeader active="history" />
 
       {records.length === 0 ? (
         <Card>
           <Text>No trip history yet. Run the optimizer and tap Log to history.</Text>
           <PrimaryButton
-            label="Go to optimizer"
+            label="New trip"
             variant="secondary"
             onPress={() => router.push('/(tabs)/trip')}
             style={styles.actionBtn}

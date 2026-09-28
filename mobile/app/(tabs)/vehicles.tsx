@@ -8,6 +8,7 @@ import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import VehicleSharePanel from '@/components/VehicleSharePanel';
 import VehicleRefillPanel from '@/components/vehicle/VehicleRefillPanel';
+import HideWhenBlurred from '@/components/navigation/HideWhenBlurred';
 import ChipSelect from '@/components/ui/ChipSelect';
 import EmptyState from '@/components/ui/EmptyState';
 import LabeledInput from '@/components/ui/LabeledInput';
@@ -368,6 +369,7 @@ export default function VehiclesScreen() {
     // No screen background: the cream canvas is painted by `TabCanvas` in
     // `app/(tabs)/_layout.tsx`, which sits above this scene's safe-area and
     // tab-bar insets, so the cream reaches the physical top and bottom edges.
+    <HideWhenBlurred>
     <ScrollView
       ref={scrollRef}
       onScroll={tabBarScrollHandler}
@@ -848,6 +850,7 @@ export default function VehiclesScreen() {
       </Modal>
 
     </ScrollView>
+    </HideWhenBlurred>
   );
 }
 

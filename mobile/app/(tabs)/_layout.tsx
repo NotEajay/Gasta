@@ -1,7 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, usePathname } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { Animated, StyleSheet, View, type ColorValue, type ViewStyle } from 'react-native';
+import {
+  Animated,
+  Platform,
+  StyleSheet,
+  View,
+  type ColorValue,
+  type ViewStyle,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
@@ -234,21 +241,28 @@ export default function TabLayout() {
   );
 
   // Applied to every tab scene, so no screen needs its own bottom padding.
+  //
+  // IMPORTANT: keep this a plain style object (not Animated). Both fixes for
+  // inactive scenes bleeding through depend on it, and an Animated value here
+  // serialises an interpolation object into a CSS length on web. The floating
+  // tab bar still animates on its own via `tabBarStyle`.
+  //
+  // Background: OPAQUE, and keyed to the route. React Navigation stacks every
+  // mounted scene in one slot (absolute fill, focused at zIndex 0, the rest at
+  // -1), and on web `screensEnabled()` is false so nothing hides the losers. An
+  // opaque per-scene background is the platform-agnostic guarantee that the
+  // active scene always covers what is behind it. `HideWhenBlurred` and
+  // `detachInactiveScreens` (web `display: none`) are a second, complementary
+  // guard from the same fix; both are kept.
   const sceneStyle = useMemo(
     () => ({
-      // Opaque, and keyed to the route so the active scene always covers the
-      // scenes stacked behind it. See `canvasColorFor` for why this matters, and
-      // why it is specifically worse on web.
       backgroundColor: canvasColorFor(pathname),
-      // Deliberately a static number rather than an Animated interpolation.
-      //
-      // `sceneStyle` is consumed as a plain style object by React Navigation, not
-      // by an Animated component, so an interpolation here was never actually
-      // animating; on web it serialised an interpolation object into a CSS
-      // length. The bar itself still slides -- only this inset is now fixed,
-      // which is the "correctness over animation" trade. The value is always the
-      // fully-visible-bar padding, so the last row clears the bar in both states.
+      flex: 1,
       paddingBottom: navBarScenePadding,
+      // Web: inactive scenes must also fill the layout cleanly. Without this
+      // the stacked scenes can leave the container and expose the seams they
+      // were meant to cover.
+      ...(Platform.OS === 'web' ? ({ width: '100%', height: '100%' } as const) : null),
     }),
     [navBarScenePadding, pathname],
   );
@@ -259,9 +273,14 @@ export default function TabLayout() {
         <SafeAreaView edges={['top']} style={styles.fill}>
           <Tabs
             initialRouteName="home"
+            // Detach inactive screens so prior tabs cannot remain visible
+            // underneath the focused cream/transparent scene (esp. on web).
+            detachInactiveScreens
             screenOptions={{
               headerShown: false,
+              freezeOnBlur: true,
               sceneStyle,
+              lazy: true,
               tabBarActiveTintColor: HomeColors.primary,
               tabBarInactiveTintColor: HomeColors.muted,
               tabBarItemStyle: styles.tabBarItem,
