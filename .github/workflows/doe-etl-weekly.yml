@@ -28,7 +28,8 @@ jobs:
   sync-all:
     name: Sync latest bulletins (all regions)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # OCR of scanned North Luzon (and similar) PDFs can exceed a short timeout.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: etl
@@ -43,6 +44,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: etl/requirements.txt
+
+      - name: Install OCR system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr ghostscript
 
       - name: Install dependencies
         run: pip install -r requirements.txt

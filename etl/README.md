@@ -217,14 +217,32 @@ The per-region column order in `constants.py` is only a fallback for bulletins w
 
 ### Unusable bulletins
 
-DOE occasionally publishes a week as page scans. Two cases are detected and refused rather than half-parsed:
+DOE occasionally publishes a week as page scans. Two cases are detected:
 
 | Case | Detection |
 |------|-----------|
 | Image-only PDF | No text layer at all |
 | Scan with a corrupt OCR text layer | Unmapped glyphs (`(cid:NN)`), or numbers with more than two decimals (`87.488` for a single `87.48` cell) |
 
-The weekly sync then steps back through the previous weeks until one parses, so a region still shows its most recent *readable* prices instead of an error. The backfill lists these separately from real failures.
+**Automatic OCR fallback:** when either case is detected, the ETL runs
+`ocrmypdf` + Tesseract to build a sidecar `*.ocr.pdf`, then parses that file.
+Native text PDFs are never re-OCR'd. Disable with `GASTA_ETL_DISABLE_OCR=1`.
+
+Local prerequisites (same as GitHub Actions):
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y tesseract-ocr ghostscript
+# macOS
+brew install tesseract ghostscript
+
+pip install -r requirements.txt   # includes ocrmypdf
+```
+
+If OCR is unavailable or still cannot recover usable text, the weekly sync steps
+back through previous weeks until one parses, so a region still shows its most
+recent *readable* prices instead of inventing numbers. The backfill lists these
+separately from real failures.
 
 ---
 
@@ -289,7 +307,9 @@ pytest
 - Stores the **minimum** price per company/fuel across the areas and sub-regions in the bulletin
 - Bulletin date = **week start** from the PDF header, falling back to the CMS filename slug
 - Sub-region PDFs sharing a week are merged into one macro-region row set
-- Bulletins whose text layer is missing or garbled are refused, not partially loaded
+- Bulletins whose text layer is missing or garbled are **OCR'd automatically**
+  (ocrmypdf + Tesseract) into a sidecar `*.ocr.pdf`, then parsed. If OCR is
+  unavailable or still fails, the week is refused rather than half-loaded.
 
 ## Output tables
 
