@@ -35,4 +35,7 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Run tests
+        env:
+          # Unit tests must not invoke Tesseract; OCR is covered by mocks.
+          GASTA_ETL_DISABLE_OCR: "1"
         run: pytest -q

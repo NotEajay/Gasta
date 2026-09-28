@@ -578,6 +578,12 @@ def parse_bulletin_pdf(
     if not path.exists():
         raise FileNotFoundError(path)
 
+    # Scanned / corrupt-text DOE PDFs (often North Luzon): OCR once into a
+    # sidecar, then parse as usual. Native text PDFs are unchanged.
+    from .ocr import ensure_machine_readable_pdf
+
+    path = ensure_machine_readable_pdf(path)
+
     full_text_parts: list[str] = []
     page_rows: list[list[list[dict]]] = []
     with pdfplumber.open(path) as pdf:
