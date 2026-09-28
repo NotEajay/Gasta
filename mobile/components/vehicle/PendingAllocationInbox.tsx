@@ -3,7 +3,6 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import { HomeColors } from '@/constants/home';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
@@ -111,7 +110,7 @@ export default function PendingAllocationInbox({ onChanged }: Props) {
 const styles = StyleSheet.create({
   wrap: { marginBottom: spacing.md },
   heading: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 14,
     fontWeight: '800',
     marginBottom: spacing.sm,
@@ -120,22 +119,22 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
+    borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     marginBottom: spacing.sm,
   },
   vehicle: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 14,
     fontWeight: '800',
   },
   meta: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 12,
     marginTop: 1,
   },
   body: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 13,
     lineHeight: 18,
     marginTop: spacing.sm,

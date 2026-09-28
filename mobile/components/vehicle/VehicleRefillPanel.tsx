@@ -17,7 +17,6 @@ import { Text } from '@/components/Themed';
 import LabeledInput from '@/components/ui/LabeledInput';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import SelectField, { type SelectOption } from '@/components/ui/SelectField';
-import { HomeColors } from '@/constants/home';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency, formatDate } from '@/lib/format';
 import PendingAllocationInbox from '@/components/vehicle/PendingAllocationInbox';
@@ -47,6 +46,9 @@ const todayInput = () => {
   const day = String(now.getDate()).padStart(2, '0');
   return `${now.getFullYear()}-${month}-${day}`;
 };
+
+/** Faint forest tint, matching the vehicle card and the auth surfaces. */
+const TINT_BG = 'rgba(1, 68, 33, 0.06)';
 
 interface Props {
   vehicleId: string;
@@ -295,24 +297,44 @@ export default function VehicleRefillPanel({
   return (
     <>
       <View style={styles.actionRow}>
+        {/* Secondary: viewing history is always allowed, for every role. */}
         <Pressable
           accessibilityLabel={`Refill history for ${vehicleLabel}`}
           accessibilityRole="button"
           onPress={() => setHistoryOpen(true)}
-          style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}>
-          <Ionicons name="cash-outline" size={14} color={HomeColors.primary} />
-          <Text style={styles.actionLabel}>
+          style={({ pressed }) => [
+            styles.action,
+            styles.actionSecondary,
+            pressed && styles.actionSecondaryPressed,
+          ]}>
+          <Ionicons name="cash-outline" size={14} color={GasTaColors.forest} />
+          <Text style={styles.actionSecondaryLabel}>
             Refills{loading ? '' : ` (${activeRefills.length})`}
           </Text>
         </Pressable>
-        <Pressable
-          accessibilityLabel={`Log refill for ${vehicleLabel}`}
-          accessibilityRole="button"
-          onPress={() => setFormOpen(true)}
-          style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}>
-          <Ionicons name="add" size={14} color={HomeColors.primary} />
-          <Text style={styles.actionLabel}>Log refill</Text>
-        </Pressable>
+
+        {/* Primary: logging a refill.
+            A Viewer is a read-only role (it is deliberately absent from
+            REFUILL_WRITE_ROLES and from the server's can_manage rules), so the
+            affordance is hidden rather than left as a control that cannot
+            succeed. This mirrors the existing `viewer.canAllocate` gate used
+            inside the history sheet — it hides a button, it never grants one.
+            Fails open when the member list could not load, so an owner whose
+            members query failed does not lose the action. */}
+        {viewer.role === 'Viewer' ? null : (
+          <Pressable
+            accessibilityLabel={`Log refill for ${vehicleLabel}`}
+            accessibilityRole="button"
+            onPress={() => setFormOpen(true)}
+            style={({ pressed }) => [
+              styles.action,
+              styles.actionPrimary,
+              pressed && styles.actionPrimaryPressed,
+            ]}>
+            <Ionicons name="add" size={14} color={GasTaColors.textOnForest} />
+            <Text style={styles.actionPrimaryLabel}>Log refill</Text>
+          </Pressable>
+        )}
       </View>
 
       <Modal
@@ -334,7 +356,7 @@ export default function VehicleRefillPanel({
                 accessibilityRole="button"
                 hitSlop={10}
                 onPress={() => setHistoryOpen(false)}>
-                <Ionicons name="close" size={20} color={HomeColors.muted} />
+                <Ionicons name="close" size={20} color={GasTaColors.textSoft} />
               </Pressable>
             </View>
 
@@ -342,7 +364,7 @@ export default function VehicleRefillPanel({
 
             {loading ? (
               <View style={styles.state}>
-                <ActivityIndicator color={HomeColors.primary} />
+                <ActivityIndicator color={GasTaColors.forest} />
               </View>
             ) : error ? (
               <View style={styles.state}>
@@ -442,7 +464,7 @@ export default function VehicleRefillPanel({
                 accessibilityRole="button"
                 hitSlop={10}
                 onPress={() => setFormOpen(false)}>
-                <Ionicons name="close" size={20} color={HomeColors.muted} />
+                <Ionicons name="close" size={20} color={GasTaColors.textSoft} />
               </Pressable>
             </View>
 
@@ -573,7 +595,7 @@ function RefillRow({
               <Ionicons
                 name={isOwnerAction ? 'git-branch-outline' : 'wallet-outline'}
                 size={15}
-                color={HomeColors.primary}
+                color={GasTaColors.forest}
               />
               <Text style={styles.splitBtnText}>{actionLabel}</Text>
             </Pressable>
@@ -592,19 +614,49 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: HomeColors.border,
+    borderTopColor: GasTaColors.glassBorderSubtle,
   },
   action: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radii.sm,
+    paddingVertical: 9,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.pill,
   },
-  actionPressed: { backgroundColor: HomeColors.navySoft },
+  // Primary "Log refill": the one filled forest action on the card.
+  actionPrimary: {
+    flex: 1,
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.forest,
+  },
+  actionPrimaryPressed: {
+    backgroundColor: GasTaColors.forestDark,
+  },
+  actionPrimaryLabel: {
+    color: GasTaColors.textOnForest,
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  // Secondary "Refills (N)": a quiet outlined peer that never competes.
+  actionSecondary: {
+    backgroundColor: GasTaColors.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  actionSecondaryPressed: {
+    backgroundColor: TINT_BG,
+  },
+  actionSecondaryLabel: {
+    color: GasTaColors.forest,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  actionPressed: { backgroundColor: TINT_BG },
   actionLabel: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '700',
@@ -612,12 +664,15 @@ const styles = StyleSheet.create({
 
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(14, 42, 82, 0.35)',
+    // Was the old navy `rgba(14, 42, 82, 0.35)`. Replaced with a forestDark scrim
+    // so the scrim belongs to the GasTa canvas. Opacity kept restrained, and the
+    // modal's size, maxHeight, animation and keyboard handling are untouched.
+    backgroundColor: 'rgba(1, 48, 25, 0.38)',
     justifyContent: 'flex-end',
   },
   sheet: {
     maxHeight: '88%',
-    backgroundColor: HomeColors.background,
+    backgroundColor: GasTaColors.cream,
     borderTopLeftRadius: radii.lg,
     borderTopRightRadius: radii.lg,
     paddingTop: spacing.md,
@@ -631,13 +686,13 @@ const styles = StyleSheet.create({
   },
   sheetTitles: { flex: 1, minWidth: 0 },
   sheetTitle: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 18,
     lineHeight: 24,
     fontWeight: '800',
   },
   sheetSubtitle: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 13,
     lineHeight: 18,
     marginTop: 1,
@@ -650,7 +705,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   stateText: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 13,
     lineHeight: 19,
     textAlign: 'center',
@@ -659,10 +714,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     borderRadius: radii.sm,
-    backgroundColor: HomeColors.primarySoft,
+    backgroundColor: TINT_BG,
   },
   retryText: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 13,
     fontWeight: '700',
   },
@@ -675,7 +730,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
+    borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     marginBottom: spacing.sm,
   },
@@ -687,31 +742,31 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   refillAmount: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 17,
     lineHeight: 22,
     fontWeight: '800',
   },
   refillDate: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 12,
     lineHeight: 16,
   },
   refillMeta: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',
     marginTop: 2,
   },
   refillWho: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 12,
     lineHeight: 16,
     marginTop: 6,
   },
   refillWhoMuted: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 12,
     lineHeight: 16,
   },
@@ -753,21 +808,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderRadius: radii.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.primary,
-    backgroundColor: HomeColors.primarySoft,
+    borderColor: GasTaColors.forest,
+    backgroundColor: TINT_BG,
   },
   splitBtnPressed: {
-    backgroundColor: HomeColors.primarySoft,
+    backgroundColor: TINT_BG,
     opacity: 0.7,
   },
   splitBtnText: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
   },
   voidedTag: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 11,
     lineHeight: 15,
     fontWeight: '700',
@@ -775,7 +830,7 @@ const styles = StyleSheet.create({
   },
 
   notice: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '700',
@@ -787,7 +842,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
   hint: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 11,
     lineHeight: 15,
     marginTop: -spacing.sm,

@@ -31,7 +31,7 @@ import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarV
  * and keeps its own opaque white surface, so the bar reads as floating over
  * cream rather than as a white navigation region.
  */
-const CREAM_CANVAS_ROUTES = ['/profile', '/budget'];
+const CREAM_CANVAS_ROUTES = ['/profile', '/budget', '/vehicles'];
 
 function TabCanvas({ children }: { children: ReactNode }) {
   const pathname = usePathname();

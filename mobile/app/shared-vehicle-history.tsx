@@ -7,7 +7,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
-import { HomeColors } from '@/constants/home';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency, formatDate, transportModeLabel } from '@/lib/format';
@@ -31,6 +30,9 @@ function routeLabel(record: TripRecord): string {
   }
   return `${record.distance_km} km`;
 }
+
+/** Faint forest tint, matching the vehicle card and the auth surfaces. */
+const TINT_BG = 'rgba(1, 68, 33, 0.06)';
 
 export default function SharedVehicleHistoryScreen() {
   const router = useRouter();
@@ -93,14 +95,14 @@ export default function SharedVehicleHistoryScreen() {
         <View style={styles.metaRow}>
           <View style={styles.metaGroup}>
             <View style={styles.metaItem}>
-              <Ionicons name="navigate-outline" size={14} color={HomeColors.muted} />
+              <Ionicons name="navigate-outline" size={14} color={GasTaColors.textSoft} />
               <Text numberOfLines={1} style={styles.metaText}>
                 {transportModeLabel(item.recommended_mode_code)}
               </Text>
             </View>
             {showDistance ? (
               <View style={styles.metaItem}>
-                <Ionicons name="map-outline" size={14} color={HomeColors.muted} />
+                <Ionicons name="map-outline" size={14} color={GasTaColors.textSoft} />
                 <Text numberOfLines={1} style={styles.metaText}>
                   {item.distance_km} km
                 </Text>
@@ -109,7 +111,7 @@ export default function SharedVehicleHistoryScreen() {
           </View>
           {fuel != null ? (
             <View style={styles.metaItem}>
-              <Ionicons name="cash-outline" size={14} color={HomeColors.primary} />
+              <Ionicons name="cash-outline" size={14} color={GasTaColors.forest} />
               <Text numberOfLines={1} style={styles.fuelText}>
                 {formatCurrency(fuel)}
               </Text>
@@ -128,7 +130,7 @@ export default function SharedVehicleHistoryScreen() {
         hitSlop={8}
         onPress={() => router.back()}
         style={styles.backBtn}>
-        <Ionicons name="chevron-back" size={18} color={HomeColors.primary} />
+        <Ionicons name="chevron-back" size={18} color={GasTaColors.forest} />
         <Text style={styles.backText}>Back</Text>
       </Pressable>
       <Text numberOfLines={2} style={styles.headerTitle}>
@@ -171,7 +173,7 @@ export default function SharedVehicleHistoryScreen() {
   if (authLoading || loading) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={HomeColors.primary} />
+        <ActivityIndicator color={GasTaColors.forest} />
         <Text style={styles.loadingText}>Loading shared trips…</Text>
       </View>
     );
@@ -207,7 +209,7 @@ export default function SharedVehicleHistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: HomeColors.background },
+  screen: { flex: 1, backgroundColor: GasTaColors.cream },
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
@@ -223,12 +225,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   backText: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 15,
     fontWeight: '600',
   },
   headerTitle: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 22,
     lineHeight: 28,
     fontWeight: '800',
@@ -236,7 +238,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   headerSubtitle: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 13,
     lineHeight: 18,
     marginTop: 2,
@@ -247,18 +249,18 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
+    borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     marginBottom: spacing.sm,
   },
   date: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 11,
     lineHeight: 15,
     fontWeight: '600',
   },
   route: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 15,
     lineHeight: 21,
     fontWeight: '700',
@@ -285,13 +287,13 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   metaText: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 12,
     lineHeight: 16,
     flexShrink: 1,
   },
   fuelText: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '700',
@@ -303,17 +305,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xl,
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
+    borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
   },
   stateTitle: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '700',
   },
   stateMessage: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 13,
     lineHeight: 19,
     textAlign: 'center',
@@ -324,10 +326,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     borderRadius: radii.sm,
-    backgroundColor: HomeColors.primarySoft,
+    backgroundColor: TINT_BG,
   },
   retryText: {
-    color: HomeColors.primary,
+    color: GasTaColors.forest,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
@@ -338,10 +340,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
-    backgroundColor: HomeColors.background,
+    backgroundColor: GasTaColors.cream,
   },
   loadingText: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 14,
     lineHeight: 20,
   },

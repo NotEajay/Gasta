@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { colors, iconSize, radii, spacing, typeScale, typography } from '@/constants/Theme';
+import { colors, iconSize, radii, spacing, typeScale, typography, GasTaColors } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface EmptyStateProps {
@@ -63,6 +63,10 @@ export default function EmptyState({
 const styles = StyleSheet.create({
   // ---- canonical (Phase 1) ----------------------------------------------
   // No card, no icon bubble: a quiet open block on the page canvas.
+  //
+  // Colours moved onto the GasTa cream/forest set so this variant is safe on
+  // the cream canvas. The legacy variant below is untouched, so Prices and
+  // Community (the only current consumers) do not shift.
   canonicalWrap: {
     alignItems: 'flex-start',
     paddingVertical: spacing.lg,
@@ -70,12 +74,12 @@ const styles = StyleSheet.create({
   },
   canonicalTitle: {
     ...typeScale.sectionHeading,
-    color: colors.navy,
+    color: GasTaColors.forestDark,
     marginTop: spacing.xs,
   },
   canonicalMessage: {
     ...typeScale.caption,
-    color: colors.muted,
+    color: GasTaColors.textSoft,
     lineHeight: 19,
   },
   canonicalAction: {

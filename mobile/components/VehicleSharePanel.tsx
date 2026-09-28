@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import LabeledInput from '@/components/ui/LabeledInput';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import SelectField, { type SelectOption } from '@/components/ui/SelectField';
-import { palette, radii, spacing } from '@/constants/Theme';
+// Explicit GasTa tokens instead of the generic `useTheme()` palette, so the
+// sharing panel sits on the same cream/forest canvas as the vehicle card it
+// lives inside. Only the colour SOURCE changed — no behaviour, flow, or gating.
+import { GasTaColors, GasTaRadius, GasTaSpacing, palette } from '@/constants/Theme';
 import {
   createVehicleShare,
   fetchUserProfileById,
@@ -15,7 +18,6 @@ import {
   restoreVehicleShare,
   revokeVehicleShare,
 } from '@/lib/services/vehicles';
-import { useTheme } from '@/lib/useTheme';
 import {
   VEHICLE_SHARE_ROLE_DESCRIPTIONS,
   type UserProfile,
@@ -23,6 +25,9 @@ import {
   type VehicleShare,
   type VehicleShareRole,
 } from '@/types';
+
+/** Faint forest tint, matching the vehicle card this panel lives inside. */
+const TINT_BG = 'rgba(1, 68, 33, 0.06)';
 
 type RoleValue = VehicleShareRole | '';
 
@@ -36,6 +41,18 @@ const roleOptions: readonly SelectOption<RoleValue>[] = [
 interface VehicleSharePanelProps {
   vehicleId: string;
   ownerId: string;
+  /**
+   * Optional controlled expansion.
+   *
+   * The Vehicles card now hosts the share affordance in its header, so the panel
+   * accepts the open state and a toggle. Passing `onToggle` switches it to
+   * controlled mode: the panel then renders no default trigger of its own and
+   * leaves the header button as the single entry point. The lookup, restore,
+   * role selection and revoke logic are completely untouched — only the
+   * affordance that opens them moved.
+   */
+  expanded?: boolean;
+  onToggle?: () => void;
 }
 
 type PanelMessage = {
@@ -55,9 +72,24 @@ type ShareMode =
   | 'restore' // previously revoked -> restoreVehicleShare()
   | 'self'; // the owner
 
-export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePanelProps) {
-  const theme = useTheme();
-  const [expanded, setExpanded] = useState(false);
+export default function VehicleSharePanel({
+  vehicleId,
+  ownerId,
+  expanded: expandedProp,
+  onToggle,
+}: VehicleSharePanelProps) {
+  // Uncontrolled by default, so any other caller keeps the old behaviour.
+  const [expandedLocal, setExpandedLocal] = useState(false);
+  const controlled = onToggle !== undefined;
+  const expanded = controlled ? (expandedProp ?? false) : expandedLocal;
+  const toggleExpanded = useCallback(() => {
+    setMessage(null);
+    if (onToggle) {
+      onToggle();
+    } else {
+      setExpandedLocal((current) => !current);
+    }
+  }, [onToggle]);
   const [email, setEmail] = useState('');
   const [lookedUpUser, setLookedUpUser] = useState<UserProfileLookup | null>(null);
   const [shareRole, setShareRole] = useState<RoleValue>('');
@@ -299,31 +331,30 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
 
   return (
     <View style={styles.wrap}>
-      <Pressable
-        accessibilityLabel="Share vehicle"
-        accessibilityRole="button"
-        onPress={() => {
-          setExpanded((current) => !current);
-          setMessage(null);
-        }}
-        style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}>
-        <Ionicons
-          name={expanded ? 'chevron-up' : 'share-social-outline'}
-          size={14}
-          color={palette.primary}
-        />
-        <Text style={styles.shareButtonLabel}>
-          {expanded ? 'Hide sharing' : 'Share vehicle'}
-        </Text>
-      </Pressable>
+      {controlled ? null : (
+        <Pressable
+          accessibilityLabel="Share vehicle"
+          accessibilityRole="button"
+          onPress={toggleExpanded}
+          style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'share-social-outline'}
+            size={14}
+            color={palette.primary}
+          />
+          <Text style={styles.shareButtonLabel}>
+            {expanded ? 'Hide sharing' : 'Share vehicle'}
+          </Text>
+        </Pressable>
+      )}
 
       {expanded ? (
-        <View style={[styles.panel, { borderTopColor: theme.border }]}>
-          <Text style={[styles.panelTitle, { color: theme.text }]}>Share vehicle</Text>
-          <Text style={[styles.panelDescription, { color: theme.textSecondary }]}>
+        <View style={[styles.panel, { borderTopColor: GasTaColors.glassBorderSubtle }]}>
+          <Text style={[styles.panelTitle, { color: GasTaColors.forestDark }]}>Share vehicle</Text>
+          <Text style={[styles.panelDescription, { color: GasTaColors.textMuted }]}>
             Invite another GasTa user to access and collaborate on this vehicle.
           </Text>
-          <Text style={[styles.ownerNote, { color: theme.textSecondary }]}>
+          <Text style={[styles.ownerNote, { color: GasTaColors.textMuted }]}>
             You are the Owner.
           </Text>
 
@@ -351,24 +382,24 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
           />
 
           {lookedUpUser ? (
-            <View style={[styles.foundCard, { backgroundColor: theme.overlay, borderColor: theme.border }]}>
+            <View style={[styles.foundCard, { backgroundColor: TINT_BG, borderColor: GasTaColors.glassBorderSubtle }]}>
               <View style={styles.sharedUserInfo}>
-                <Text style={[styles.sharedUserName, { color: theme.text }]}>
+                <Text style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
                   {lookedUpUser.full_name?.trim() || 'GasTa user'}
                 </Text>
-                <Text style={[styles.sharedUserMeta, { color: theme.textSecondary }]}>
+                <Text style={[styles.sharedUserMeta, { color: GasTaColors.textMuted }]}>
                   {email}
                 </Text>
               </View>
               {shareMode === 'active' ? (
-                <View style={[styles.stateTag, { backgroundColor: theme.border }]}>
-                  <Text style={[styles.stateTagLabel, { color: theme.textSecondary }]}>
+                <View style={[styles.stateTag, { backgroundColor: GasTaColors.creamDark }]}>
+                  <Text style={[styles.stateTagLabel, { color: GasTaColors.textMuted }]}>
                     {existingShare?.role}
                   </Text>
                 </View>
               ) : shareMode === 'restore' ? (
-                <View style={[styles.stateTag, { backgroundColor: theme.border }]}>
-                  <Text style={[styles.stateTagLabel, { color: theme.textSecondary }]}>
+                <View style={[styles.stateTag, { backgroundColor: GasTaColors.creamDark }]}>
+                  <Text style={[styles.stateTagLabel, { color: GasTaColors.textMuted }]}>
                     Previously {existingShare?.role}
                   </Text>
                 </View>
@@ -383,7 +414,7 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
             onChange={setShareRole}
             placeholder="Choose an access role"
           />
-          <Text style={[styles.roleHint, { color: theme.textSecondary }]}>
+          <Text style={[styles.roleHint, { color: GasTaColors.textMuted }]}>
             {shareRole && shareRole in VEHICLE_SHARE_ROLE_DESCRIPTIONS
               ? VEHICLE_SHARE_ROLE_DESCRIPTIONS[shareRole as VehicleShareRole]
               : 'Select a role to see what this person can do.'}
@@ -398,7 +429,7 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
                     message.kind === 'error'
                       ? palette.danger
                       : message.kind === 'info'
-                        ? theme.textSecondary
+                        ? GasTaColors.textMuted
                         : palette.primary,
                 },
               ]}>
@@ -413,23 +444,23 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
           />
 
           <View style={styles.sharedHeader}>
-            <Text style={[styles.sharedHeading, { color: theme.text }]}>
+            <Text style={[styles.sharedHeading, { color: GasTaColors.forestDark }]}>
               Collaborators ({activeShares.length})
             </Text>
           </View>
 
           {ownerProfile?.full_name?.trim() ? (
-            <Text style={[styles.ownerRow, { color: theme.textSecondary }]}>
+            <Text style={[styles.ownerRow, { color: GasTaColors.textMuted }]}>
               Owner · {ownerProfile.full_name.trim()}
             </Text>
           ) : null}
 
           {loadingShares ? (
-            <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>
+            <Text style={[styles.sharedEmpty, { color: GasTaColors.textMuted }]}>
               Loading collaborators…
             </Text>
           ) : activeShares.length === 0 ? (
-            <Text style={[styles.sharedEmpty, { color: theme.textSecondary }]}>
+            <Text style={[styles.sharedEmpty, { color: GasTaColors.textMuted }]}>
               No collaborators yet. Share this vehicle to get started.
             </Text>
           ) : (
@@ -441,16 +472,16 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
               return (
                 <View
                   key={share['ShareID']}
-                  style={[styles.sharedUser, { backgroundColor: theme.overlay }]}>
+                  style={[styles.sharedUser, { backgroundColor: TINT_BG }]}>
                   <View style={styles.sharedUserInfo}>
-                    <Text style={[styles.sharedUserName, { color: theme.text }]}>
+                    <Text style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
                       {displayName}
                     </Text>
-                    <Text style={[styles.sharedUserMeta, { color: theme.textSecondary }]}>
+                    <Text style={[styles.sharedUserMeta, { color: GasTaColors.textMuted }]}>
                       {share.role}
                     </Text>
                     {profile?.email ? (
-                      <Text style={[styles.sharedUserEmail, { color: theme.textSecondary }]}>
+                      <Text style={[styles.sharedUserEmail, { color: GasTaColors.textMuted }]}>
                         {profile.email}
                       </Text>
                     ) : null}
@@ -475,7 +506,7 @@ export default function VehicleSharePanel({ vehicleId, ownerId }: VehicleSharePa
 
 const styles = StyleSheet.create({
   wrap: {
-    marginTop: spacing.md,
+    marginTop: GasTaSpacing.md,
   },
   shareButton: {
     flexDirection: 'row',
@@ -483,8 +514,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     gap: 5,
     paddingVertical: 6,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radii.sm,
+    paddingHorizontal: GasTaSpacing.sm,
+    borderRadius: GasTaRadius.sm,
   },
   shareButtonPressed: {
     backgroundColor: palette.primarySoft,
@@ -497,35 +528,35 @@ const styles = StyleSheet.create({
   },
   panel: {
     borderTopWidth: 1,
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
+    marginTop: GasTaSpacing.md,
+    paddingTop: GasTaSpacing.md,
   },
   panelTitle: {
     fontSize: 16,
     fontWeight: '800',
-    marginBottom: spacing.xs,
+    marginBottom: GasTaSpacing.xs,
   },
   panelDescription: {
     fontSize: 13,
     lineHeight: 19,
-    marginBottom: spacing.md,
+    marginBottom: GasTaSpacing.md,
   },
   lookupButton: {
     alignSelf: 'flex-start',
-    marginBottom: spacing.md,
+    marginBottom: GasTaSpacing.md,
   },
   foundCard: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderRadius: radii.md,
-    padding: spacing.sm,
-    marginBottom: spacing.md,
+    borderRadius: GasTaRadius.md,
+    padding: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.md,
   },
   stateTag: {
-    borderRadius: radii.sm,
+    borderRadius: GasTaRadius.sm,
     paddingVertical: 3,
-    paddingHorizontal: spacing.xs,
+    paddingHorizontal: GasTaSpacing.xs,
   },
   stateTagLabel: {
     fontSize: 11,
@@ -534,31 +565,31 @@ const styles = StyleSheet.create({
   ownerNote: {
     fontSize: 13,
     fontWeight: '700',
-    marginTop: -spacing.sm,
-    marginBottom: spacing.md,
+    marginTop: -GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.md,
   },
   ownerRow: {
     fontSize: 12,
     fontWeight: '600',
-    marginBottom: spacing.sm,
+    marginBottom: GasTaSpacing.sm,
   },
   roleHint: {
     fontSize: 12,
     lineHeight: 17,
-    marginTop: -spacing.sm,
-    marginBottom: spacing.md,
+    marginTop: -GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.md,
   },
   message: {
     fontSize: 12,
     fontWeight: '600',
-    marginBottom: spacing.md,
+    marginBottom: GasTaSpacing.md,
   },
   sharedHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
+    marginTop: GasTaSpacing.lg,
+    marginBottom: GasTaSpacing.sm,
   },
   sharedHeading: {
     fontSize: 15,
@@ -566,14 +597,14 @@ const styles = StyleSheet.create({
   },
   sharedEmpty: {
     fontSize: 13,
-    marginBottom: spacing.sm,
+    marginBottom: GasTaSpacing.sm,
   },
   sharedUser: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: radii.md,
-    padding: spacing.sm,
-    marginBottom: spacing.sm,
+    borderRadius: GasTaRadius.md,
+    padding: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.sm,
   },
   sharedUserInfo: {
     flex: 1,
@@ -592,6 +623,6 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   removeButton: {
-    marginLeft: spacing.sm,
+    marginLeft: GasTaSpacing.sm,
   },
 });

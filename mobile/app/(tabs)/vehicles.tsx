@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
@@ -9,12 +9,20 @@ import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import VehicleSharePanel from '@/components/VehicleSharePanel';
 import VehicleRefillPanel from '@/components/vehicle/VehicleRefillPanel';
 import ChipSelect from '@/components/ui/ChipSelect';
+import EmptyState from '@/components/ui/EmptyState';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import { HomeColors } from '@/constants/home';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { palette, radii, spacing } from '@/constants/Theme';
+// NOTE: Vehicles now uses the GasTa cream/forest palette, matching Sign In,
+// Profile and Budget. `HomeColors` is no longer imported here.
+import {
+  GasTaColors,
+  GasTaRadius,
+  GasTaSpacing,
+  palette,
+  typeScale,
+} from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate } from '@/lib/format';
@@ -61,6 +69,48 @@ export default function VehiclesScreen() {
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editLastRefillPrice, setEditLastRefillPrice] = useState('');
   const [updatingRefill, setUpdatingRefill] = useState(false);
+
+  /**
+   * Card interaction state.
+   *
+   * `shareOpenId` is the single share panel the header button drives, so only
+   * one vehicle's sharing panel is open at a time. `menuFor` is the vehicle whose
+   * overflow menu is showing. `triggerNodes` keeps one measured anchor node per
+   * vehicle so the menu can be positioned under the right ellipsis.
+   */
+  const [shareOpenId, setShareOpenId] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<Vehicle | null>(null);
+  const [menuHasRefill, setMenuHasRefill] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number } | null>(
+    null,
+  );
+  const triggerNodes = useRef<Record<string, View | null>>({});
+
+  const toggleShare = useCallback((vehicleId: string) => {
+    setShareOpenId((current) => (current === vehicleId ? null : vehicleId));
+  }, []);
+
+  /**
+   * Opens the overflow for one vehicle, anchored under its own ellipsis.
+   * Measurement goes through a plain View wrapper because this project's
+   * react-native type surface does not expose `measureInWindow` on Pressable —
+   * the same constraint RefillSplitSheet already works around.
+   */
+  const openMenu = useCallback((vehicle: Vehicle, hasRefill: boolean) => {
+    setMenuFor(vehicle);
+    setMenuHasRefill(hasRefill);
+    const node = triggerNodes.current[vehicle.id];
+    if (node) {
+      node.measureInWindow((x, y, width) => {
+        setMenuAnchor({ x, y, width });
+      });
+    }
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    setMenuFor(null);
+    setMenuAnchor(null);
+  }, []);
 
   const searchResults = useMemo(() => {
     if (!catalogSearchQuery.trim() || selectedCatalogEntry) {
@@ -143,6 +193,8 @@ export default function VehiclesScreen() {
   }, [revealForm]);
 
   const handleEditVehicle = (vehicle: Vehicle) => {
+    // Dismissing the menu first, so the form it opens is never behind it.
+    closeMenu();
     setEditingVehicle(vehicle);
     setVehicleName(vehicle.nickname || '');
     setBrand(vehicle.brand);
@@ -260,6 +312,7 @@ export default function VehiclesScreen() {
   };
 
   const handleDelete = (vehicleId: string) => {
+    closeMenu();
     Alert.alert('Delete vehicle', 'Remove this vehicle from your profile?', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -312,15 +365,18 @@ export default function VehiclesScreen() {
   }
 
   return (
+    // No screen background: the cream canvas is painted by `TabCanvas` in
+    // `app/(tabs)/_layout.tsx`, which sits above this scene's safe-area and
+    // tab-bar insets, so the cream reaches the physical top and bottom edges.
     <ScrollView
       ref={scrollRef}
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
-      style={[styles.flex, { backgroundColor: HomeColors.background }]}
+      style={styles.flex}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>My Vehicles</Text>
+        <Text style={styles.headerTitle}>Vehicles</Text>
         <Text style={styles.headerSubtitle}>Manage your vehicles and fuel details.</Text>
       </View>
 
@@ -336,7 +392,7 @@ export default function VehiclesScreen() {
               hitSlop={10}
               onPress={handleCancelEdit}
               style={styles.formClose}>
-              <Ionicons name="close" size={18} color={HomeColors.muted} />
+              <Ionicons name="close" size={18} color={GasTaColors.textSoft} />
             </Pressable>
           </View>
 
@@ -362,13 +418,13 @@ export default function VehiclesScreen() {
             editable={!selectedCatalogEntry}
           />
           {selectedCatalogEntry && (
-            <View style={[styles.selectedVehicleChip, { backgroundColor: HomeColors.primary }]}>
+            <View style={[styles.selectedVehicleChip, { backgroundColor: GasTaColors.forest }]}>
               <Text style={styles.selectedVehicleText}>
                 {selectedCatalogEntry.brand} {selectedCatalogEntry.model} (
                 {selectedCatalogEntry.year})
               </Text>
               <Pressable onPress={handleClearSelection} style={styles.clearButton}>
-                <Ionicons name="close" size={16} color={HomeColors.onPrimary} />
+                <Ionicons name="close" size={16} color={GasTaColors.textOnForest} />
               </Pressable>
             </View>
           )}
@@ -377,7 +433,7 @@ export default function VehiclesScreen() {
               {searchResults.map((entry) => (
                 <Pressable
                   key={entry.id}
-                  style={[styles.searchResultItem, { backgroundColor: HomeColors.navySoft }]}
+                  style={[styles.searchResultItem, { backgroundColor: TINT_BG }]}
                   onPress={() => handleSelectCatalogEntry(entry)}>
                   <Text style={styles.searchResultText}>
                     {entry.brand} {entry.model} ({entry.year})
@@ -486,21 +542,20 @@ export default function VehiclesScreen() {
           onPress={handleOpenAdd}
           style={({ pressed }) => [styles.addAction, pressed && styles.addActionPressed]}>
           <View style={styles.addActionIcon}>
-            <Ionicons name="add" size={20} color={HomeColors.primary} />
+            <Ionicons name="add" size={20} color={GasTaColors.forest} />
           </View>
           <Text style={styles.addActionLabel}>Add vehicle</Text>
-          <Ionicons name="chevron-forward" size={16} color={HomeColors.primary} />
+          <Ionicons name="chevron-forward" size={16} color={GasTaColors.forest} />
         </Pressable>
       )}
 
       {vehicles.length === 0 ? (
-        <View style={styles.emptyBlock}>
-          <Ionicons name="car-outline" size={22} color={HomeColors.muted} />
-          <Text style={styles.emptyTitle}>No vehicles yet</Text>
-          <Text style={styles.emptyMessage}>
-            Add your first vehicle to use it in the Trip Optimizer.
-          </Text>
-        </View>
+        <EmptyState
+          variant="canonical"
+          icon="car-outline"
+          title="No vehicles yet"
+          message="Add your first vehicle to use it in the Trip Optimizer."
+        />
       ) : (
         <>
           <Text style={styles.sectionLabel}>Saved vehicles</Text>
@@ -513,7 +568,7 @@ export default function VehiclesScreen() {
               <View key={v.id} style={styles.vehicleCard}>
                 <View style={styles.vehicleCardHead}>
                   <View style={styles.vehicleIcon}>
-                    <Ionicons name="car-outline" size={18} color={HomeColors.primary} />
+                    <Ionicons name="car-outline" size={18} color={GasTaColors.forest} />
                   </View>
                   <View style={styles.vehicleCardTitles}>
                     <Text numberOfLines={1} style={styles.vehicleName}>
@@ -523,6 +578,52 @@ export default function VehiclesScreen() {
                       {v.brand} {v.model} · {v.year} · {v.fuel_efficiency_km_per_liter} km/L
                     </Text>
                   </View>
+
+                  {/* Header controls. Icon-only so they never crowd the vehicle
+                      name on a 320-375px screen; both carry accessibility
+                      labels. Sharing drives the panel's controlled expansion —
+                      no sharing logic moved. */}
+                  {showRefillForm || isEditingThis ? null : (
+                    <View style={styles.cardHeadActions}>
+                      <Pressable
+                        accessibilityLabel="Share vehicle"
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: shareOpenId === v.id }}
+                        hitSlop={8}
+                        onPress={() => toggleShare(v.id)}
+                        style={({ pressed }) => [
+                          styles.cardHeadBtn,
+                          pressed && styles.cardHeadBtnPressed,
+                        ]}>
+                        <Ionicons
+                          name={shareOpenId === v.id ? 'chevron-up' : 'share-social-outline'}
+                          size={17}
+                          color={GasTaColors.forest}
+                        />
+                      </Pressable>
+                      <View
+                        ref={(node) => {
+                          triggerNodes.current[v.id] = node;
+                        }}
+                        collapsable={false}>
+                        <Pressable
+                          accessibilityLabel="More vehicle actions"
+                          accessibilityRole="button"
+                          hitSlop={8}
+                          onPress={() => openMenu(v, hasRefill)}
+                          style={({ pressed }) => [
+                            styles.cardHeadBtn,
+                            pressed && styles.cardHeadBtnPressed,
+                          ]}>
+                          <Ionicons
+                            name="ellipsis-vertical"
+                            size={17}
+                            color={GasTaColors.textSoft}
+                          />
+                        </Pressable>
+                      </View>
+                    </View>
+                  )}
                 </View>
 
                 <View style={styles.cardDivider} />
@@ -572,7 +673,17 @@ export default function VehiclesScreen() {
                   </View>
                 ) : null}
 
-                <VehicleSharePanel vehicleId={v.id} ownerId={user.id} />
+                {/* Sharing still expands inline in this same card, so the panel
+                    visually stays connected to the vehicle it belongs to. It is
+                    controlled by the header button above. */}
+                {showRefillForm || isEditingThis ? null : (
+                  <VehicleSharePanel
+                    vehicleId={v.id}
+                    ownerId={user.id}
+                    expanded={shareOpenId === v.id}
+                    onToggle={() => toggleShare(v.id)}
+                  />
+                )}
 
                 {showRefillForm || isEditingThis ? null : (
                   <VehicleRefillPanel
@@ -587,55 +698,12 @@ export default function VehiclesScreen() {
 
                 {isEditingThis ? (
                   <View style={styles.editingNote}>
-                    <Ionicons name="pencil" size={13} color={HomeColors.primary} />
+                    <Ionicons name="pencil" size={13} color={GasTaColors.forest} />
                     <Text style={styles.editingNoteText}>
                       Editing above — tap Cancel to discard.
                     </Text>
                   </View>
                 ) : null}
-
-                {showRefillForm || isEditingThis ? null : (
-                  <View style={styles.cardActions}>
-                    <Pressable
-                      accessibilityLabel="Update last refill"
-                      accessibilityRole="button"
-                      onPress={() => {
-                        setEditingVehicleId(v.id);
-                        setEditLastRefillPrice(hasRefill ? String(v.last_refill_price) : '');
-                      }}
-                      style={({ pressed }) => [
-                        styles.cardAction,
-                        pressed && styles.cardActionPressed,
-                      ]}>
-                      <Ionicons name="cash-outline" size={14} color={HomeColors.primary} />
-                      <Text style={styles.cardActionLabel}>
-                        {hasRefill ? 'Update refill' : 'Set refill'}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel="Edit vehicle"
-                      accessibilityRole="button"
-                      onPress={() => handleEditVehicle(v)}
-                      style={({ pressed }) => [
-                        styles.cardAction,
-                        pressed && styles.cardActionPressed,
-                      ]}>
-                      <Ionicons name="create-outline" size={14} color={HomeColors.muted} />
-                      <Text style={styles.cardActionLabelMuted}>Edit</Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel="Delete vehicle"
-                      accessibilityRole="button"
-                      onPress={() => handleDelete(v.id)}
-                      style={({ pressed }) => [
-                        styles.cardAction,
-                        pressed && styles.cardActionPressed,
-                      ]}>
-                      <Ionicons name="trash-outline" size={14} color={palette.danger} />
-                      <Text style={styles.cardActionLabelDanger}>Delete</Text>
-                    </Pressable>
-                  </View>
-                )}
               </View>
             );
           })}
@@ -644,9 +712,12 @@ export default function VehiclesScreen() {
 
       <Text style={styles.sectionLabel}>Shared with me</Text>
       {sharedVehicles.length === 0 ? (
-        <View style={styles.emptyBlock}>
-          <Text style={styles.emptyMessage}>Vehicles shared with you will appear here.</Text>
-        </View>
+        <EmptyState
+          variant="canonical"
+          icon="people-outline"
+          title="Nothing shared yet"
+          message="Vehicles shared with you will appear here."
+        />
       ) : (
         sharedVehicles.map((sharedVehicle) => (
           <View key={sharedVehicle.vehicleId} style={styles.sharedRow}>
@@ -660,16 +731,30 @@ export default function VehiclesScreen() {
                   },
                 })
               }
-              style={({ pressed }) => [styles.sharedRowMain, pressed && styles.cardActionPressed]}>
+              style={({ pressed }) => [styles.sharedRowMain, pressed && styles.pressedRow]}>
               <View style={styles.vehicleCardTitles}>
                 <Text numberOfLines={1} style={styles.vehicleName}>
                   {sharedVehicle.brand} {sharedVehicle.model}
                 </Text>
-                <Text numberOfLines={1} style={styles.vehicleMeta}>
-                  {sharedVehicle.role}
-                </Text>
+                {/* Role as a chip rather than trailing metadata. The role string
+                    is rendered exactly as the data provides it — this is purely
+                    presentation, and the colour must NOT be read as a permission
+                    signal. */}
+                <View
+                  style={[
+                    styles.roleChip,
+                    sharedVehicle.role === 'Viewer' && styles.roleChipNeutral,
+                  ]}>
+                  <Text
+                    style={[
+                      styles.roleChipText,
+                      sharedVehicle.role === 'Viewer' && styles.roleChipTextNeutral,
+                    ]}>
+                    {sharedVehicle.role}
+                  </Text>
+                </View>
               </View>
-              <Ionicons name="chevron-forward" size={16} color={HomeColors.muted} />
+              <Ionicons name="chevron-forward" size={16} color={GasTaColors.textSoft} />
             </Pressable>
             <VehicleRefillPanel
               currentUserId={user.id}
@@ -682,55 +767,139 @@ export default function VehiclesScreen() {
           </View>
         ))
       )}
+
+      {/* ------------------------------------------- vehicle overflow menu
+          Rare/admin actions, anchored under the ellipsis that opened it.
+          A transparent Modal with a tap-to-dismiss backdrop is used because it
+          escapes the ScrollView's bounds on every platform, including web, with
+          no new dependency. Each item calls the SAME handler the old inline
+          action row used — no logic was duplicated or moved. */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={menuFor !== null}
+        onRequestClose={closeMenu}>
+        <Pressable style={styles.menuBackdrop} onPress={closeMenu} accessibilityLabel="Close menu">
+          <View
+            pointerEvents="box-none"
+            style={[
+              styles.menu,
+              // Anchored under the measured ellipsis, clamped so the menu can
+              // never run off the left edge on a narrow screen.
+              menuAnchor
+                ? {
+                    top: menuAnchor.y + 30,
+                    left: Math.max(GasTaSpacing.sm, menuAnchor.x + menuAnchor.width - MENU_WIDTH),
+                  }
+                : { top: 80, left: GasTaSpacing.lg },
+            ]}>
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityLabel="Edit vehicle"
+              onPress={() => {
+                const target = menuFor;
+                closeMenu();
+                if (target) handleEditVehicle(target);
+              }}
+              style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
+              <Ionicons name="create-outline" size={16} color={GasTaColors.forestDark} />
+              <Text style={styles.menuItemText}>Edit vehicle</Text>
+            </Pressable>
+
+            <View style={styles.menuDivider} />
+
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityLabel={
+                menuHasRefill ? 'Update refill price' : 'Set refill price'
+              }
+              onPress={() => {
+                const target = menuFor;
+                if (!target) return;
+                closeMenu();
+                setEditingVehicleId(target.id);
+                setEditLastRefillPrice(
+                  target.last_refill_price != null ? String(target.last_refill_price) : '',
+                );
+              }}
+              style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
+              <Ionicons name="cash-outline" size={16} color={GasTaColors.forestDark} />
+              <Text style={styles.menuItemText}>
+                {menuHasRefill ? 'Update refill price' : 'Set refill price'}
+              </Text>
+            </Pressable>
+
+            <View style={styles.menuDivider} />
+
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityLabel="Delete vehicle"
+              onPress={() => {
+                const target = menuFor;
+                closeMenu();
+                if (target) handleDelete(target.id);
+              }}
+              style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
+              <Ionicons name="trash-outline" size={16} color={palette.danger} />
+              <Text style={[styles.menuItemText, styles.menuItemDanger]}>Delete vehicle</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
     </ScrollView>
   );
 }
+
+/**
+ * Faint forest tint, the same value the auth and Profile surfaces use. Replaces
+ * the old `primarySoft` / `navySoft` green and blue-gray washes.
+ */
+const TINT_BG = 'rgba(1, 68, 33, 0.06)';
 
 /** Layout rhythm. Matches the Home screen so both tabs read as one app. */
 const SECTION_GAP = 28;
 const SURFACE_PAD = 18;
 
+/** Fixed menu width, so the anchor math can right-align it under the ellipsis. */
+const MENU_WIDTH = 200;
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl,
+    paddingHorizontal: GasTaSpacing.lg,
+    paddingBottom: GasTaSpacing.xl,
   },
   header: {
-    marginTop: spacing.xl,
+    marginTop: GasTaSpacing.xl,
     marginBottom: SECTION_GAP,
   },
   headerTitle: {
-    color: HomeColors.navy,
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: '800',
-    letterSpacing: -0.4,
+    ...typeScale.pageTitle,
+    color: GasTaColors.forestDark,
   },
   headerSubtitle: {
-    color: HomeColors.muted,
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: spacing.xs,
+    ...typeScale.body,
+    color: GasTaColors.textMuted,
+    marginTop: GasTaSpacing.xs,
   },
   sectionLabel: {
-    color: HomeColors.navy,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '700',
+    ...typeScale.label,
+    color: GasTaColors.textSoft,
+    textTransform: 'uppercase',
     marginTop: SECTION_GAP,
-    marginBottom: spacing.sm,
+    marginBottom: GasTaSpacing.sm,
   },
 
   // Single primary action, replacing the always-visible form.
   addAction: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.md,
+    gap: GasTaSpacing.md,
+    paddingVertical: GasTaSpacing.md,
     paddingHorizontal: SURFACE_PAD,
-    borderRadius: radii.md,
-    backgroundColor: HomeColors.primary,
+    borderRadius: GasTaRadius.md,
+    backgroundColor: GasTaColors.forest,
   },
   addActionPressed: {
     opacity: 0.85,
@@ -738,14 +907,14 @@ const styles = StyleSheet.create({
   addActionIcon: {
     width: 32,
     height: 32,
-    borderRadius: radii.sm,
+    borderRadius: GasTaRadius.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: HomeColors.onPrimary,
+    backgroundColor: GasTaColors.white,
   },
   addActionLabel: {
     flex: 1,
-    color: HomeColors.onPrimary,
+    color: GasTaColors.textOnForest,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '700',
@@ -754,19 +923,19 @@ const styles = StyleSheet.create({
   // Collapsible add/edit form. Flat surface — no blur, no gradient.
   formCard: {
     padding: SURFACE_PAD,
-    borderRadius: radii.md,
+    borderRadius: GasTaRadius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
-    backgroundColor: HomeColors.onPrimary,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.white,
   },
   formCardHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    marginBottom: GasTaSpacing.md,
   },
   formCardTitle: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: '700',
@@ -775,50 +944,50 @@ const styles = StyleSheet.create({
     padding: 2,
   },
   cancelEditBtn: {
-    marginTop: spacing.sm,
+    marginTop: GasTaSpacing.sm,
   },
   errorText: {
     color: palette.danger,
     fontSize: 12,
-    marginTop: -spacing.sm,
-    marginBottom: spacing.md,
+    marginTop: -GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.md,
   },
 
   selectedVehicleChip: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: spacing.md,
-    borderRadius: radii.md,
-    marginBottom: spacing.md,
+    padding: GasTaSpacing.md,
+    borderRadius: GasTaRadius.md,
+    marginBottom: GasTaSpacing.md,
   },
   selectedVehicleText: {
     flex: 1,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '700',
-    color: HomeColors.onPrimary,
+    color: GasTaColors.textOnForest,
   },
   clearButton: {
-    padding: spacing.xs,
-    marginLeft: spacing.sm,
+    padding: GasTaSpacing.xs,
+    marginLeft: GasTaSpacing.sm,
   },
   searchResults: {
-    marginBottom: spacing.md,
+    marginBottom: GasTaSpacing.md,
   },
   searchResultItem: {
-    padding: spacing.md,
-    borderRadius: radii.sm,
-    marginBottom: spacing.xs,
+    padding: GasTaSpacing.md,
+    borderRadius: GasTaRadius.sm,
+    marginBottom: GasTaSpacing.xs,
   },
   searchResultText: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '600',
   },
   searchResultSubtext: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 12,
     lineHeight: 16,
     marginTop: 2,
@@ -827,60 +996,144 @@ const styles = StyleSheet.create({
   // Compact vehicle card — flat surface, hairline border, no shadow.
   vehicleCard: {
     padding: SURFACE_PAD,
-    borderRadius: radii.md,
+    borderRadius: GasTaRadius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
-    backgroundColor: HomeColors.onPrimary,
-    marginBottom: spacing.md,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.white,
+    marginBottom: GasTaSpacing.md,
   },
   vehicleCardHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    gap: GasTaSpacing.md,
   },
   vehicleIcon: {
     width: 36,
     height: 36,
-    borderRadius: radii.sm,
+    borderRadius: GasTaRadius.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: HomeColors.primarySoft,
+    backgroundColor: TINT_BG,
   },
   vehicleCardTitles: {
     flex: 1,
     minWidth: 0,
   },
+  // Icon-only header controls so they never crowd the vehicle name on a
+  // 320-375px screen. Both keep accessibility labels.
+  cardHeadActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  cardHeadBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: GasTaRadius.sm,
+  },
+  cardHeadBtnPressed: {
+    backgroundColor: TINT_BG,
+  },
+
+  // ---- vehicle overflow menu ----------------------------------------------
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 48, 25, 0.28)',
+  },
+  menu: {
+    position: 'absolute',
+    width: MENU_WIDTH,
+    backgroundColor: GasTaColors.white,
+    borderRadius: GasTaRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+    paddingVertical: 4,
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    paddingHorizontal: GasTaSpacing.md,
+    paddingVertical: 11,
+  },
+  menuItemPressed: {
+    backgroundColor: TINT_BG,
+  },
+  menuItemText: {
+    ...typeScale.bodySmall,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+  },
+  menuItemDanger: {
+    color: palette.danger,
+  },
+  menuDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: GasTaColors.glassBorderSubtle,
+    marginHorizontal: GasTaSpacing.md,
+  },
   vehicleName: {
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '700',
   },
   vehicleMeta: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 13,
     lineHeight: 18,
     marginTop: 1,
   },
   cardDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: HomeColors.border,
-    marginVertical: spacing.md,
+    backgroundColor: GasTaColors.glassBorderSubtle,
+    marginVertical: GasTaSpacing.md,
   },
   refillRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.md,
+    gap: GasTaSpacing.md,
   },
+  // ---- role chip (presentation only; not a permission signal) -------------
+  roleChip: {
+    alignSelf: 'flex-start',
+    marginTop: GasTaSpacing.xs,
+    paddingHorizontal: GasTaSpacing.sm,
+    paddingVertical: 2,
+    borderRadius: GasTaRadius.pill,
+    backgroundColor: TINT_BG,
+  },
+  roleChipNeutral: {
+    // Viewer reads as deliberately quieter than the contributing roles.
+    backgroundColor: GasTaColors.creamDark,
+  },
+  roleChipText: {
+    ...typeScale.label,
+    fontSize: 11,
+    letterSpacing: 0.2,
+    color: GasTaColors.forest,
+  },
+  roleChipTextNeutral: {
+    color: GasTaColors.textMuted,
+  },
+
+  // ---- last refill band ---------------------------------------------------
   refillLabel: {
-    color: HomeColors.muted,
+    color: GasTaColors.textSoft,
     fontSize: 12,
     lineHeight: 16,
   },
   refillValue: {
     flexShrink: 1,
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '700',
@@ -893,14 +1146,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   inlineForm: {
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
+    marginTop: GasTaSpacing.md,
+    paddingTop: GasTaSpacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: HomeColors.border,
+    borderTopColor: GasTaColors.glassBorderSubtle,
   },
   inlineFormActions: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    gap: GasTaSpacing.sm,
   },
   inlineFormAction: {
     flex: 1,
@@ -909,92 +1162,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-    borderRadius: radii.sm,
-    backgroundColor: HomeColors.primarySoft,
+    marginTop: GasTaSpacing.sm,
+    padding: GasTaSpacing.sm,
+    borderRadius: GasTaRadius.sm,
+    backgroundColor: TINT_BG,
   },
   editingNoteText: {
     flex: 1,
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '600',
   },
-  // One compact action row instead of stacked full-width buttons.
-  cardActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: HomeColors.border,
-  },
-  cardAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radii.sm,
-  },
-  cardActionPressed: {
-    backgroundColor: HomeColors.navySoft,
-  },
-  cardActionLabel: {
-    color: HomeColors.primary,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  cardActionLabelMuted: {
-    color: HomeColors.muted,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-  },
-  cardActionLabelDanger: {
-    color: palette.danger,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-  },
-  emptyBlock: {
-    alignItems: 'center',
-    paddingHorizontal: SURFACE_PAD,
-    paddingVertical: spacing.xl,
-    borderRadius: radii.md,
-    backgroundColor: HomeColors.navySoft,
-    marginTop: SECTION_GAP,
-  },
-  emptyTitle: {
-    color: HomeColors.navy,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '700',
-    marginTop: spacing.sm,
-  },
-  emptyMessage: {
-    color: HomeColors.muted,
-    fontSize: 13,
-    lineHeight: 19,
-    textAlign: 'center',
-    marginTop: 2,
+  // Pressed state for the shared-vehicle row. The former `cardActions` /
+  // `cardAction*` styles are gone: those three always-visible owner actions now
+  // live in the overflow menu, and the handlers they called are unchanged.
+  pressedRow: {
+    backgroundColor: TINT_BG,
   },
   sharedRow: {
-    paddingVertical: spacing.md,
+    paddingVertical: GasTaSpacing.md,
     paddingHorizontal: SURFACE_PAD,
-    borderRadius: radii.md,
+    borderRadius: GasTaRadius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
-    backgroundColor: HomeColors.onPrimary,
-    marginBottom: spacing.sm,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.white,
+    marginBottom: GasTaSpacing.sm,
   },
   sharedRowMain: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    gap: GasTaSpacing.md,
   },
 });
