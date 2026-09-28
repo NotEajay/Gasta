@@ -1,16 +1,17 @@
-import { Link, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Slider from '@react-native-community/slider';
 
 import { Text } from '@/components/Themed';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import TripSectionHeader from '@/components/trip/TripSectionHeader';
 import ChipSelect from '@/components/ui/ChipSelect';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import ModeRankCard from '@/components/ui/ModeRankCard';
 import PrimaryButton from '@/components/ui/PrimaryButton';
+import PriorityBalanceBar from '@/components/ui/PriorityBalanceBar';
 import { DEFAULT_MCDA_WEIGHTS } from '@/constants/mcda';
 import { HomeColors } from '@/constants/home';
 import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
@@ -20,7 +21,7 @@ import { formatPeso, transportModeLabel } from '@/lib/format';
 import { weightsSumToOne } from '@/lib/mcda';
 import { createSavedTrip } from '@/lib/services/savedTrips';
 import { logTripToHistory } from '@/lib/services/trips';
-import { fetchVehicles } from '@/lib/services/vehicles';
+import { fetchVehicleCatalog, fetchVehicles } from '@/lib/services/vehicles';
 import { calculateTripRecommendation } from '@/lib/tripCalculator';
 import {
   DirectionsError,
@@ -34,7 +35,7 @@ import {
 } from '@/lib/services/routeSelection';
 import { useTheme } from '@/lib/useTheme';
 import type { MCDAWeights } from '@/types/mcda';
-import type { Vehicle } from '@/types';
+import type { Vehicle, VehicleCatalogEntry } from '@/types';
 
 export default function TripOptimizerScreen() {
   const router = useRouter();
@@ -65,6 +66,11 @@ export default function TripOptimizerScreen() {
   const [efficiency, setEfficiency] = useState('14');
   const [manualLastRefillPrice, setManualLastRefillPrice] = useState('');
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [catalog, setCatalog] = useState<VehicleCatalogEntry[]>([]);
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
+  const [selectedCatalogEntry, setSelectedCatalogEntry] = useState<VehicleCatalogEntry | null>(
+    null,
+  );
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | 'manual'>('manual');
   const [weights, setWeights] = useState<MCDAWeights>(DEFAULT_MCDA_WEIGHTS);
   const [loading, setLoading] = useState(true);
@@ -124,13 +130,28 @@ export default function TripOptimizerScreen() {
         return;
       }
       try {
+        const catalogPromise = fetchVehicleCatalog().catch(() => [] as VehicleCatalogEntry[]);
+
         if (!user) {
           setVehicles([]);
           setSelectedVehicleId('manual');
+          setCatalog(await catalogPromise);
           return;
         }
-        const list = await fetchVehicles(user.id);
+
+        const [list, catalogList] = await Promise.all([
+          fetchVehicles(user.id),
+          catalogPromise,
+        ]);
         setVehicles(list);
+        setCatalog(catalogList);
+
+        // Respect an explicit "manual" / Other selection from saved-trip params.
+        if (params.vehicleId === 'manual') {
+          setSelectedVehicleId('manual');
+          return;
+        }
+
         const paramVehicle =
           params.vehicleId && params.vehicleId !== 'manual' ? params.vehicleId : null;
         const nextVehicle =
@@ -147,10 +168,23 @@ export default function TripOptimizerScreen() {
 
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId);
   const hasRegisteredVehicles = vehicles.length > 0;
+  const isManualVehicle = selectedVehicleId === 'manual';
+
+  const catalogSearchResults = useMemo(() => {
+    if (!catalogSearchQuery.trim() || selectedCatalogEntry) return [];
+    const query = catalogSearchQuery.toLowerCase();
+    return catalog.filter(
+      (entry) =>
+        entry.brand.toLowerCase().includes(query) ||
+        entry.model.toLowerCase().includes(query),
+    );
+  }, [catalog, catalogSearchQuery, selectedCatalogEntry]);
 
   useEffect(() => {
+    // Other / manual is always allowed, even when saved vehicles exist.
+    if (selectedVehicleId === 'manual') return;
     if (!hasRegisteredVehicles) {
-      if (selectedVehicleId !== 'manual') setSelectedVehicleId('manual');
+      setSelectedVehicleId('manual');
       return;
     }
     if (!vehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
@@ -163,21 +197,39 @@ export default function TripOptimizerScreen() {
     setEfficiency(String(selectedVehicle.fuel_efficiency_km_per_liter));
   }, [selectedVehicle]);
 
+  const handleSelectCatalogEntry = useCallback((entry: VehicleCatalogEntry) => {
+    setSelectedCatalogEntry(entry);
+    setEfficiency(String(entry.fuel_efficiency_km_per_liter));
+    setCatalogSearchQuery('');
+  }, []);
+
+  const handleClearCatalogSelection = useCallback(() => {
+    setSelectedCatalogEntry(null);
+  }, []);
+
+  const handleVehicleChipChange = useCallback((vehicleId: string) => {
+    setSelectedVehicleId(vehicleId === 'manual' ? 'manual' : vehicleId);
+    if (vehicleId === 'manual') return;
+    setSelectedCatalogEntry(null);
+    setCatalogSearchQuery('');
+  }, []);
+
   const lastRefillPrice = useMemo(() => {
-    if (hasRegisteredVehicles) {
-      return selectedVehicle?.last_refill_price ?? null;
+    if (!isManualVehicle && selectedVehicle) {
+      return selectedVehicle.last_refill_price ?? null;
     }
     const manual = parseFloat(manualLastRefillPrice);
     return Number.isFinite(manual) && manual > 0 ? manual : null;
-  }, [hasRegisteredVehicles, selectedVehicle, manualLastRefillPrice]);
+  }, [isManualVehicle, selectedVehicle, manualLastRefillPrice]);
 
   const missingLastRefillPrice =
-    hasRegisteredVehicles && selectedVehicle?.last_refill_price == null;
+    !isManualVehicle && selectedVehicle?.last_refill_price == null;
 
   const optimizeRequestId = useRef(0);
 
-  // Inputs are editable without recalculating. Any calculation input change
-  // invalidates the previous route/result until the user taps Optimize again.
+  // Route/vehicle inputs are editable without recalculating. Changing them
+  // clears the previous route until Optimize is tapped again. Weight changes
+  // do NOT clear the route — they live-rescore the existing distance/time.
   useEffect(() => {
     optimizeRequestId.current += 1;
     setOptimizing(false);
@@ -190,14 +242,34 @@ export default function TripOptimizerScreen() {
     destination,
     destinationRouteValue,
     efficiency,
-    hasRegisteredVehicles,
+    isManualVehicle,
     lastRefillPrice,
     manualLastRefillPrice,
     origin,
     originLocation,
     selectedVehicleId,
-    weights,
   ]);
+
+  // Live SAW rescore when priorities change after a successful Optimize.
+  useEffect(() => {
+    if (routeDistanceKm == null || routeDurationMinutes == null) return;
+
+    const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
+    const price = lastRefillPrice;
+    if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) return;
+    if (price == null || price <= 0) return;
+    if (!weightsSumToOne(weights)) return;
+
+    setResult(
+      calculateTripRecommendation({
+        distanceKm: routeDistanceKm,
+        fuelPricePerLiter: price,
+        fuelEfficiencyKmPerLiter,
+        weights,
+        ownVehicleTravelTimeMinutes: routeDurationMinutes,
+      }),
+    );
+  }, [weights, routeDistanceKm, routeDurationMinutes, efficiency, lastRefillPrice]);
 
   const handleOptimize = useCallback(async () => {
     if (optimizing) return;
@@ -233,16 +305,16 @@ export default function TripOptimizerScreen() {
         Alert.alert('Invalid weights', 'Criterion weights must sum to 1.0.');
         return;
       }
-      if (hasRegisteredVehicles && !selectedVehicle) {
+      if (!isManualVehicle && !selectedVehicle) {
         Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
         return;
       }
       if (price == null || price <= 0) {
         Alert.alert(
-          'Last-refill price required',
-          hasRegisteredVehicles
-            ? 'Add a last-refill price to this vehicle before optimizing.'
-            : 'Enter your last fuel price before optimizing.'
+          'Fuel price required',
+          isManualVehicle
+            ? 'Enter the fuel price (₱/L) for this trip before optimizing.'
+            : 'Add a last-refill price to this vehicle before optimizing.'
         );
         return;
       }
@@ -289,7 +361,7 @@ export default function TripOptimizerScreen() {
     destination,
     destinationRouteValue,
     efficiency,
-    hasRegisteredVehicles,
+    isManualVehicle,
     lastRefillPrice,
     optimizing,
     origin,
@@ -316,40 +388,27 @@ export default function TripOptimizerScreen() {
   /**
    * User-facing presets for the same two MCDA weights.
    *
-   * These do not introduce a new scoring system: every preset and the slider
-   * write straight into the existing `weights` object, so `calculateTripRecommendation`
-   * receives exactly the shape it always has. The slider is a 0–1 "savings
-   * preference": `fuelCost = value`, `travelTime = 1 - value`, rounded to 2dp so
-   * the pair always sums to exactly 1.0 and `weightsSumToOne` stays satisfied.
+   * Slider position maps to travel-time focus: 0 = Cheapest (fuelCost 1),
+   * 0.5 = Balanced, 1 = Fastest (travelTime 1). `calculateTripRecommendation`
+   * still receives fuelCost + travelTime summing to 1.0.
    */
-  const WEIGHT_PRESETS = useMemo(
-    () => [
-      { key: 'money', label: 'Save money', fuelCost: 0.75, travelTime: 0.25 },
-      { key: 'balanced', label: 'Balanced', fuelCost: 0.5, travelTime: 0.5 },
-      { key: 'time', label: 'Faster trip', fuelCost: 0.25, travelTime: 0.75 },
-    ],
-    []
-  );
-
-  const savingsFocus = weights.fuelCost;
-  const savingsPercent = Math.round(weights.fuelCost * 100);
-  const timePercent = Math.round(weights.travelTime * 100);
-
-  /** Applies a two-decimal weight pair that always sums to exactly 1.0. */
   const applyWeightPair = useCallback((fuelCost: number, travelTime: number) => {
     const fuel = Math.round(fuelCost * 100) / 100;
     const time = Math.round(travelTime * 100) / 100;
     setWeights({ fuelCost: fuel, travelTime: time });
   }, []);
 
-  /** Slider handler: one 0–1 value maps to the complementary weight pair. */
-  const handleSavingsChange = useCallback(
-    (value: number) => {
-      const clamped = Math.min(1, Math.max(0, value));
-      applyWeightPair(clamped, 1 - clamped);
+  /** Slider position 0..1 → complementary SAW weight pair. */
+  const handlePriorityChange = useCallback(
+    (timeFocus: number) => {
+      const clamped = Math.min(1, Math.max(0, timeFocus));
+      applyWeightPair(1 - clamped, clamped);
     },
-    [applyWeightPair]
+    [applyWeightPair],
   );
+
+  /** Visual slider position: 0 cheapest → 1 fastest. */
+  const priorityPosition = weights.travelTime;
 
   const requireAuth = useCallback(() => {
     Alert.alert('Sign in required', 'Sign in to save trips and view history.');
@@ -449,10 +508,16 @@ export default function TripOptimizerScreen() {
 
   if (loading) return <LoadingState message="Loading trip data…" />;
 
-  const vehicleOptions = vehicles.map((vehicle) => ({
-    value: vehicle.id,
-    label: vehicle.nickname ?? `${vehicle.brand} ${vehicle.model}`,
-  }));
+  const vehicleOptions = [
+    ...vehicles.map((vehicle) => ({
+      value: vehicle.id,
+      label: vehicle.nickname ?? `${vehicle.brand} ${vehicle.model}`,
+    })),
+    { value: 'manual' as const, label: 'Other vehicle' },
+  ];
+
+  const chipValue =
+    selectedVehicleId === 'manual' ? 'manual' : (selectedVehicle?.id ?? null);
 
   return (
     <ScrollView
@@ -462,38 +527,7 @@ export default function TripOptimizerScreen() {
       contentContainerStyle={styles.padding}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag">
-      {/* Refined header. PageHero is intentionally not used here: its full-bleed
-          white block and oversized title read heavier than the newer Budget and
-          Home headers. This is presentation only — the Saved/History targets
-          are the same routes. */}
-      <View style={styles.header}>
-        <View style={styles.headerTopRow}>
-          <View style={styles.headerTitleBlock}>
-            <Text style={styles.headerTitle}>Trip Optimizer</Text>
-            <Text style={styles.headerSubtitle}>
-              Compare route, travel time, and estimated fuel costs.
-            </Text>
-          </View>
-        </View>
-        <View style={styles.headerNavRow}>
-          <Link href={'/(tabs)/trip/saved' as never} asChild>
-            <Pressable
-              accessibilityRole="link"
-              style={({ pressed }) => [styles.headerNav, pressed && styles.headerNavPressed]}>
-              <Ionicons name="bookmark-outline" size={14} color={HomeColors.navy} />
-              <Text style={styles.headerNavText}>Saved</Text>
-            </Pressable>
-          </Link>
-          <Link href={'/(tabs)/trip/history' as never} asChild>
-            <Pressable
-              accessibilityRole="link"
-              style={({ pressed }) => [styles.headerNav, pressed && styles.headerNavPressed]}>
-              <Ionicons name="time-outline" size={14} color={HomeColors.navy} />
-              <Text style={styles.headerNavText}>History</Text>
-            </Pressable>
-          </Link>
-        </View>
-      </View>
+      <TripSectionHeader active="new" />
 
       {/* Step 1 — the primary task. Route leads the flow. */}
       <View style={styles.stepSection}>
@@ -570,33 +604,32 @@ export default function TripOptimizerScreen() {
           <View style={styles.stepHeadText}>
             <Text style={styles.stepTitle}>Vehicle &amp; fuel</Text>
             <Text style={styles.stepHint}>
-              Pick the vehicle and fuel price used for the estimate.
+              Pick a saved vehicle, or another car for this trip.
             </Text>
           </View>
         </View>
 
         {hasRegisteredVehicles ? (
-          <>
-            <ChipSelect
-              label="Your vehicle"
-              options={vehicleOptions}
-              value={selectedVehicle?.id ?? null}
-              onChange={(vehicleId) => setSelectedVehicleId(vehicleId)}
-            />
+          <ChipSelect
+            label="Your vehicle"
+            options={vehicleOptions}
+            value={chipValue}
+            onChange={handleVehicleChipChange}
+          />
+        ) : null}
 
-            {selectedVehicle ? (
-              <Text numberOfLines={1} ellipsizeMode="tail" style={styles.vehicleName}>
-                {selectedVehicle.nickname ??
-                  `${selectedVehicle.brand} ${selectedVehicle.model}`}
-              </Text>
-            ) : null}
-            {selectedVehicle?.nickname ? (
+        {!isManualVehicle && selectedVehicle ? (
+          <>
+            <Text numberOfLines={1} ellipsizeMode="tail" style={styles.vehicleName}>
+              {selectedVehicle.nickname ??
+                `${selectedVehicle.brand} ${selectedVehicle.model}`}
+            </Text>
+            {selectedVehicle.nickname ? (
               <Text numberOfLines={1} ellipsizeMode="tail" style={styles.vehicleMeta}>
                 {selectedVehicle.brand} {selectedVehicle.model}
               </Text>
             ) : null}
 
-            {/* Restrained inline warning; the blocking behaviour is unchanged. */}
             {missingLastRefillPrice ? (
               <View style={styles.warnBox}>
                 <Text style={styles.warnTitle}>Fuel price needed</Text>
@@ -618,7 +651,6 @@ export default function TripOptimizerScreen() {
                   <Text style={styles.statValue}>{efficiency} km/L</Text>
                 </View>
                 <View style={styles.statDivider} />
-                {/* This is a RATE used for estimation, never money spent. */}
                 <View style={styles.statRow}>
                   <Text style={styles.statLabel}>Latest fuel price</Text>
                   <Text style={styles.statValue}>
@@ -631,17 +663,77 @@ export default function TripOptimizerScreen() {
         ) : (
           <>
             <Text style={styles.sectionHint}>
-              No vehicle registered. Enter your fuel details manually.
+              {hasRegisteredVehicles
+                ? 'Search the catalog to fill efficiency, then enter the fuel price for this trip.'
+                : 'No vehicle registered. Search the catalog or enter fuel details manually.'}
             </Text>
+
             <LabeledInput
-              label="Fuel efficiency"
+              label="Search vehicle catalog"
+              value={catalogSearchQuery}
+              onChangeText={setCatalogSearchQuery}
+              placeholder="Type brand or model…"
+              editable={!selectedCatalogEntry}
+            />
+
+            {selectedCatalogEntry ? (
+              <View style={styles.catalogChip}>
+                <View style={styles.catalogChipTextBlock}>
+                  <Text style={styles.catalogChipTitle}>
+                    {selectedCatalogEntry.brand} {selectedCatalogEntry.model} (
+                    {selectedCatalogEntry.year})
+                  </Text>
+                  <Text style={styles.catalogChipMeta}>
+                    {selectedCatalogEntry.fuel_efficiency_km_per_liter} km/L
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear catalog selection"
+                  onPress={handleClearCatalogSelection}
+                  style={styles.catalogClearBtn}>
+                  <Ionicons name="close" size={16} color={GasTaColors.textOnForest} />
+                </Pressable>
+              </View>
+            ) : null}
+
+            {catalogSearchResults.length > 0 ? (
+              <View style={styles.catalogResults}>
+                {catalogSearchResults.map((entry) => (
+                  <Pressable
+                    key={entry.id}
+                    onPress={() => handleSelectCatalogEntry(entry)}
+                    style={({ pressed }) => [
+                      styles.catalogResultItem,
+                      pressed && styles.catalogResultItemPressed,
+                    ]}>
+                    <Text style={styles.catalogResultTitle}>
+                      {entry.brand} {entry.model} ({entry.year})
+                    </Text>
+                    <Text style={styles.catalogResultMeta}>
+                      {entry.fuel_efficiency_km_per_liter} km/L
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            <LabeledInput
+              label="Fuel efficiency (km/L)"
               value={efficiency}
               onChangeText={setEfficiency}
               keyboardType="decimal-pad"
               placeholder="14.0"
             />
+            {!selectedCatalogEntry ? (
+              <Text style={styles.hint}>
+                Tip: pick a catalog car to auto-fill, or use a typical sedan range of about
+                12–15 km/L.
+              </Text>
+            ) : null}
+
             <LabeledInput
-              label="Fuel price"
+              label="Fuel price (₱/L)"
               value={manualLastRefillPrice}
               onChangeText={setManualLastRefillPrice}
               keyboardType="decimal-pad"
@@ -652,9 +744,9 @@ export default function TripOptimizerScreen() {
       </View>
 
       {/*
-        Preference, not a raw weight editor. The presets and the slider are two
-        views of the SAME `weights` state — there is no duplicate weight state
-        and no new scoring path.
+        Option A priority UI: one slider + live outcome cards. The slider and
+        SAW weights are the same state — dragging rescores an existing route
+        without a new Directions call.
       */}
       <View style={styles.prefBlock}>
         <View style={styles.prefHeadRow}>
@@ -662,61 +754,16 @@ export default function TripOptimizerScreen() {
           <Text style={styles.prefTitle}>What matters more?</Text>
         </View>
         <Text style={styles.prefHint}>
-          Choose how GasTa should balance saving money and travel time.
+          Drag to balance saving money and travel time. Outcomes update after you optimize.
         </Text>
 
-        <View style={styles.presetRow}>
-          {WEIGHT_PRESETS.map((preset) => {
-            const selected =
-              Math.abs(weights.fuelCost - preset.fuelCost) < 0.005 &&
-              Math.abs(weights.travelTime - preset.travelTime) < 0.005;
-            return (
-              <Pressable
-                key={preset.key}
-                accessibilityRole="radio"
-                accessibilityState={{ selected }}
-                accessibilityLabel={preset.label}
-                onPress={() => applyWeightPair(preset.fuelCost, preset.travelTime)}
-                style={({ pressed }) => [
-                  styles.preset,
-                  selected && styles.presetSelected,
-                  pressed && styles.presetPressed,
-                ]}>
-                <Text
-                  numberOfLines={1}
-                  style={[styles.presetLabel, selected && styles.presetLabelSelected]}>
-                  {preset.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <View style={styles.sliderBlock}>
-          <View style={styles.sliderLabelsRow}>
-            <Text style={[styles.sliderEndLabel, savingsFocus > 0.5 && styles.sliderEndLabelActive]}>
-              Save money
-            </Text>
-            <Text style={[styles.sliderEndLabel, savingsFocus < 0.5 && styles.sliderEndLabelActive]}>
-              Faster trip
-            </Text>
-          </View>
-          <Slider
-            accessibilityLabel="Balance between saving money and travel time"
-            style={styles.slider}
-            minimumValue={0}
-            maximumValue={1}
-            step={0.05}
-            value={savingsFocus}
-            onValueChange={handleSavingsChange}
-            minimumTrackTintColor={HomeColors.primary}
-            maximumTrackTintColor={HomeColors.border}
-            thumbTintColor={HomeColors.primary}
-          />
-          <Text style={styles.prefDetail}>
-            {savingsPercent}% savings · {timePercent}% travel time
-          </Text>
-        </View>
+        <PriorityBalanceBar
+          value={priorityPosition}
+          onChange={handlePriorityChange}
+          estimatedCost={result?.recommended?.raw.fuelCost ?? null}
+          estimatedTimeMinutes={result?.recommended?.raw.travelTime ?? null}
+          costFormatter={formatPeso}
+        />
 
         {!weightsSumToOne(weights) ? (
           <Text style={styles.tuneError}>Weights must sum to 1.0</Text>
@@ -872,51 +919,6 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
 
-  // ------------------------------------------------------------- header
-  header: {
-    marginBottom: spacing.xl,
-  },
-  headerTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  headerTitleBlock: { flex: 1 },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-    color: HomeColors.navy,
-  },
-  headerSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: HomeColors.muted,
-    marginTop: 3,
-  },
-  // Secondary actions, not loose standalone text lines.
-  headerNavRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  headerNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 7,
-    borderRadius: radii.sm,
-    backgroundColor: GasTaColors.white,
-    borderWidth: 1,
-    borderColor: HomeColors.border,
-  },
-  headerNavPressed: { opacity: 0.7 },
-  headerNavText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: HomeColors.navy,
-  },
-
   // ------------------------------------------------ numbered step blocks
   stepSection: {
     marginBottom: spacing.xl,
@@ -1016,6 +1018,59 @@ const styles = StyleSheet.create({
     color: HomeColors.muted,
     marginBottom: spacing.md,
   },
+  catalogChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    backgroundColor: GasTaColors.forest,
+    marginBottom: spacing.md,
+  },
+  catalogChipTextBlock: {
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  catalogChipTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.textOnForest,
+  },
+  catalogChipMeta: {
+    fontSize: 12,
+    color: GasTaColors.textOnForest,
+    opacity: 0.85,
+    marginTop: 2,
+  },
+  catalogClearBtn: {
+    padding: spacing.xs,
+  },
+  catalogResults: {
+    marginBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  catalogResultItem: {
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    backgroundColor: HomeColors.primarySoft,
+    borderWidth: 1,
+    borderColor: HomeColors.primaryBorder,
+  },
+  catalogResultItemPressed: {
+    opacity: 0.85,
+  },
+  catalogResultTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: HomeColors.navy,
+  },
+  catalogResultMeta: {
+    fontSize: 12,
+    color: HomeColors.muted,
+    marginTop: 2,
+  },
   statRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1089,68 +1144,6 @@ const styles = StyleSheet.create({
     color: HomeColors.muted,
     marginTop: 4,
     marginBottom: spacing.md,
-  },
-  presetRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  // Comfortable tap target (~36pt tall) for each preset.
-  preset: {
-    flex: 1,
-    minHeight: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xs,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.sm,
-    backgroundColor: GasTaColors.white,
-    borderWidth: 1,
-    borderColor: HomeColors.border,
-  },
-  presetSelected: {
-    backgroundColor: HomeColors.primarySoft,
-    borderColor: HomeColors.primary,
-  },
-  presetPressed: { opacity: 0.75 },
-  presetLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: HomeColors.muted,
-    textAlign: 'center',
-  },
-  presetLabelSelected: {
-    color: HomeColors.primaryDark,
-    fontWeight: '700',
-  },
-  sliderBlock: {
-    marginTop: spacing.md,
-  },
-  sliderLabelsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  // Endpoint labels; the active side is emphasised rather than both shouted.
-  sliderEndLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: HomeColors.muted,
-  },
-  sliderEndLabelActive: {
-    color: HomeColors.primaryDark,
-    fontWeight: '700',
-  },
-  slider: {
-    height: 36,
-    marginHorizontal: -spacing.xs,
-    marginTop: 2,
-  },
-  // Derived from the live weights — not stored separately.
-  prefDetail: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: HomeColors.muted,
-    textAlign: 'center',
-    marginTop: 2,
   },
   tuneError: {
     fontSize: 12,

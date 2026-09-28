@@ -7,6 +7,7 @@ import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import AnimatedPressable from '@/components/auth/AnimatedPressable';
+import HideWhenBlurred from '@/components/navigation/HideWhenBlurred';
 import InlineNotice from '@/components/ui/InlineNotice';
 import LoadingState from '@/components/ui/LoadingState';
 // NOTE: Profile deliberately uses the AUTH palette (cream + forest) for this
@@ -98,6 +99,7 @@ export default function ProfileScreen() {
     // strip, which is why it used to stop short of the status bar and the
     // bottom edge. Everything here is transparent so the canvas shows through:
     // this root, the ScrollView, and the content container.
+    <HideWhenBlurred>
     <View style={styles.flex}>
       <ScrollView
         style={styles.flex}
@@ -246,6 +248,7 @@ export default function ProfileScreen() {
       </View>
       </ScrollView>
     </View>
+    </HideWhenBlurred>
   );
 }
 
