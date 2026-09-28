@@ -33,6 +33,32 @@ PRICE_RE = re.compile(r"^\d+\.\d+$")
 RANGE_RE = re.compile(r"^(\d+\.\d+)-(\d+\.\d+)$")
 MISSING_TOKENS = frozenset({"#N/A", "N/A", "NONE", "NONE.", "-", "0.00"})
 
+# OCR often glues or mangles product names (RON91, RON 9l, DIESELPLUS). Match at the
+# end of the label column, longest / most-specific first so DIESEL PLUS wins over DIESEL.
+_FUEL_END_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^(?P<area>.*?)\s*DIESEL\s*(?:PLUS|\+)\s*[\|./\\]*$", re.I), "DIESEL PLUS"),
+    (re.compile(r"^(?P<area>.*?)\s*DIESELPLUS\s*[\|./\\]*$", re.I), "DIESEL PLUS"),
+    (re.compile(r"^(?P<area>.*?)\s*RON\s*100\s*[\|./\\]*$", re.I), "RON 100"),
+    (re.compile(r"^(?P<area>.*?)\s*RON\s*97\s*[\|./\\]*$", re.I), "RON 97"),
+    (re.compile(r"^(?P<area>.*?)\s*RON\s*95\s*[\|./\\]*$", re.I), "RON 95"),
+    # 91 misread as 9I / 9l / 9| is common on North Luzon scans.
+    (re.compile(r"^(?P<area>.*?)\s*RON\s*9[1Il|]\s*[\|./\\]*$", re.I), "RON 91"),
+    (re.compile(r"^(?P<area>.*?)\s*DIESEL\s*[\|./\\]*$", re.I), "DIESEL"),
+    (re.compile(r"^(?P<area>.*?)\s*KEROSENE\s*[\|./\\]*$", re.I), "KEROSENE"),
+)
+
+_FUEL_START_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # No ^ anchor: North Luzon lines put province/city before the product.
+    (re.compile(r"DIESEL\s*(?:PLUS|\+)\b", re.I), "DIESEL PLUS"),
+    (re.compile(r"DIESELPLUS\b", re.I), "DIESEL PLUS"),
+    (re.compile(r"RON\s*100\b", re.I), "RON 100"),
+    (re.compile(r"RON\s*97\b", re.I), "RON 97"),
+    (re.compile(r"RON\s*95\b", re.I), "RON 95"),
+    (re.compile(r"RON\s*9[1Il|]\b", re.I), "RON 91"),
+    (re.compile(r"DIESEL\b", re.I), "DIESEL"),
+    (re.compile(r"KEROSENE\b", re.I), "KEROSENE"),
+)
+
 
 class BulletinDateUnknown(RuntimeError):
     """Raised when neither the PDF header nor its filename reveals the bulletin week."""
@@ -124,15 +150,35 @@ def _extract_prices_from_line(line: str) -> list[float]:
 
 
 def _parse_fuel_line(line: str) -> tuple[str, list[float]] | None:
+    """Parse a full text line into (canonical fuel, prices).
+
+    North Luzon OCR often prefixes the product with province/city
+    (\"ABRA BANGUED CITY RON 91 90.50 …\"), so we search for the fuel token
+    anywhere in the line — not only at column 0 — then read prices after it.
+    Patterns are ordered so DIESEL PLUS wins over DIESEL and RON 100 over RON 91.
+    """
     stripped = line.strip()
     upper = stripped.upper()
-    # Longest first: "DIESEL PLUS …" must not be claimed by the "DIESEL " prefix.
-    for fuel in sorted(FUEL_TYPES, key=len, reverse=True):
-        prefix = fuel + " "
-        if upper.startswith(prefix):
-            prices = _extract_prices_from_line(stripped[len(fuel) :].strip())
-            if len(prices) >= 3:
-                return fuel, prices
+    for pattern, fuel in _FUEL_START_PATTERNS:
+        match = pattern.search(upper)
+        if not match:
+            continue
+        prices = _extract_prices_from_line(stripped[match.end() :].strip())
+        if len(prices) >= 3:
+            return fuel, prices
+    return None
+
+
+def _match_fuel_label(label: str) -> tuple[str, str] | None:
+    """Split area + canonical product from a table label cell (OCR-tolerant)."""
+    cleaned = re.sub(r"\s+", " ", label.strip())
+    if not cleaned:
+        return None
+    for pattern, fuel in _FUEL_END_PATTERNS:
+        match = pattern.match(cleaned)
+        if match:
+            area_raw = (match.group("area") or "").strip(" -–—\t|/\\")
+            return area_raw, fuel
     return None
 
 
@@ -387,11 +433,11 @@ def _row_fuel_label(
     if not price_words:
         return None
 
-    for fuel in sorted(FUEL_TYPES, key=len, reverse=True):
-        if label.endswith(fuel):
-            area_raw = label[: -len(fuel)].strip(" -–—\t")
-            return _normalize_area_name(area_raw), fuel, price_words
-    return None
+    matched = _match_fuel_label(label)
+    if not matched:
+        return None
+    area_raw, fuel = matched
+    return _normalize_area_name(area_raw), fuel, price_words
 
 
 def _assign_prices_by_column(

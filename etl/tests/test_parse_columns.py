@@ -17,6 +17,7 @@ from src.parse_bulletin import (
     _assign_prices_by_column,
     _cluster_words_into_rows,
     _find_header_anchors,
+    _match_fuel_label,
     _parse_fuel_line,
     _reject_corrupt_text_layer,
     detect_company_columns,
@@ -230,4 +231,47 @@ def test_missing_core_fuels_empty_when_both_present() -> None:
         ParsedPrice(company="Petron", fuel_type_code="DIESEL", price_per_liter=55.0),
     ]
     assert missing_core_fuels(prices) == []
+
+
+@pytest.mark.parametrize(
+    "label,area,fuel",
+    [
+        ("BAGUIO CITY RON 91", "BAGUIO CITY", "RON 91"),
+        ("BAGUIO CITY RON91", "BAGUIO CITY", "RON 91"),
+        ("BAGUIO CITY RON 9l", "BAGUIO CITY", "RON 91"),
+        ("BAGUIO CITY RON 9I", "BAGUIO CITY", "RON 91"),
+        ("BANGUED CITY DIESEL PLUS", "BANGUED CITY", "DIESEL PLUS"),
+        ("BANGUED CITY DIESELPLUS", "BANGUED CITY", "DIESEL PLUS"),
+        ("BANGUED CITY DIESEL +", "BANGUED CITY", "DIESEL PLUS"),
+        ("RON 91", "", "RON 91"),
+        ("DIESEL PLUS", "", "DIESEL PLUS"),
+        ("LUNA DIESEL", "LUNA", "DIESEL"),
+    ],
+)
+def test_ocr_fuel_label_aliases(label: str, area: str, fuel: str) -> None:
+    assert _match_fuel_label(label) == (area, fuel)
+
+
+def test_diesel_plus_not_swallowed_by_diesel_alias() -> None:
+    assert _match_fuel_label("BAGUIO CITY DIESEL PLUS") == ("BAGUIO CITY", "DIESEL PLUS")
+    assert _parse_fuel_line("DIESELPLUS 104.20 104.20 108.60 106.70 104.20 108.60")[0] == (
+        "DIESEL PLUS"
+    )
+
+
+def test_north_luzon_city_prefixed_ron_91_line() -> None:
+    """Scanned NL bulletins print province/city before the product on the same line."""
+    fuel, prices = _parse_fuel_line(
+        "ABRA BANGUED CITY RON 91 90.50 90.50 90.50 90.50 90.50 90.50"
+    )
+    assert fuel == "RON 91"
+    assert prices[0] == 90.50
+
+
+def test_north_luzon_city_prefixed_diesel_plus_line() -> None:
+    fuel, prices = _parse_fuel_line(
+        "BENGUET BAGUIO CITY DIESEL PLUS 104.20 104.20 108.60 108.60 106.70 104.20"
+    )
+    assert fuel == "DIESEL PLUS"
+    assert 104.20 in prices
 
