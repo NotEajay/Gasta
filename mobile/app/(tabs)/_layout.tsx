@@ -378,8 +378,20 @@ const styles = StyleSheet.create({
    * Home's scene: still opaque (the stacking fix depends on it), but with no
    * painted bottom strip. Home reserves that clearance on its own scroll content
    * instead, so the dashboard body runs behind the floating bar.
+   *
+   * It MUST repeat `flex: 1` and the web fill from the shared `sceneStyle`.
+   * React Navigation does not deep-merge style objects per screen -- it uses the
+   * screen's `sceneStyle` in place of the global one (BottomTabView reads
+   * `sceneStyle: customSceneStyle` off the descriptor and never merges). Omitting
+   * either property here silently drops it for Home only, which is how this
+   * broke when the TRIP PR added those properties to the global.
    */
-  homeScene: { backgroundColor: GasTaColors.cream, paddingBottom: 0 },
+  homeScene: {
+    backgroundColor: GasTaColors.cream,
+    flex: 1,
+    paddingBottom: 0,
+    ...(Platform.OS === 'web' ? ({ width: '100%', height: '100%' } as const) : null),
+  },
   tabBar: {
     position: 'absolute',
     // Must stay visible so the iOS shadow is not clipped by the rounded corners.

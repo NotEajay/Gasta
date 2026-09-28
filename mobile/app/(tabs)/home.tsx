@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { User } from '@supabase/supabase-js';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
