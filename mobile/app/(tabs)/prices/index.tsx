@@ -54,12 +54,14 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
+  bulletinAgeInDays,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
   fetchLatestDoeWebsiteFetchAt,
   fetchPriceTrend,
+  STALE_AFTER_DAYS,
   type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
@@ -310,6 +312,15 @@ export default function FuelPricesScreen() {
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
   const [pastWeekPrices, setPastWeekPrices] = useState<FuelPriceRow[]>([]);
   const [trend, setTrend] = useState<{ bulletin_date: string; price_per_liter: number }[]>([]);
+  /**
+   * Explicit history lifecycle. The chart used to render "Not enough history
+   * yet" purely because `trend` was still `[]`, which conflated "not requested
+   * yet" with "genuinely too few weeks". Now the message is reachable only from
+   * 'ready' with fewer than two usable points.
+   */
+  const [historyStatus, setHistoryStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle'
+  );
   const [verifiedCommunity, setVerifiedCommunity] = useState<VerifiedCommunityPrice[]>([]);
   const [pendingCommunity, setPendingCommunity] = useState<PendingCommunityReport[]>([]);
   const [stations, setStations] = useState<FuelStationOption[]>([]);
@@ -415,7 +426,12 @@ export default function FuelPricesScreen() {
     setPastWeekPrices([]);
     setAreaName('');
     setPastBulletins([]);
+    // Clearing the series without resetting the status would leave the chart in
+    // 'ready' with zero points, which is exactly the "unloaded shown as missing"
+    // bug. 'idle' is the honest state: nothing has been requested for this
+    // region yet, and the eager effect below moves it to 'loading'.
     setTrend([]);
+    setHistoryStatus('idle');
     setLoading(true);
     void loadRegion();
   }, [loadRegion]);
@@ -473,33 +489,83 @@ export default function FuelPricesScreen() {
     };
   }, [bulletin, region, fuelType, areaName, areasFromDoe, loading]);
 
-  // History tab: load 52 weeks only when opened (not on every This week visit).
+  /*
+   * History loads eagerly, in the background, as soon as a bulletin exists --
+   * not only when Past prices is opened.
+   *
+   * Reasons:
+   *  - The hero delta becomes truthful immediately, instead of only after the
+   *    user happens to visit the history tab.
+   *  - Opening Past prices is instant rather than showing a first-paint stall.
+   *  - It removes the "Not enough history yet -> graph appears" transition,
+   *    which only ever meant "the request had not run yet".
+   *
+   * No new backend work: this reuses the existing fetchPriceTrend and
+   * fetchBulletinsForRegion. `historyLoadedFor` keys the cache on
+   * region + fuel + company, so switching back and forth does not refetch, and
+   * a genuine change of any of those three inputs refetches exactly once.
+   *
+   * The two calls are tracked separately on purpose: the week list feeds the
+   * Past prices picker, while the trend series feeds the chart and the hero
+   * delta. A failure in either is reported honestly rather than being smoothed
+   * into an empty array that would read as "no history".
+   */
   useEffect(() => {
-    if (view !== 'history' || !bulletin || loading) return;
+    if (!bulletin || loading) return;
     const key = `${region}:${fuelType}:${trendCompanySlug}`;
     if (historyLoadedFor.current === key) return;
 
     let cancelled = false;
+    setHistoryStatus('loading');
+
     void Promise.all([
-      fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
-      fetchPriceTrend(region, fuelType, trendCompanySlug).catch(() => []),
-    ]).then(([weeks, points]) => {
-      if (cancelled) return;
-      setPastBulletins(weeks);
-      setTrend(points.slice(-HISTORY_WEEKS));
-      historyLoadedFor.current = key;
-    });
+      fetchBulletinsForRegion(region, HISTORY_WEEKS),
+      fetchPriceTrend(region, fuelType, trendCompanySlug),
+    ])
+      .then(([weeks, points]) => {
+        if (cancelled) return;
+        setPastBulletins(weeks);
+        setTrend(points.slice(-HISTORY_WEEKS));
+        historyLoadedFor.current = key;
+        setHistoryStatus('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Allow a later retry: do not poison the cache key on failure.
+        setHistoryStatus('error');
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [view, bulletin, region, fuelType, trendCompanySlug, loading]);
+  }, [bulletin, region, fuelType, trendCompanySlug, loading]);
 
+  /*
+   * A company change inside the history tab needs a fresh series for that
+   * brand, so it is fetched on its own rather than going through the cached
+   * effect above (whose key already moved, but only after the region load
+   * settles). Kept narrow: it never downgrades a 'ready' state to 'error' on
+   * cancellation, and it always ends in an honest terminal state.
+   */
   useEffect(() => {
     if (view !== 'history' || !trendCompanySlug || loading) return;
+    const key = `${region}:${fuelType}:${trendCompanySlug}`;
+    if (historyLoadedFor.current === key) return;
+
+    let cancelled = false;
     void fetchPriceTrend(region, fuelType, trendCompanySlug)
-      .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
-      .catch(() => setTrend([]));
+      .then((points) => {
+        if (cancelled) return;
+        setTrend(points.slice(-HISTORY_WEEKS));
+        setHistoryStatus('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryStatus('error');
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [trendCompanySlug, region, fuelType, view, loading]);
 
   const hasFocusedOnce = useRef(false);
@@ -584,6 +650,42 @@ export default function FuelPricesScreen() {
 
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
+
+  /*
+   * How old the prices on screen actually are.
+   *
+   * Derived entirely from the latest bulletin actually stored for this region,
+   * so it is honest by construction: nothing is hardcoded per region, and if
+   * the ETL later loads a newer week the label updates on the next fetch with
+   * no code change.
+   *
+   * `bulletinAgeInDays` does date-only arithmetic -- it splits the YYYY-MM-DD
+   * string and compares local midnights -- so there is no timezone drift that
+   * could show a bulletin as a day older or younger than it is.
+   *
+   * The threshold is the app's shared STALE_AFTER_DAYS, deliberately aligned
+   * with the ETL's bulletin freshness rule so the two never disagree about the
+   * same week. At 10 days the app used to call a 13-day-old bulletin stale while
+   * the ETL still treated it as current; the shared constant is now 14, so only
+   * a genuinely missed week turns red.
+   */
+  const priceFreshness = useMemo(() => {
+    if (!bulletin) return null;
+    const ageDays = bulletinAgeInDays(bulletin.bulletin_date);
+
+    // A bulletin dated in the future means bad seed or a bad parse upstream.
+    if (ageDays < 0) {
+      return { ageDays, tone: 'stale' as const, label: 'Date out of range' };
+    }
+    if (ageDays === 0) return { ageDays, tone: 'fresh' as const, label: 'Updated today' };
+    if (ageDays === 1) return { ageDays, tone: 'fresh' as const, label: 'Updated yesterday' };
+    if (ageDays <= 7) return { ageDays, tone: 'fresh' as const, label: 'Updated recently' };
+    // 8..STALE_AFTER_DAYS: still current to the ETL, but worth flagging. Amber.
+    if (ageDays > STALE_AFTER_DAYS) {
+      return { ageDays, tone: 'stale' as const, label: `Stale · ${ageDays} days old` };
+    }
+    return { ageDays, tone: 'aging' as const, label: `${ageDays} days old` };
+  }, [bulletin]);
 
   const latestFetchLabel = useMemo(() => {
     const iso = doeFetchAt ?? bulletin?.last_loaded_at;
@@ -677,6 +779,31 @@ export default function FuelPricesScreen() {
   }, [stationRows, areaRows]);
 
   /*
+   * Does the selected fuel actually have any usable price right now?
+   *
+   * The old empty-state test was `stationRows.length === 0 && areaRows.length
+   * === 0`, which counts *stations*, not prices. The station directory is a
+   * static table and always has rows for a populated region, so that condition
+   * was almost never true -- including when the bulletin contained no prices
+   * for the selected fuel at all. North Luzon with RON_91 hit exactly this: 12
+   * stations, zero DOE rows, and the table rendered 12 lines of "—", which read
+   * as a broken page.
+   *
+   * A price counts as usable only when it is a real positive number, so a null
+   * DOE lookup, an unpriced community row, and a genuine value are all
+   * distinguished properly.
+   */
+  const hasAnyPrice = useMemo(() => {
+    const pricedStations = stationRows.filter(
+      (row) => typeof row.price === 'number' && row.price > 0
+    );
+    const pricedAreas = areaRows.filter(
+      (row) => typeof row.price === 'number' && row.price > 0
+    );
+    return pricedStations.length > 0 || pricedAreas.length > 0;
+  }, [stationRows, areaRows]);
+
+  /*
    * Price range across every price already in memory.
    *
    * Built purely from `stationRows` / `areaRows` -- the rows the list is already
@@ -698,24 +825,26 @@ export default function FuelPricesScreen() {
   }, [stationRows, areaRows]);
 
   /*
-   * Change vs the previously loaded DOE bulletin for the same brand/fuel/region.
+   * Change vs the previous DOE bulletin for the same brand/fuel/region.
    *
-   * REAL data only: it reads the `trend` series the screen already fetches when
-   * Past prices is opened. `trend` is deliberately never cleared on a view
-   * switch (only on region change), so once history has been loaded the hero
-   * keeps showing a genuine movement figure.
+   * REAL data only. It reads the `trend` series, which is now fetched eagerly
+   * alongside the current bulletin rather than waiting for Past prices, so the
+   * hero can carry a genuine movement figure on a first visit instead of
+   * silently having none until the user happens to open the history tab.
    *
-   * On a first visit -- before Past prices has ever been opened -- `trend` is
-   * empty, because the "This week" load fetches exactly one bulletin. There is
-   * then no previous price in memory, so the hero shows no delta at all rather
-   * than inventing one. No extra query is issued to fill that gap.
+   * The `historyStatus` guard matters: `trend` is reset to `[]` on region
+   * change, so without it the memo would keep returning the previous region's
+   * last two points for one render after the switch -- briefly attributing
+   * another region's movement to the new one. While history is loading or has
+   * failed there is simply no delta, which is honest, rather than a wrong one.
    */
   const heroMovement = useMemo(() => {
+    if (historyStatus !== 'ready') return null;
     if (trend.length < 2) return null;
     const prev = trend[trend.length - 2].price_per_liter;
     const last = trend[trend.length - 1].price_per_liter;
     return { delta: last - prev, prevDate: trend[trend.length - 2].bulletin_date };
-  }, [trend]);
+  }, [trend, historyStatus]);
 
   if (!isSupabaseConfigured) {
     return (
@@ -776,6 +905,36 @@ export default function FuelPricesScreen() {
           <Text style={styles.headerActionText}>Community</Text>
         </Pressable>
       </View>
+
+      {/*
+        Freshness of the numbers below. It names the source ("DOE bulletin"),
+        the week they describe, and how many days ago that week started, so a
+        user can judge a price before trusting it. Deliberately a quiet metadata
+        row rather than a warning card -- being a week behind is normal for a
+        weekly government bulletin, and only past the app's own stale threshold
+        does it change tone.
+      */}
+      {priceFreshness && bulletin ? (
+        <View style={styles.freshnessRow}>
+          <View
+            style={[
+              styles.freshnessPill,
+              priceFreshness.tone === 'stale' && styles.freshnessPillStale,
+              priceFreshness.tone === 'aging' && styles.freshnessPillAging,
+            ]}>
+            <Text
+              style={[
+                styles.freshnessPillText,
+                priceFreshness.tone === 'stale' && styles.freshnessPillTextStale,
+              ]}>
+              {priceFreshness.label}
+            </Text>
+          </View>
+          <Text style={styles.freshnessMeta} numberOfLines={1}>
+            DOE bulletin · {formatShortDate(bulletin.bulletin_date)}
+          </Text>
+        </View>
+      ) : null}
 
       {/*
         View toggle kept inline rather than via SegmentedToggle: the shared
@@ -971,40 +1130,14 @@ export default function FuelPricesScreen() {
           ) : null}
 
           {/*
-            TREND. The This week / Past prices toggle now sits directly above the
-            content it controls, so the modes read as one continuous fuel story.
-            Behaviour is unchanged -- same `view` state, same two options.
+            TREND. There is deliberately no second This week / Past prices
+            control here. An earlier revision rendered an identical pair of
+            buttons in this section head as well as in the page header, so
+            both toggles drove the same `view` state and the page appeared to
+            have two competing mode switches. The page header above is the one
+            canonical control; this section only renders what it selects.
           */}
-          <View style={styles.trendHead}>
-            <Text style={styles.sectionTitle}>Price trend</Text>
-            <View style={styles.viewToggle} accessibilityRole="tablist">
-              {(
-                [
-                  { value: 'now', label: 'This week' },
-                  { value: 'history', label: 'Past prices' },
-                ] as const
-              ).map((option) => {
-                const active = view === option.value;
-                return (
-                  <Pressable
-                    key={option.value}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: active }}
-                    onPress={() => setView(option.value)}
-                    style={({ pressed }) => [
-                      styles.viewToggleItem,
-                      active && styles.viewToggleItemActive,
-                      pressed && !active && styles.pressed,
-                    ]}>
-                    <Text
-                      style={[styles.viewToggleText, active && styles.viewToggleTextActive]}>
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
+          <Text style={styles.sectionTitle}>Price trend</Text>
 
           <View style={styles.trendPanel}>
             {view === 'history' && companyOptions.length > 0 ? (
@@ -1034,17 +1167,39 @@ export default function FuelPricesScreen() {
               </View>
             ) : null}
 
-            <PriceTrendChart
-              points={trend}
-              caption={
-                view === 'history'
-                  ? `${fuelLabel} · ${companyName}`
-                  : `${fuelLabel} · ${regionLabel}`
-              }
-              height={isCompact ? 104 : view === 'history' ? 148 : 126}
-            />
+            {/*
+              The chart is only asked to draw once history has actually
+              resolved. Before this, `trend` was `[]` and PriceTrendChart
+              rendered its own "Not enough history yet" -- which claimed the
+              region had no history when in fact the request simply had not run.
+              Loading and failure are now stated here instead, and the
+              insufficient-history message is reachable only from a successful
+              load that really did return fewer than two usable weeks.
+            */}
+            {historyStatus === 'error' ? (
+              <View style={styles.historyNote}>
+                <Text style={styles.historyNoteTitle}>Price history unavailable</Text>
+                <Text style={styles.historyNoteBody}>
+                  Could not load past bulletins for this region. Pull to refresh to try again.
+                </Text>
+              </View>
+            ) : historyStatus === 'loading' || historyStatus === 'idle' ? (
+              <View style={styles.historyNote}>
+                <Text style={styles.historyNoteTitle}>Loading price history…</Text>
+              </View>
+            ) : (
+              <PriceTrendChart
+                points={trend}
+                caption={
+                  view === 'history'
+                    ? `${fuelLabel} · ${companyName}`
+                    : `${fuelLabel} · ${regionLabel}`
+                }
+                height={isCompact ? 104 : view === 'history' ? 148 : 126}
+              />
+            )}
 
-            {view === 'history' && trend.length > 0 ? (
+            {view === 'history' && historyStatus === 'ready' && trend.length > 0 ? (
               <View style={styles.weekList}>
                 <PriceHistoryList
                   points={trend}
@@ -1097,7 +1252,42 @@ export default function FuelPricesScreen() {
             </Pressable>
           </View>
 
-          {stationRows.length === 0 && areaRows.length === 0 ? (
+          {/*
+            Three distinct empties, kept separate so none of them lies:
+
+              - still loading        -> nothing rendered yet (handled by the
+                                        surrounding loaders)
+              - bulletin has no price
+                                    -> say which fuel and which bulletin, and
+                                        point at the selector
+              - no stations at all   -> the existing "filters" message
+
+            The middle case is the one that used to leak a table of em-dashes.
+            Region, fuel and bulletin are all read from state, so this is
+            honest for any region and any week, not just North Luzon.
+
+            `pricesLoading` is part of the guard on purpose. A fuel switch
+            re-runs the price fetch, and `hasAnyPrice` goes false in the window
+            before the new rows land; without this the message would flash on
+            every switch, including switches that do have data. Gating on the
+            fetch actually settling means the message only ever describes a
+            result, never a gap.
+          */}
+          {!hasAnyPrice && bulletin && !loading && !pricesLoading ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyCardTitle}>
+                No {fuelLabel} prices in this bulletin
+              </Text>
+              <Text style={styles.emptyCardBody}>
+                The {formatDate(bulletin.bulletin_date)} bulletin for {regionLabel} does not
+                include prices for this fuel type. Try another fuel.
+              </Text>
+              <Text style={styles.emptyCardHint}>
+                You can still browse past prices below, and report a price you see at the
+                station.
+              </Text>
+            </View>
+          ) : stationRows.length === 0 && areaRows.length === 0 ? (
             <Text style={styles.emptyLine}>
               No stations for these filters. Try another city or fuel type.
             </Text>
@@ -1221,6 +1411,63 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  /* ---- freshness metadata ---- */
+  freshnessRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  freshnessPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  freshnessPillAging: {
+    borderColor: 'rgba(180, 83, 9, 0.24)',
+    backgroundColor: 'rgba(180, 83, 9, 0.10)',
+  },
+  freshnessPillStale: {
+    borderColor: 'rgba(220, 38, 38, 0.24)',
+    backgroundColor: 'rgba(220, 38, 38, 0.10)',
+  },
+  freshnessPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+  },
+  freshnessPillTextStale: {
+    color: GasTaColors.error,
+  },
+  freshnessMeta: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+  },
+  /* ---- history placeholder ---- */
+  historyNote: {
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+  },
+  historyNoteTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: GasTaColors.textSoft,
+  },
+  historyNoteBody: {
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    color: GasTaColors.textMuted,
     marginTop: 2,
   },
   headerAction: {
@@ -1702,6 +1949,32 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     color: GasTaColors.textSoft,
     paddingVertical: spacing.lg,
+  },
+  /* Quiet, informative panel -- not an error and not a warning banner. */
+  emptyCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  emptyCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  emptyCardBody: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: GasTaColors.textPrimary,
+    marginTop: 4,
+  },
+  emptyCardHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: GasTaColors.textSoft,
+    marginTop: 6,
   },
   errorBox: {
     flexDirection: 'row',

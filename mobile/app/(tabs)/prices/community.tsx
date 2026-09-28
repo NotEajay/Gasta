@@ -11,9 +11,12 @@ import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
+  canDeleteCommunityReport,
   confirmationsLabel,
   confirmCommunityReport,
+  deleteCommunityReport,
   fetchFreshVerifiedPrices,
+  fetchMyCommunityReports,
   fetchPendingReports,
   type PendingCommunityReport,
   type VerifiedCommunityPrice,
@@ -35,6 +38,11 @@ export default function CommunityPricesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // Own reports, kept separate from the shared lists so withdrawing one never
+  // mutates verified/pending state that other users also depend on.
+  const [mine, setMine] = useState<PendingCommunityReport[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -42,25 +50,28 @@ export default function CommunityPricesScreen() {
       return;
     }
     try {
-      const [v, p] = await Promise.all([
+      const [v, p, own] = await Promise.all([
         fetchFreshVerifiedPrices(),
         fetchPendingReports(),
+        user ? fetchMyCommunityReports(user.id).catch(() => []) : Promise.resolve([]),
       ]);
       setVerified(v);
       setPending(p);
+      setMine(own);
     } catch (e) {
       console.warn('Community prices load failed', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [user]);
 
   useFocusEffect(
     useCallback(() => {
       // Reset state and reload to ensure fresh data from database
       setVerified([]);
       setPending([]);
+      setMine([]);
       void load();
     }, [load])
   );
@@ -84,6 +95,48 @@ export default function CommunityPricesScreen() {
       Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setConfirmingId(null);
+    }
+  };
+
+  const handleDelete = (report: PendingCommunityReport) => {
+    // Guard before the dialog too: a second tap while a delete is in flight
+    // must not open a second dialog for the same row.
+    if (deletingId) return;
+
+    Alert.alert(
+      'Delete price report?',
+      `This will remove your reported price of ${formatCurrency(report.reported_price)} for ${
+        report.station?.name ?? 'this station'
+      }.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void runDelete(report);
+          },
+        },
+      ]
+    );
+  };
+
+  const runDelete = async (report: PendingCommunityReport) => {
+    setDeletingId(report.id);
+    setDeleteError(null);
+    try {
+      await deleteCommunityReport(report.id);
+      // Drop it locally so the row disappears immediately, then refetch so the
+      // shared lists settle to whatever the database now says.
+      setMine((prev) => prev.filter((r) => r.id !== report.id));
+      Alert.alert('Report deleted', 'Your reported price was removed.');
+      await load();
+    } catch (e) {
+      // A normal failed withdrawal is not a full-screen error. The row stays put
+      // and an inline message explains it.
+      setDeleteError(e instanceof Error ? e.message : 'Could not delete this report.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -175,6 +228,108 @@ export default function CommunityPricesScreen() {
           ))}
         </View>
       )}
+
+      {/* Own reports live in their own compact block above the shared lists, so
+          withdrawal is contextual and the main lists stay uncluttered. */}
+      {user ? (
+        <>
+          <Text style={styles.sectionTitleTop}>My reports</Text>
+          {deleteError ? (
+            <View style={styles.inlineError}>
+              <MaterialCommunityIcons
+                name="alert-circle-outline"
+                size={14}
+                color={GasTaColors.error}
+              />
+              <Text style={styles.inlineErrorText}>{deleteError}</Text>
+            </View>
+          ) : null}
+          {mine.length === 0 ? (
+            <View style={styles.emptyBox}>
+              <Text style={styles.emptyTitle}>You haven&apos;t reported a price yet</Text>
+              <Text style={styles.emptyLine}>
+                Reports you submit appear here so you can withdraw them.
+              </Text>
+            </View>
+          ) : (
+            <View style={[styles.list, styles.ownList]}>
+              {mine.map((report, index) => {
+                const canDelete = canDeleteCommunityReport(report.status);
+                const busy = deletingId === report.id;
+                return (
+                  <View
+                    key={report.id}
+                    style={[
+                      styles.row,
+                      styles.rowStacked,
+                      index < mine.length - 1 && styles.divider,
+                    ]}>
+                    <View style={styles.rowHead}>
+                      <View style={styles.rowMain}>
+                        <View style={styles.ownTitleRow}>
+                          <Text style={styles.station} numberOfLines={1}>
+                            {report.station?.name ?? 'Station'}
+                          </Text>
+                          <View style={styles.yoursPill}>
+                            <Text style={styles.yoursPillText}>Your report</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.meta} numberOfLines={1}>
+                          {report.fuel_type?.name ?? 'Fuel'} ·{' '}
+                          {confirmationsLabel(report.confirmation_count)} ·{' '}
+                          {formatDate(report.created_at)}
+                        </Text>
+                      </View>
+                      <View style={styles.ownPriceCol}>
+                        <Text style={[styles.price, canDelete && styles.pricePending]}>
+                          {formatCurrency(report.reported_price)}
+                          <Text style={styles.priceUnit}>/L</Text>
+                        </Text>
+                        <Text
+                          style={[
+                            styles.ownStatus,
+                            canDelete ? styles.ownStatusPending : styles.ownStatusVerified,
+                          ]}>
+                          {canDelete ? 'Pending' : 'Verified'}
+                        </Text>
+                      </View>
+                    </View>
+                    {canDelete ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete your ${formatCurrency(
+                          report.reported_price
+                        )} report at ${report.station?.name ?? 'this station'}`}
+                        accessibilityState={{ disabled: busy }}
+                        hitSlop={8}
+                        disabled={busy || deletingId !== null}
+                        onPress={() => handleDelete(report)}
+                        style={({ pressed }) => [
+                          styles.deleteBtn,
+                          pressed && styles.pressed,
+                          busy && styles.busy,
+                        ]}>
+                        <MaterialCommunityIcons
+                          name="trash-can-outline"
+                          size={13}
+                          color={GasTaColors.error}
+                        />
+                        <Text style={styles.deleteBtnText}>
+                          {busy ? 'Deleting…' : 'Delete'}
+                        </Text>
+                      </Pressable>
+                    ) : (
+                      <Text style={styles.ownLockedNote}>
+                        Verified reports can&apos;t be withdrawn — other drivers rely on them.
+                      </Text>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          )}
+        </>
+      ) : null}
 
       <Text style={styles.sectionTitleTop}>Needs confirmation</Text>
       {!user ? (
@@ -312,6 +467,80 @@ const styles = StyleSheet.create({
   pendingList: {
     backgroundColor: 'rgba(180, 83, 9, 0.07)',
     borderColor: 'rgba(180, 83, 9, 0.24)',
+  },
+  ownList: {
+    backgroundColor: GasTaColors.creamLight,
+    borderColor: GasTaColors.forestBorder,
+  },
+  ownTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  yoursPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  yoursPillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    color: GasTaColors.forest,
+  },
+  ownPriceCol: { alignItems: 'flex-end' },
+  ownStatus: {
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  ownStatusPending: { color: 'rgba(180, 83, 9, 1)' },
+  ownStatusVerified: { color: GasTaColors.forest },
+  /* Restrained, contextual action -- not a full-width red button. */
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    marginTop: spacing.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.24)',
+    backgroundColor: 'rgba(220, 38, 38, 0.10)',
+  },
+  deleteBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.error,
+  },
+  ownLockedNote: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginTop: spacing.sm,
+  },
+  inlineError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.24)',
+    backgroundColor: 'rgba(220, 38, 38, 0.10)',
+  },
+  inlineErrorText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: GasTaColors.error,
   },
   row: {
     flexDirection: 'row',
