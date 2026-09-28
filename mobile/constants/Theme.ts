@@ -1,6 +1,86 @@
 import type { TextStyle, ViewStyle } from 'react-native';
 
-/** GasTa! design tokens — Cream + Forest Green palette. */
+/**
+ * ============================================================================
+ * CANONICAL IN-APP PALETTE  (Phase 1 foundation)
+ * ============================================================================
+ *
+ * This is the single source of truth for in-app colour. New work imports
+ * `colors` from here — or the `HomeColors` alias in `constants/home.ts`, which
+ * is re-exported from these same values.
+ *
+ * Why it lives in Theme.ts rather than in constants/home.ts: every shared UI
+ * component already imports from `constants/Theme`, so putting the canonical
+ * tokens there avoids a circular import (home.ts -> Theme.ts) and keeps one
+ * import site for both the modern and legacy components.
+ *
+ * Deliberately NOT changed in this pass: `GasTaColors`, `palette`, `getTheme`
+ * and the `typography` object. Those still drive ~23 legacy files (including
+ * `pick-map`, which is map-protected). Mutating them would restyle five
+ * unfinished screens at once. See the Phase 1 report for the migration list.
+ *
+ * Cream is intentionally retained on auth/branding screens only
+ * (GasTaColors.cream) — see the approved design decision.
+ */
+export const colors = {
+  // Brand
+  /** Primary green: actions, active states, money-positive values. */
+  primary: '#2E7D32',
+  /** Pressed / text-on-green. */
+  primaryDark: '#1B5E20',
+  /** Tinted green fill for selected chips and soft emphasis. */
+  primarySoft: 'rgba(46, 125, 50, 0.10)',
+  /** Hairline green for selected outlines. */
+  primaryBorder: 'rgba(46, 125, 50, 0.24)',
+  /** Text/icon colour placed on top of `primary`. */
+  onPrimary: '#FFFFFF',
+
+  /** Navy: headings, and all authoritative data values. */
+  navy: '#0E2A52',
+  /** Very light navy wash for quiet panels. */
+  navySoft: 'rgba(14, 42, 82, 0.06)',
+
+  /** Muted blue-gray: every secondary line of copy. */
+  muted: '#5A6B84',
+
+  // Surfaces
+  /** Cool neutral page canvas. */
+  background: '#F5F7FA',
+  /** Card / panel fill. */
+  surface: '#FFFFFF',
+  /** Universal hairline border. */
+  border: 'rgba(14, 42, 82, 0.10)',
+
+  // Status
+  success: '#2E7D32',
+  successSoft: 'rgba(46, 125, 50, 0.10)',
+  warning: '#B45309',
+  warningSoft: 'rgba(180, 83, 9, 0.10)',
+  warningBorder: 'rgba(180, 83, 9, 0.24)',
+  danger: '#DC2626',
+  dangerSoft: 'rgba(220, 38, 38, 0.10)',
+  dangerBorder: 'rgba(220, 38, 38, 0.24)',
+} as const;
+
+export type GasTaColorsType = typeof colors;
+
+/** Status colour lookup used by InlineNotice and status chips. */
+export const statusColors = {
+  info: { fg: colors.navy, bg: colors.navySoft, border: colors.border },
+  success: {
+    fg: colors.success,
+    bg: colors.successSoft,
+    border: colors.primaryBorder,
+  },
+  warning: {
+    fg: colors.warning,
+    bg: colors.warningSoft,
+    border: colors.warningBorder,
+  },
+  error: { fg: colors.danger, bg: colors.dangerSoft, border: colors.dangerBorder },
+} as const;
+
+/** GasTa! design tokens — Cream + Forest Green palette (legacy/branding). */
 export const GasTaColors = {
   cream: '#F8F0E5',
   creamLight: '#FDFAF6',
@@ -62,9 +142,53 @@ export const BrandColors = {
   border: GasTaColors.glassBorderSubtle,
 } as const;
 
+/**
+ * Canonical 8-step type scale (Phase 1).
+ *
+ * The repo currently uses 17 distinct font sizes. These tokens are additive:
+ * existing screens still use the legacy `typography` object below, which is
+ * intentionally untouched so no screen shifts. Migrated screens import
+ * `typeScale` and the 17 sizes collapse to these eight.
+ */
+export const typeScale = {
+  /** The one authoritative number on a screen. Reserve for results. */
+  display: { fontSize: 28, fontWeight: '800', letterSpacing: -0.6 } satisfies TextStyle,
+  /** Page title. */
+  pageTitle: { fontSize: 22, fontWeight: '800', letterSpacing: -0.4 } satisfies TextStyle,
+  /** Section heading. */
+  sectionHeading: { fontSize: 17, fontWeight: '700' } satisfies TextStyle,
+  /** Title inside a card or list row. */
+  cardTitle: { fontSize: 16, fontWeight: '700' } satisfies TextStyle,
+  /** Default reading size. */
+  body: { fontSize: 15, fontWeight: '500' } satisfies TextStyle,
+  /** Slightly condensed reading size for dense lists. */
+  bodySmall: { fontSize: 14, fontWeight: '500' } satisfies TextStyle,
+  /** Secondary/meta copy. */
+  caption: { fontSize: 13, fontWeight: '500' } satisfies TextStyle,
+  /** True eyebrow/label only — pair with textTransform: 'uppercase'. */
+  label: { fontSize: 12, fontWeight: '700', letterSpacing: 0.4 } satisfies TextStyle,
+} as const;
+
+/** Canonical icon sizes (Ionicons). No other values should be needed. */
+export const iconSize = {
+  /** Inline, next to a word. */
+  inline: 16,
+  /** Row-leading and action icons. */
+  row: 20,
+  /** Section-level. */
+  section: 24,
+  /** Hero / result. */
+  hero: 28,
+} as const;
+
 export const spacing = GasTaSpacing;
 export const radii = GasTaRadius;
 
+/**
+ * Legacy typography scale. Superseded by `typeScale` above; retained because
+ * `PageHero`, `SubPageHeader`, `SectionHeader`, `ModeRankCard` and others still
+ * spread these values. Migrate consumers, then delete this object.
+ */
 export const typography = {
   title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.6 } satisfies TextStyle,
   subtitle: { fontSize: 15, fontWeight: '500', lineHeight: 22 } satisfies TextStyle,

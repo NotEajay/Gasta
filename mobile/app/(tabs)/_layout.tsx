@@ -1,15 +1,50 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, usePathname } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Animated, StyleSheet, View, type ColorValue, type ViewStyle } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
 import { AuthBackground } from '@/components/ui/GlassSurface';
+import AppBackground from '@/components/ui/AppBackground';
 import { HomeColors } from '@/constants/home';
 import { tabConfig } from '@/constants/moduleColors';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarVisibility';
+
+/**
+ * The canvas that sits behind every tab scene.
+ *
+ * POSITION IS THE WHOLE POINT. This component wraps the `<SafeAreaView>` and the
+ * `<Tabs>` themselves, so whatever it paints covers the real viewport — the
+ * status bar at the top, and the home indicator / bottom edge at the bottom.
+ *
+ * A scene cannot do this job. Each scene is nested inside
+ * `<SafeAreaView edges={['top']}>`, which pads the top by `insets.top`, and
+ * `sceneStyle` pads the bottom by the floating tab bar's height plus the bottom
+ * inset. A background painted from inside a scene therefore stops short of both
+ * edges, and the parent canvas shows through those strips.
+ *
+ * `AuthBackground canvas="white"` remains the canvas for every other tab. Only
+ * the screens running the cream GasTa experiment — Profile and Budget — swap in
+ * `AppBackground`. The floating tab bar is `position: absolute` over this canvas
+ * and keeps its own opaque white surface, so the bar reads as floating over
+ * cream rather than as a white navigation region.
+ */
+const CREAM_CANVAS_ROUTES = ['/profile', '/budget'];
+
+function TabCanvas({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const isCreamCanvas = CREAM_CANVAS_ROUTES.some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`)
+  );
+
+  if (isCreamCanvas) {
+    return <AppBackground>{children}</AppBackground>;
+  }
+
+  return <AuthBackground canvas="white">{children}</AuthBackground>;
+}
 
 /**
  * Floating nav bar metrics. Declared once so the bar geometry and the content
@@ -167,7 +202,7 @@ export default function TabLayout() {
 
   return (
     <TabBarVisibilityProvider handleScroll={handleTabBarScroll} reset={resetTabBar}>
-      <AuthBackground canvas="white">
+      <TabCanvas>
         <SafeAreaView edges={['top']} style={styles.fill}>
           <Tabs
             initialRouteName="home"
@@ -240,7 +275,7 @@ export default function TabLayout() {
             />
           </Tabs>
         </SafeAreaView>
-      </AuthBackground>
+      </TabCanvas>
     </TabBarVisibilityProvider>
   );
 }

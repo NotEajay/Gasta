@@ -1,11 +1,10 @@
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import Card from '@/components/ui/Card';
 import ProgressBar from '@/components/ui/ProgressBar';
-import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
-import { formatCurrency } from '@/lib/format';
-import { useTheme } from '@/lib/useTheme';
+import { GasTaColors, radii, spacing, typography } from '@/constants/Theme';
+import { HomeColors } from '@/constants/home';
+import { formatPeso } from '@/lib/format';
 import type { ModeEvaluation } from '@/types/mcda';
 
 interface ModeRankCardProps {
@@ -16,103 +15,136 @@ interface ModeRankCardProps {
   maxScore: number;
 }
 
+/**
+ * Row-style ranking card for the Trip Optimizer result list.
+ *
+ * Presentation only: rank order, `weightedScore`, `raw.fuelCost` and
+ * `raw.travelTime` are rendered exactly as MCDA produced them. No score is
+ * recalculated and no cost is recomputed here.
+ */
 export default function ModeRankCard({
   rank,
   evaluation,
   label,
-  recommended,
+  recommended = false,
   maxScore,
 }: ModeRankCardProps) {
-  const theme = useTheme();
   const scoreRatio = maxScore > 0 ? evaluation.weightedScore / maxScore : 0;
 
   return (
-    <Card
-      elevated={recommended}
-      style={
-        recommended
-          ? {
-              borderColor: 'rgba(76, 175, 80, 0.36)',
-            }
-          : undefined
-      }>
+    <View
+      style={[
+        styles.card,
+        recommended && styles.cardRecommended,
+      ]}>
       <View style={styles.header}>
-        <View
-          style={[
-            styles.rankCircle,
-            {
-              backgroundColor: recommended ? palette.success : theme.overlay,
-            },
-          ]}>
-          <Text style={[styles.rankText, { color: recommended ? GasTaColors.white : theme.text }]}>
-            {rank}
+        <View style={[styles.rankBadge, recommended && styles.rankBadgeRecommended]}>
+          <Text
+            style={[
+              styles.rankText,
+              recommended && { color: GasTaColors.white },
+            ]}>
+            #{rank}
           </Text>
         </View>
-        <View style={styles.headerBody}>
-          <Text style={[styles.mode, { color: theme.text }]}>{label}</Text>
-          {recommended ? (
-            <Text style={styles.recommendedBadge}>Recommended</Text>
-          ) : null}
+        <Text numberOfLines={1} ellipsizeMode="tail" style={styles.mode}>
+          {label}
+        </Text>
+        {recommended ? <Text style={styles.recommendedBadge}>Recommended</Text> : null}
+      </View>
+
+      <ProgressBar
+        progress={scoreRatio}
+        color={recommended ? HomeColors.primary : HomeColors.muted}
+        trackColor={HomeColors.border}
+      />
+
+      <View style={styles.metrics}>
+        <View style={styles.metric}>
+          <Text style={styles.metricLabel}>Estimated cost</Text>
+          <Text numberOfLines={1} style={styles.metricValue}>
+            {formatPeso(evaluation.raw.fuelCost)}
+          </Text>
         </View>
-        <View style={styles.scoreBlock}>
-          <Text style={[styles.scoreLabel, { color: theme.textSecondary }]}>Score</Text>
-          <Text style={[styles.score, { color: theme.text }]}>
+        <View style={styles.metric}>
+          <Text style={styles.metricLabel}>Travel time</Text>
+          <Text numberOfLines={1} style={styles.metricValue}>
+            {evaluation.raw.travelTime.toFixed(0)} min
+          </Text>
+        </View>
+        <View style={styles.metric}>
+          <Text style={styles.metricLabel}>Score</Text>
+          <Text numberOfLines={1} style={styles.metricValue}>
             {evaluation.weightedScore.toFixed(3)}
           </Text>
         </View>
       </View>
-      <ProgressBar
-        progress={scoreRatio}
-        color={recommended ? palette.success : palette.primary}
-        trackColor={theme.borderLight}
-      />
-      <View style={styles.metrics}>
-        <View style={[styles.metricPill, { backgroundColor: theme.overlay }]}>
-          <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>Fuel</Text>
-          <Text style={[styles.metricValue, { color: theme.text }]}>
-            {formatCurrency(evaluation.raw.fuelCost)}
-          </Text>
-        </View>
-        <View style={[styles.metricPill, { backgroundColor: theme.overlay }]}>
-          <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>Time</Text>
-          <Text style={[styles.metricValue, { color: theme.text }]}>
-            {evaluation.raw.travelTime.toFixed(0)} min
-          </Text>
-        </View>
-      </View>
-    </Card>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
-  rankCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.pill,
+  card: {
+    padding: spacing.md,
+    borderRadius: radii.sm,
+    backgroundColor: GasTaColors.white,
+    borderWidth: 1,
+    borderColor: HomeColors.border,
+    marginBottom: spacing.sm,
+  },
+  cardRecommended: {
+    borderColor: HomeColors.primaryBorder,
+    borderLeftWidth: 3,
+    borderLeftColor: HomeColors.primary,
+  },
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
-  rankText: { fontWeight: '800', fontSize: 14 },
-  headerBody: { flex: 1 },
-  mode: { ...typography.body, fontWeight: '700', fontSize: 16 },
-  recommendedBadge: {
-    color: palette.success,
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+  rankBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+    backgroundColor: HomeColors.navySoft,
   },
-  scoreBlock: { alignItems: 'flex-end' },
-  scoreLabel: { ...typography.caption },
-  score: { fontWeight: '800', fontSize: 16 },
-  metrics: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
-  metricPill: {
+  rankBadgeRecommended: {
+    backgroundColor: HomeColors.primary,
+  },
+  rankText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: HomeColors.navy,
+  },
+  mode: {
     flex: 1,
-    borderRadius: radii.md,
-    padding: spacing.sm + 2,
+    ...typography.body,
+    fontWeight: '700',
+    fontSize: 15,
+    color: HomeColors.navy,
   },
-  metricLabel: { ...typography.caption, marginBottom: 2 },
-  metricValue: { fontWeight: '700', fontSize: 14 },
+  recommendedBadge: {
+    ...typography.label,
+    fontSize: 10,
+    color: HomeColors.primary,
+    textTransform: 'uppercase',
+  },
+  metrics: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  metric: { flex: 1 },
+  metricLabel: {
+    ...typography.caption,
+    fontSize: 11,
+    color: HomeColors.muted,
+    marginBottom: 2,
+  },
+  metricValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: HomeColors.navy,
+  },
 });

@@ -1,17 +1,32 @@
-/** Home-only visual token. Existing module colors remain unchanged. */
+import { colors } from '@/constants/Theme';
+
+/**
+ * Backward-compatible alias for the canonical in-app palette.
+ *
+ * Originally this file *defined* the navy/green tokens for the Home screen. It
+ * now re-exports the same values from `constants/Theme`, which is the single
+ * source of truth (Phase 1). Every value is byte-identical to what it was, so
+ * the four existing consumers — home, budget, vehicles, trip, and
+ * shared-vehicle-history — are visually unchanged by this refactor.
+ *
+ * New code should prefer `colors` from `@/constants/Theme` directly. This
+ * alias stays for compatibility and can be deleted once those screens migrate.
+ */
 export const HomeColors = {
-  primary: '#2E7D32',
-  primaryDark: '#1B5E20',
-  primarySoft: 'rgba(46, 125, 50, 0.10)',
-  primaryBorder: 'rgba(46, 125, 50, 0.24)',
-  onPrimary: '#FFFFFF',
+  primary: colors.primary,
+  primaryDark: colors.primaryDark,
+  primarySoft: colors.primarySoft,
+  primaryBorder: colors.primaryBorder,
+  onPrimary: colors.onPrimary,
   /** Navy for headings and primary copy — matches the wordmark in homeheader.png. */
-  navy: '#0E2A52',
-  navySoft: 'rgba(14, 42, 82, 0.06)',
+  navy: colors.navy,
+  navySoft: colors.navySoft,
   /** Muted blue-gray for secondary copy. */
-  muted: '#5A6B84',
+  muted: colors.muted,
   /** Very light cool-gray page background. */
-  background: '#F5F7FA',
+  background: colors.background,
   /** Very light gray border for cards on the light background. */
-  border: 'rgba(14, 42, 82, 0.10)',
+  border: colors.border,
+  /** Canonical surface fill. */
+  white: colors.surface,
 } as const;

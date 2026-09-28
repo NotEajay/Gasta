@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { moduleColors, type ModuleKey } from '@/constants/moduleColors';
-import { spacing, typography } from '@/constants/Theme';
+import { colors, spacing, typeScale, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface SectionHeaderProps {
@@ -11,10 +11,37 @@ interface SectionHeaderProps {
   subtitle?: string;
   action?: ReactNode;
   module?: ModuleKey;
+  /**
+   * Phase 1: opt-in canonical treatment — flat, no vertical accent bar, 17/700
+   * navy. Defaults to the legacy rendering so the two screens still using this
+   * component (Prices, Community) do not shift. Migrate them later.
+   */
+  variant?: 'legacy' | 'canonical';
 }
 
-export default function SectionHeader({ title, subtitle, action, module = 'prices' }: SectionHeaderProps) {
+export default function SectionHeader({
+  title,
+  subtitle,
+  action,
+  module = 'prices',
+  variant = 'legacy',
+}: SectionHeaderProps) {
   const theme = useTheme();
+
+  if (variant === 'canonical') {
+    return (
+      <View style={styles.canonicalWrap}>
+        <View style={styles.canonicalLeft}>
+          <Text numberOfLines={2} style={styles.canonicalTitle}>
+            {title}
+          </Text>
+          {subtitle ? <Text style={styles.canonicalSubtitle}>{subtitle}</Text> : null}
+        </View>
+        {action}
+      </View>
+    );
+  }
+
   const accent = moduleColors[module].main;
 
   return (
@@ -34,6 +61,29 @@ export default function SectionHeader({ title, subtitle, action, module = 'price
 }
 
 const styles = StyleSheet.create({
+  // ---- canonical (Phase 1) ----------------------------------------------
+  // Flat label + optional right action. No accent bar, no decorative dot.
+  canonicalWrap: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  canonicalLeft: { flex: 1 },
+  canonicalTitle: {
+    ...typeScale.sectionHeading,
+    color: colors.navy,
+  },
+  canonicalSubtitle: {
+    ...typeScale.caption,
+    color: colors.muted,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+
+  // ---- legacy (unchanged) ----------------------------------------------
   wrap: {
     flexDirection: 'row',
     alignItems: 'flex-start',

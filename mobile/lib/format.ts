@@ -17,15 +17,38 @@ export function formatPeso(amount: number): string {
   })}`;
 }
 
-/** Parse a YYYY-MM-DD bulletin date without timezone shifting the calendar day. */
-function parseBulletinDate(date: string): Date {
-  const [year, month, day] = date.split('-').map(Number);
-  return new Date(year, (month || 1) - 1, day || 1);
+/**
+ * Parse a value for DISPLAY only.
+ *
+ * Two structurally different inputs reach this helper, and they need opposite
+ * strategies — applying one parser to both is what caused the bug fixed here.
+ *
+ * 1. Date-only strings ("2026-09-30"), used by DOE bulletins. These carry no
+ *    time and no zone. `new Date('2026-09-30')` is specified to parse as UTC
+ *    midnight, which renders as the PREVIOUS day for anyone west of Greenwich.
+ *    So the components are read and rebuilt in local time instead.
+ *
+ * 2. Full ISO timestamps ("2026-09-30T04:00:00.000Z") from timestamptz columns
+ *    such as `vehicle_refills.occurred_at`, `created_at` and `last_sign_in_at`.
+ *    These are absolute instants, so they are parsed normally and read through
+ *    local getters.
+ *
+ * The old implementation split EVERY input on '-' and read index 2 as the day.
+ * For a full timestamp that yields "30T04:00:00.000Z", which `Number()` turns
+ * into NaN, and the `day || 1` fallback then silently rendered the 1st of the
+ * month. Every timestamp-based date in the app was showing the wrong day.
+ */
+function parseDisplayDate(value: string): Date {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (dateOnly) {
+    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
+  }
+  return new Date(value);
 }
 
 /** DOE week start with weekday, e.g. "Tue, Aug 25, 2026". */
 export function formatBulletinWeek(date: string): string {
-  return parseBulletinDate(date).toLocaleDateString('en-PH', {
+  return parseDisplayDate(date).toLocaleDateString('en-PH', {
     weekday: 'short',
     year: 'numeric',
     month: 'short',
@@ -34,7 +57,7 @@ export function formatBulletinWeek(date: string): string {
 }
 
 export function formatDate(date: string): string {
-  return parseBulletinDate(date).toLocaleDateString('en-PH', {
+  return parseDisplayDate(date).toLocaleDateString('en-PH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -43,7 +66,7 @@ export function formatDate(date: string): string {
 
 /** Month + day, and the year whenever it is not the current calendar year. */
 export function formatShortDate(date: string, now = new Date()): string {
-  const parsed = parseBulletinDate(date);
+  const parsed = parseDisplayDate(date);
   const includeYear = parsed.getFullYear() !== now.getFullYear();
   return parsed.toLocaleDateString('en-PH', {
     weekday: 'short',

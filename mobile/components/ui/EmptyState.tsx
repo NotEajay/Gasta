@@ -1,16 +1,46 @@
+import type { ReactNode } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { radii, spacing, typography } from '@/constants/Theme';
+import { colors, iconSize, radii, spacing, typeScale, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface EmptyStateProps {
   title: string;
   message: string;
+  /**
+   * Phase 1: opt-in canonical treatment (Ionicons outline, no icon bubble,
+   * left-aligned, tighter padding). Defaults to the legacy rendering so the two
+   * screens still using this component (Prices, Community) do not shift.
+   * Migrate them to `variant="canonical"` in a later phase.
+   */
+  variant?: 'legacy' | 'canonical';
+  /** Ionicons name — only used by the canonical variant. */
+  icon?: keyof typeof Ionicons.glyphMap;
+  /** Optional trailing action, e.g. "Add vehicle". Canonical variant only. */
+  action?: ReactNode;
 }
 
-export default function EmptyState({ title, message }: EmptyStateProps) {
+export default function EmptyState({
+  title,
+  message,
+  variant = 'legacy',
+  icon = 'file-tray-outline',
+  action,
+}: EmptyStateProps) {
   const theme = useTheme();
+
+  if (variant === 'canonical') {
+    return (
+      <View style={styles.canonicalWrap}>
+        <Ionicons name={icon} size={iconSize.hero} color={colors.muted} />
+        <Text style={styles.canonicalTitle}>{title}</Text>
+        <Text style={styles.canonicalMessage}>{message}</Text>
+        {action ? <View style={styles.canonicalAction}>{action}</View> : null}
+      </View>
+    );
+  }
 
   return (
     <View
@@ -31,6 +61,28 @@ export default function EmptyState({ title, message }: EmptyStateProps) {
 }
 
 const styles = StyleSheet.create({
+  // ---- canonical (Phase 1) ----------------------------------------------
+  // No card, no icon bubble: a quiet open block on the page canvas.
+  canonicalWrap: {
+    alignItems: 'flex-start',
+    paddingVertical: spacing.lg,
+    gap: spacing.xs,
+  },
+  canonicalTitle: {
+    ...typeScale.sectionHeading,
+    color: colors.navy,
+    marginTop: spacing.xs,
+  },
+  canonicalMessage: {
+    ...typeScale.caption,
+    color: colors.muted,
+    lineHeight: 19,
+  },
+  canonicalAction: {
+    marginTop: spacing.md,
+  },
+
+  // ---- legacy (unchanged) ----------------------------------------------
   wrap: {
     borderRadius: radii.lg,
     borderWidth: 1,

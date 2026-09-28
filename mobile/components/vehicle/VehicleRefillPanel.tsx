@@ -30,7 +30,23 @@ import {
 } from '@/lib/services/vehicleRefills';
 import type { VehicleMember, VehicleRefill } from '@/types';
 
-const todayInput = () => new Date().toISOString().slice(0, 10);
+/**
+ * Today's date as a `YYYY-MM-DD` input value, in the user's LOCAL calendar.
+ *
+ * This deliberately does not use `toISOString()`, which converts to UTC first.
+ * The app targets a UTC+8 audience, so between local midnight and 08:00 the UTC
+ * date is still "yesterday" and the refill form would have defaulted to, and
+ * then saved, the wrong day.
+ *
+ * Local components are zero-padded by hand rather than relying on
+ * `toLocaleDateString`, whose output format is locale-dependent.
+ */
+const todayInput = () => {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+};
 
 interface Props {
   vehicleId: string;
