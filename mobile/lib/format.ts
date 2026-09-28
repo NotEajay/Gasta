@@ -2,19 +2,102 @@ export function formatCurrency(amount: number): string {
   return `₱${amount.toFixed(2)}`;
 }
 
-export function formatDate(date: string): string {
-  return new Date(date).toLocaleDateString('en-PH', {
+/**
+ * Peso display for headline figures: whole amounts stay clean ("₱5,000") while
+ * real cents are preserved ("₱2,250.50"). Always a leading ₱ with no space, so
+ * money reads identically everywhere on the Budget page.
+ */
+export function formatPeso(amount: number): string {
+  const safe = Number(amount);
+  const rounded = Number.isFinite(safe) ? Math.round(safe * 100) / 100 : 0;
+  const hasCents = Math.abs(rounded % 1) > 0.004;
+  return `₱${rounded.toLocaleString('en-PH', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/**
+ * Parse a value for DISPLAY only.
+ *
+ * Two structurally different inputs reach this helper, and they need opposite
+ * strategies — applying one parser to both is what caused the bug fixed here.
+ *
+ * 1. Date-only strings ("2026-09-30"), used by DOE bulletins. These carry no
+ *    time and no zone. `new Date('2026-09-30')` is specified to parse as UTC
+ *    midnight, which renders as the PREVIOUS day for anyone west of Greenwich.
+ *    So the components are read and rebuilt in local time instead.
+ *
+ * 2. Full ISO timestamps ("2026-09-30T04:00:00.000Z") from timestamptz columns
+ *    such as `vehicle_refills.occurred_at`, `created_at` and `last_sign_in_at`.
+ *    These are absolute instants, so they are parsed normally and read through
+ *    local getters.
+ *
+ * The old implementation split EVERY input on '-' and read index 2 as the day.
+ * For a full timestamp that yields "30T04:00:00.000Z", which `Number()` turns
+ * into NaN, and the `day || 1` fallback then silently rendered the 1st of the
+ * month. Every timestamp-based date in the app was showing the wrong day.
+ */
+function parseDisplayDate(value: string): Date {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (dateOnly) {
+    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
+  }
+  return new Date(value);
+}
+
+/** DOE week start with weekday, e.g. "Tue, Aug 25, 2026". */
+export function formatBulletinWeek(date: string): string {
+  return parseDisplayDate(date).toLocaleDateString('en-PH', {
+    weekday: 'short',
     year: 'numeric',
     month: 'short',
     day: 'numeric',
   });
 }
 
-export function formatShortDate(date: string): string {
-  return new Date(date).toLocaleDateString('en-PH', {
+export function formatDate(date: string): string {
+  return parseDisplayDate(date).toLocaleDateString('en-PH', {
+    year: 'numeric',
     month: 'short',
     day: 'numeric',
   });
+}
+
+/** Month + day, and the year whenever it is not the current calendar year. */
+export function formatShortDate(date: string, now = new Date()): string {
+  const parsed = parseDisplayDate(date);
+  const includeYear = parsed.getFullYear() !== now.getFullYear();
+  return parsed.toLocaleDateString('en-PH', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(includeYear ? { year: 'numeric' } : {}),
+  });
+}
+
+/** When the ETL wrote this bulletin into Supabase. */
+export function formatLoadedAt(iso: string | null | undefined, now = new Date()): string | null {
+  if (!iso) return null;
+  const loaded = new Date(iso);
+  if (Number.isNaN(loaded.getTime())) return null;
+
+  const midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const midnightLoaded = new Date(loaded.getFullYear(), loaded.getMonth(), loaded.getDate());
+  const ageDays = Math.round(
+    (midnightToday.getTime() - midnightLoaded.getTime()) / 86_400_000
+  );
+
+  if (ageDays === 0) return 'Loaded today';
+  if (ageDays === 1) return 'Loaded yesterday';
+  if (ageDays > 1 && ageDays < 7) return `Loaded ${ageDays} days ago`;
+
+  return `Loaded ${loaded.toLocaleDateString('en-PH', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: loaded.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  })}`;
 }
 
 export function monthName(month: number): string {

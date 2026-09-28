@@ -53,7 +53,6 @@ export default function SavedTripsScreen() {
       params: {
         origin: trip.origin_label ?? '',
         destination: trip.destination_label ?? '',
-        distance: String(trip.distance_km),
         vehicleId: trip.vehicle_id ?? 'manual',
         fuelCostWeight: String(trip.mcda_weights.fuelCost),
         travelTimeWeight: String(trip.mcda_weights.travelTime),
@@ -106,7 +105,7 @@ export default function SavedTripsScreen() {
       <SubPageHeader
         module="trip"
         title="Saved Trips"
-        subtitle="Re-run templates with your latest vehicle refill price."
+        subtitle="Re-run templates with the latest route, vehicle refill price, and SAW weights."
       />
 
       {trips.length === 0 ? (

@@ -1,0 +1,38 @@
+# Unit tests for the DOE ETL. No network and no Supabase credentials required.
+
+name: ETL Tests
+
+on:
+  push:
+    paths:
+      - "etl/**"
+      - ".github/workflows/etl-tests.yml"
+  pull_request:
+    paths:
+      - "etl/**"
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: etl
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: etl/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q

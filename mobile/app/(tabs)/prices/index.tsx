@@ -1,82 +1,342 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { Text } from '@/components/Themed';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import Card from '@/components/ui/Card';
-import ChipSelect from '@/components/ui/ChipSelect';
 import EmptyState from '@/components/ui/EmptyState';
 import FormSection from '@/components/ui/FormSection';
-import ListRow from '@/components/ui/ListRow';
 import PageHero from '@/components/ui/PageHero';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
 import SectionHeader from '@/components/ui/SectionHeader';
 import SegmentedToggle from '@/components/ui/SegmentedToggle';
-import SourceBadge from '@/components/ui/SourceBadge';
-import StatCard from '@/components/ui/StatCard';
+import SelectField from '@/components/ui/SelectField';
+import StationPriceTable, {
+  type AreaPriceRow,
+  type StationPriceRow,
+} from '@/components/ui/StationPriceTable';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { DOE_REGIONS, type DoeRegionCode } from '@/constants/regions';
-import { GasTaColors, palette, spacing } from '@/constants/Theme';
-import { formatCurrency, formatDate, formatShortDate } from '@/lib/format';
-import { useAuth } from '@/context/AuthProvider';
 import {
-  confirmationsLabel,
+  DOE_REGIONS,
+  REGION_FALLBACK_CITIES,
+  type DoeRegionCode,
+} from '@/constants/regions';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { useAuth } from '@/context/AuthProvider';
+import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import {
+  formatBulletinWeek,
+  formatCurrency,
+  formatDate,
+  formatShortDate,
+} from '@/lib/format';
+import {
   confirmCommunityReport,
   fetchConfirmedReportIds,
   fetchFreshVerifiedPrices,
+  fetchFuelStationsByRegion,
   fetchPendingReports,
   usersConfirmedLabel,
+  type FuelStationOption,
   type PendingCommunityReport,
+  type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
   fetchBulletinsForRegion,
+  fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
+  fetchLatestDoeWebsiteFetchAt,
   fetchPriceTrend,
+  type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
-import type { FuelPriceBulletin } from '@/types';
+
+function matchesCityFilter(station: FuelStationOption, city: string): boolean {
+  if (!city) return true;
+  const needle = city.toLowerCase().replace(/\s+city$/i, '').trim();
+  const hay = `${station.name} ${station.address ?? ''}`.toLowerCase();
+  return hay.includes(needle);
+}
+
+function buildStationPriceRows(
+  stations: FuelStationOption[],
+  verified: VerifiedCommunityPrice[],
+  pending: PendingCommunityReport[],
+  doePrices: FuelPriceRow[],
+  city: string,
+  fuelCode: string
+): { stationRows: StationPriceRow[]; areaRows: AreaPriceRow[] } {
+  const doeBySlug = new Map(doePrices.map((row) => [row.oil_company.slug, row.price_per_liter]));
+  const verifiedByStation = new Map(verified.map((row) => [row.station_id, row] as const));
+  const pendingByName = new Map<string, PendingCommunityReport>();
+  for (const report of pending) {
+    if (report.fuel_type?.code && report.fuel_type.code !== fuelCode) continue;
+    const name = report.station?.name;
+    if (name && !pendingByName.has(name)) pendingByName.set(name, report);
+  }
+
+  const stationRows = stations
+    .filter((station) => matchesCityFilter(station, city))
+    .map((station) => {
+      const brand = station.brand_label?.trim() || station.oil_company.name;
+      const verifiedRow = verifiedByStation.get(station.id);
+      const pendingRow = pendingByName.get(station.name);
+      const doePrice = doeBySlug.get(station.oil_company.slug) ?? null;
+
+      if (verifiedRow) {
+        return {
+          id: station.id,
+          slug: station.oil_company.slug,
+          brand,
+          station: station.name,
+          price: verifiedRow.reported_price,
+          source: 'community' as const,
+          status: 'Verified',
+        };
+      }
+      if (pendingRow) {
+        return {
+          id: station.id,
+          slug: station.oil_company.slug,
+          brand,
+          station: station.name,
+          price: pendingRow.reported_price,
+          source: 'community' as const,
+          status: 'Unverified',
+        };
+      }
+      return {
+        id: station.id,
+        slug: station.oil_company.slug,
+        brand,
+        station: station.name,
+        price: doePrice,
+        source: doePrice != null ? ('doe' as const) : ('none' as const),
+        status: doePrice != null ? 'DOE estimate' : undefined,
+      };
+    })
+    .sort((a, b) => a.brand.localeCompare(b.brand) || a.station.localeCompare(b.station));
+
+  const includedStationSlugs = new Set(
+    stations
+      .filter((station) => matchesCityFilter(station, city))
+      .map((station) => station.oil_company.slug)
+  );
+  const seenAreaSlugs = new Set<string>();
+  const areaRows: AreaPriceRow[] = [];
+
+  for (const row of doePrices) {
+    const slug = row.oil_company.slug;
+    if (includedStationSlugs.has(slug) || seenAreaSlugs.has(slug)) continue;
+    seenAreaSlugs.add(slug);
+
+    areaRows.push({
+      id: `doe-area-${row.id}`,
+      slug,
+      brand: row.oil_company.name,
+      areaName: row.area_name || 'All cities',
+      price: doeBySlug.get(slug) ?? row.price_per_liter,
+      source: 'doe_area',
+      status: 'DOE area price',
+    });
+  }
+
+  areaRows.sort((a, b) => a.brand.localeCompare(b.brand));
+
+  return { stationRows, areaRows };
+}
 
 type PricesView = 'now' | 'history';
+
+const HISTORY_WEEKS = 52;
+const PRICE_GREEN = '#2E7D32';
+const PRICE_GREEN_SOFT = 'rgba(46, 125, 50, 0.10)';
+const PRICE_GREEN_BORDER = 'rgba(46, 125, 50, 0.28)';
+
+type PriceFilterOption<T extends string = string> = {
+  value: T;
+  label: string;
+};
+
+type PriceFilterFieldProps<T extends string> = {
+  label: string;
+  value: T;
+  options: readonly PriceFilterOption<T>[];
+  onChange: (value: T) => void;
+  icon: 'map-marker-outline' | 'office-building-outline' | 'gas-station';
+  placeholder?: string;
+};
+
+function PriceFilterField<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  icon,
+  placeholder = 'Choose…',
+}: PriceFilterFieldProps<T>) {
+  const theme = useTheme();
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value)?.label ?? placeholder;
+
+  return (
+    <View style={styles.filterField}>
+      <View style={styles.filterLabelRow}>
+        <View style={[styles.filterIcon, { backgroundColor: PRICE_GREEN_SOFT }]}>
+          <MaterialCommunityIcons name={icon} size={16} color={PRICE_GREEN} />
+        </View>
+        <Text style={[styles.filterLabel, { color: theme.textSecondary }]}>{label}</Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${selected}`}
+        onPress={() => setOpen(true)}
+        style={({ pressed }) => [
+          styles.filterControl,
+          {
+            backgroundColor: pressed ? PRICE_GREEN_SOFT : theme.surface,
+            borderColor: pressed ? PRICE_GREEN_BORDER : theme.border,
+          },
+        ]}>
+        <Text style={[styles.filterValue, { color: theme.text }]} numberOfLines={1}>
+          {selected}
+        </Text>
+        <MaterialCommunityIcons name="chevron-down" size={18} color={theme.textSecondary} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.filterBackdrop} onPress={() => setOpen(false)}>
+          <Pressable
+            style={[styles.filterSheet, { backgroundColor: GasTaColors.creamLight }]}
+            onPress={(event) => event.stopPropagation()}>
+            <View style={styles.filterSheetHeader}>
+              <Text style={[styles.filterSheetTitle, { color: theme.text }]}>{label}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Close ${label} options`}
+                hitSlop={8}
+                onPress={() => setOpen(false)}>
+                <MaterialCommunityIcons name="close" size={20} color={theme.textSecondary} />
+              </Pressable>
+            </View>
+            <FlatList
+              data={[...options]}
+              keyExtractor={(item) => item.value}
+              style={styles.filterOptionList}
+              renderItem={({ item }) => {
+                const isSelected = item.value === value;
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    onPress={() => {
+                      onChange(item.value);
+                      setOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.filterOption,
+                      (isSelected || pressed) && { backgroundColor: PRICE_GREEN_SOFT },
+                    ]}>
+                    <Text
+                      style={[
+                        styles.filterOptionText,
+                        { color: theme.text, fontWeight: isSelected ? '800' : '500' },
+                      ]}>
+                      {item.label}
+                    </Text>
+                    {isSelected ? (
+                      <MaterialCommunityIcons name="check-circle" size={19} color={PRICE_GREEN} />
+                    ) : null}
+                  </Pressable>
+                );
+              }}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
 
 export default function FuelPricesScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { user } = useAuth();
+  const tabBarScrollHandler = useTabBarScrollHandler();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
+  const [areaName, setAreaName] = useState('');
+  const [doeAreas, setDoeAreas] = useState<string[]>([]);
+  const [areasFromDoe, setAreasFromDoe] = useState(false);
   const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
-  const [bulletin, setBulletin] = useState<FuelPriceBulletin | null>(null);
-  const [pastBulletins, setPastBulletins] = useState<FuelPriceBulletin[]>([]);
+  const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
+  const [doeFetchAt, setDoeFetchAt] = useState<string | null>(null);
+  const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
   const [pastWeekPrices, setPastWeekPrices] = useState<FuelPriceRow[]>([]);
   const [trend, setTrend] = useState<{ bulletin_date: string; price_per_liter: number }[]>([]);
-  const [verifiedCommunity, setVerifiedCommunity] = useState<
-    { report_id: string; station_name: string; reported_price: number; confirmation_count: number }[]
-  >([]);
+  const [verifiedCommunity, setVerifiedCommunity] = useState<VerifiedCommunityPrice[]>([]);
   const [pendingCommunity, setPendingCommunity] = useState<PendingCommunityReport[]>([]);
+  const [stations, setStations] = useState<FuelStationOption[]>([]);
   const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pricesLoading, setPricesLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const historyLoadedFor = useRef<string | null>(null);
 
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
+  const areaLabel = areaName || 'All cities';
+
+  const areas = useMemo(() => {
+    if (doeAreas.length > 0) return doeAreas;
+    return [...(REGION_FALLBACK_CITIES[region] ?? [])];
+  }, [doeAreas, region]);
+
+  const regionOptions = useMemo(
+    () => DOE_REGIONS.map((r) => ({ value: r.code, label: r.name })),
+    []
+  );
+  const fuelOptions = useMemo(
+    () => DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name })),
+    []
+  );
+  const areaOptions = useMemo(
+    () => [
+      { value: '', label: 'All cities' },
+      ...areas.map((name) => ({ value: name, label: name })),
+    ],
+    [areas]
+  );
 
   const companyOptions = useMemo(
     () => prices.map((row) => ({ value: row.oil_company.slug, label: row.oil_company.name })),
     [prices]
   );
 
-  const load = useCallback(async () => {
+  /** Region-scoped data only — skips 52-week history and area/fuel price refetch. */
+  const loadRegion = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setLoading(false);
       setRefreshing(false);
@@ -84,23 +344,28 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
-      const [latest, community, weeks, pending] = await Promise.all([
+      const [latest, pending, regionStations, websiteFetchAt] = await Promise.all([
         fetchLatestBulletinForRegion(region),
-        fetchFreshVerifiedPrices(region, fuelType).catch(() => []),
-        fetchBulletinsForRegion(region, 12).catch(() => []),
-        fetchPendingReports(50, { regionCode: region, fuelTypeCode: fuelType }).catch(() => []),
+        fetchPendingReports(50, { regionCode: region }).catch((e) => {
+          console.warn('Pending community reports failed', e);
+          return [];
+        }),
+        fetchFuelStationsByRegion(region).catch((e) => {
+          console.warn('Fuel stations failed', e);
+          return [];
+        }),
+        fetchLatestDoeWebsiteFetchAt().catch((e) => {
+          console.warn('DOE fetch timestamp failed', e);
+          return null;
+        }),
       ]);
+
       setBulletin(latest);
-      setPastBulletins(weeks);
-      setVerifiedCommunity(
-        community.slice(0, 8).map((c) => ({
-          report_id: c.report_id,
-          station_name: c.station_name,
-          reported_price: c.reported_price,
-          confirmation_count: c.confirmation_count ?? VERIFY_CONFIRMATIONS_REQUIRED,
-        }))
-      );
+      setDoeFetchAt(websiteFetchAt);
       setPendingCommunity(pending);
+      setStations(regionStations);
+      historyLoadedFor.current = null;
+
       if (user && pending.length > 0) {
         const voted = await fetchConfirmedReportIds(
           user.id,
@@ -112,40 +377,150 @@ export default function FuelPricesScreen() {
       }
 
       if (!latest) {
+        setDoeAreas([]);
+        setAreasFromDoe(false);
         setPrices([]);
-        setTrend([]);
-        setPastWeekPrices([]);
         return;
       }
 
-      const rows = await fetchFuelPricesForBulletin(latest.id, region, fuelType);
-      setPrices(rows);
-
-      const slug = rows.some((r) => r.oil_company.slug === trendCompanySlug)
-        ? trendCompanySlug
-        : (rows[0]?.oil_company.slug ?? 'petron');
-      if (slug !== trendCompanySlug) setTrendCompanySlug(slug);
-
-      const points = slug ? await fetchPriceTrend(region, fuelType, slug) : [];
-      setTrend(points.slice(-12));
+      const cityAreas = await fetchBulletinAreas(latest.id, region).catch((): string[] => []);
+      setDoeAreas(cityAreas);
+      setAreasFromDoe(cityAreas.length > 0);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load fuel prices');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [region, fuelType, trendCompanySlug, user]);
+  }, [region, user]);
 
   useEffect(() => {
     setSelectedPastDate(null);
     setPastWeekPrices([]);
-  }, [region, fuelType]);
+    setAreaName('');
+    setPastBulletins([]);
+    setTrend([]);
+    setLoading(true);
+    void loadRegion();
+  }, [loadRegion]);
 
+  // Fuel / city change: only prices + verified community (fast path).
+  useEffect(() => {
+    if (!isSupabaseConfigured || loading) return;
+
+    let cancelled = false;
+    setPricesLoading(true);
+
+    const run = async () => {
+      try {
+        const communityPromise = fetchFreshVerifiedPrices(region, fuelType).catch((e) => {
+          console.warn('Verified community prices failed', e);
+          return [] as VerifiedCommunityPrice[];
+        });
+
+        if (!bulletin) {
+          const community = await communityPromise;
+          if (cancelled) return;
+          setVerifiedCommunity(community);
+          setPrices([]);
+          return;
+        }
+
+        // Prefer DOE city prices when that area exists in the bulletin; otherwise
+        // fetchFuelPricesForBulletin falls back to region-wide mins.
+        const areaForDoe = areasFromDoe && areaName ? areaName : '';
+        const [rows, community] = await Promise.all([
+          fetchFuelPricesForBulletin(bulletin.id, region, fuelType, areaForDoe),
+          communityPromise,
+        ]);
+        if (cancelled) return;
+        setPrices(rows);
+        setVerifiedCommunity(community);
+
+        setTrendCompanySlug((current) =>
+          rows.some((r) => r.oil_company.slug === current)
+            ? current
+            : (rows[0]?.oil_company.slug ?? 'petron')
+        );
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Failed to load prices');
+        }
+      } finally {
+        if (!cancelled) setPricesLoading(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [bulletin, region, fuelType, areaName, areasFromDoe, loading]);
+
+  // History tab: load 52 weeks only when opened (not on every This week visit).
+  useEffect(() => {
+    if (view !== 'history' || !bulletin || loading) return;
+    const key = `${region}:${fuelType}:${trendCompanySlug}`;
+    if (historyLoadedFor.current === key) return;
+
+    let cancelled = false;
+    void Promise.all([
+      fetchBulletinsForRegion(region, HISTORY_WEEKS).catch(() => []),
+      fetchPriceTrend(region, fuelType, trendCompanySlug).catch(() => []),
+    ]).then(([weeks, points]) => {
+      if (cancelled) return;
+      setPastBulletins(weeks);
+      setTrend(points.slice(-HISTORY_WEEKS));
+      historyLoadedFor.current = key;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [view, bulletin, region, fuelType, trendCompanySlug, loading]);
+
+  useEffect(() => {
+    if (view !== 'history' || !trendCompanySlug || loading) return;
+    void fetchPriceTrend(region, fuelType, trendCompanySlug)
+      .then((points) => setTrend(points.slice(-HISTORY_WEEKS)))
+      .catch(() => setTrend([]));
+  }, [trendCompanySlug, region, fuelType, view, loading]);
+
+  const hasFocusedOnce = useRef(false);
   useFocusEffect(
     useCallback(() => {
+      if (!hasFocusedOnce.current) {
+        hasFocusedOnce.current = true;
+        return;
+      }
       setLoading(true);
-      void load();
-    }, [load])
+      setVerifiedCommunity([]);
+      setPendingCommunity([]);
+      setStations([]);
+      setConfirmedIds(new Set());
+      void loadRegion();
+    }, [loadRegion])
+  );
+
+  const { stationRows, areaRows } = useMemo(
+    () =>
+      buildStationPriceRows(
+        stations,
+        verifiedCommunity,
+        pendingCommunity,
+        prices,
+        areaName,
+        fuelType
+      ),
+    [stations, verifiedCommunity, pendingCommunity, prices, areaName, fuelType]
+  );
+
+  const pendingForFuel = useMemo(
+    () =>
+      pendingCommunity.filter(
+        (report) => !report.fuel_type?.code || report.fuel_type.code === fuelType
+      ),
+    [pendingCommunity, fuelType]
   );
 
   const handleConfirmPrice = async (report: PendingCommunityReport) => {
@@ -157,25 +532,18 @@ export default function FuelPricesScreen() {
     try {
       await confirmCommunityReport(report.id);
       Alert.alert(
-        'Thanks',
+        'Confirmed',
         report.confirmation_count + 1 >= VERIFY_CONFIRMATIONS_REQUIRED
-          ? 'This price is now verified.'
-          : `Marked as accurate. ${confirmationsLabel(report.confirmation_count + 1)}.`
+          ? 'Report is now verified for display.'
+          : `${report.confirmation_count + 1}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`
       );
-      await load();
+      await loadRegion();
     } catch (e) {
-      Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setConfirmingId(null);
     }
   };
-
-  useEffect(() => {
-    if (loading || !trendCompanySlug || !fuelType) return;
-    void fetchPriceTrend(region, fuelType, trendCompanySlug)
-      .then((points) => setTrend(points.slice(-12)))
-      .catch(() => setTrend([]));
-  }, [trendCompanySlug, region, fuelType, loading]);
 
   useEffect(() => {
     if (!selectedPastDate || !fuelType) {
@@ -184,14 +552,11 @@ export default function FuelPricesScreen() {
     }
     const selected = pastBulletins.find((b) => b.bulletin_date === selectedPastDate);
     if (!selected) return;
-    void fetchFuelPricesForBulletin(selected.id, region, fuelType)
+    const areaForDoe = areasFromDoe && areaName ? areaName : '';
+    void fetchFuelPricesForBulletin(selected.id, region, fuelType, areaForDoe)
       .then(setPastWeekPrices)
       .catch(() => setPastWeekPrices([]));
-  }, [selectedPastDate, pastBulletins, region, fuelType]);
-
-  const lowest = prices[0] ?? null;
-  const maxPrice = prices.length ? Math.max(...prices.map((p) => p.price_per_liter)) : 0;
-  const minPrice = prices.length ? Math.min(...prices.map((p) => p.price_per_liter)) : 0;
+  }, [selectedPastDate, pastBulletins, region, fuelType, areaName, areasFromDoe]);
 
   const historySummary = useMemo(() => {
     if (trend.length < 2) return null;
@@ -204,6 +569,19 @@ export default function FuelPricesScreen() {
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
 
+  const latestFetchLabel = useMemo(() => {
+    const iso = doeFetchAt ?? bulletin?.last_loaded_at;
+    if (!iso) return null;
+    const loaded = new Date(iso);
+    if (Number.isNaN(loaded.getTime())) return null;
+    return loaded.toLocaleDateString('en-PH', {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }, [doeFetchAt, bulletin]);
+
   if (!isSupabaseConfigured) {
     return (
       <View style={styles.flex}>
@@ -214,6 +592,8 @@ export default function FuelPricesScreen() {
 
   return (
     <ScrollView
+      onScroll={tabBarScrollHandler}
+      scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.padding}
       refreshControl={
@@ -221,7 +601,7 @@ export default function FuelPricesScreen() {
           refreshing={refreshing}
           onRefresh={() => {
             setRefreshing(true);
-            load();
+            void loadRegion();
           }}
           tintColor={palette.primary}
         />
@@ -229,7 +609,13 @@ export default function FuelPricesScreen() {
       <PageHero
         module="prices"
         title="Fuel Prices"
-        subtitle={`${regionLabel} · ${fuelLabel}`}
+        subtitle={
+          bulletin
+            ? `${regionLabel} · ${fuelLabel} · ${areaLabel}\nLatest DOE website fetch: ${
+                latestFetchLabel ?? formatBulletinWeek(bulletin.bulletin_date)
+              }`
+            : `${regionLabel} · ${fuelLabel}`
+        }
       />
 
       <SegmentedToggle
@@ -242,24 +628,42 @@ export default function FuelPricesScreen() {
         ]}
       />
 
-      <FormSection title="Where and what" subtitle="Change these anytime" module="prices">
-        <ChipSelect
-          label="Region"
-          options={DOE_REGIONS.map((r) => ({ value: r.code, label: r.name }))}
-          value={region}
-          onChange={setRegion}
-          hideLabel
-          module="prices"
-        />
-        <ChipSelect
-          label="Fuel type"
-          options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
-          value={fuelType}
-          onChange={setFuelType}
-          hideLabel
-          module="prices"
-        />
-      </FormSection>
+      <View style={styles.filterSection}>
+        <View style={styles.filterSectionHeader}>
+          <View style={styles.filterSectionAccent} />
+          <View style={styles.filterSectionCopy}>
+            <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Find prices</Text>
+            <Text style={[styles.filterSectionSubtitle, { color: theme.textSecondary }]}>Tap each field to choose region, city, and fuel</Text>
+          </View>
+        </View>
+        <Card style={styles.filterCard}>
+          <PriceFilterField
+            label="Region"
+            value={region}
+            options={regionOptions}
+            onChange={setRegion}
+            icon="map-marker-outline"
+          />
+          <PriceFilterField
+            label="City / area"
+            value={areaName}
+            options={areaOptions}
+            onChange={setAreaName}
+            icon="office-building-outline"
+            placeholder="All cities"
+          />
+          <PriceFilterField
+            label="Fuel type"
+            value={fuelType}
+            options={fuelOptions}
+            onChange={setFuelType}
+            icon="gas-station"
+          />
+          {!areasFromDoe && areas.length > 0 ? (
+            <Text style={[styles.hint, { color: theme.textSecondary }]}>Cities listed for browsing stations. DOE has no per-city prices for this region this week — station prices use community reports or region brand estimates.</Text>
+          ) : null}
+        </Card>
+      </View>
 
       {error ? (
         <Card style={{ borderColor: palette.danger, backgroundColor: palette.dangerSoft }}>
@@ -276,116 +680,95 @@ export default function FuelPricesScreen() {
         </View>
       ) : view === 'now' ? (
         <>
-          {lowest ? (
-            <StatCard
-              variant="primary"
-              module="prices"
-              label={`Lowest this week · ${bulletin ? formatDate(bulletin.bulletin_date) : ''}`}
-              value={`${formatCurrency(lowest.price_per_liter)}/L`}
-              meta={lowest.oil_company.name}
-            />
-          ) : (
-            <EmptyState
-              title="No prices yet"
-              message="No DOE bulletin for this region and fuel. Try another filter or pull to refresh."
-            />
-          )}
-
-          {prices.length > 0 ? (
-            <>
-              <SectionHeader
-                title="Brands this week"
-                subtitle="Lowest price first"
-                module="prices"
-              />
-              <Card elevated compact style={styles.compareCard}>
-                {prices.map((row, index) => (
-                  <PriceCompareRow
-                    key={row.id}
-                    rank={index + 1}
-                    company={row.oil_company.name}
-                    price={row.price_per_liter}
-                    maxPrice={maxPrice}
-                    minPrice={minPrice}
-                    isLowest={index === 0}
-                    isLast={index === prices.length - 1}
-                  />
-                ))}
-              </Card>
-            </>
-          ) : null}
-
           <SectionHeader
-            title="Community prices"
-            subtitle={`Unverified until ${VERIFY_CONFIRMATIONS_REQUIRED} people confirm`}
-            module="community"
+            title="Stations & prices"
+            subtitle={
+              areaName
+                ? `${fuelLabel} at stations in ${areaName}`
+                : `${fuelLabel} stations in ${regionLabel}`
+            }
+            module="prices"
           />
-          <Card elevated>
-            {verifiedCommunity.length === 0 && pendingCommunity.length === 0 ? (
-              <Text style={[styles.emptyCommunity, { color: theme.textSecondary }]}>
-                No station prices yet. Report what you paid — it shows here as unverified.
-              </Text>
-            ) : null}
-            {verifiedCommunity.map((item, index) => (
-              <View key={item.report_id}>
-                {index === 0 ? <SourceBadge source="community" /> : null}
-                <ListRow
-                  title={item.station_name}
-                  value={`${formatCurrency(item.reported_price)}/L`}
-                  subtitle={`Verified · ${usersConfirmedLabel(item.confirmation_count)}`}
-                  highlight
-                  isLast={index === verifiedCommunity.length - 1 && pendingCommunity.length === 0}
-                />
+          <Card elevated style={styles.stationListCard}>
+            {pricesLoading ? (
+              <View style={styles.softLoading}>
+                <ActivityIndicator color={palette.primary} />
               </View>
-            ))}
-            {pendingCommunity.map((report, index) => {
-              const isOwn = Boolean(user && report.reported_by === user.id);
-              const alreadyVoted = confirmedIds.has(report.id);
-              const isLast = index === pendingCommunity.length - 1;
-              return (
-                <View
-                  key={report.id}
-                  style={[
-                    styles.pendingRow,
-                    !isLast && { borderBottomColor: theme.borderLight, borderBottomWidth: StyleSheet.hairlineWidth },
-                  ]}>
-                  <ListRow
-                    title={report.station?.name ?? 'Station'}
-                    value={`${formatCurrency(report.reported_price)}/L`}
-                    subtitle={`Unverified · ${usersConfirmedLabel(report.confirmation_count)}`}
-                    isLast
-                  />
-                  {isOwn ? (
-                    <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
-                      You reported this · {report.confirmation_count}/{VERIFY_CONFIRMATIONS_REQUIRED} needed
-                    </Text>
-                  ) : alreadyVoted ? (
-                    <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
-                      You confirmed this · {usersConfirmedLabel(report.confirmation_count)}
-                    </Text>
-                  ) : (
-                    <Pressable
-                      onPress={() => handleConfirmPrice(report)}
-                      disabled={confirmingId === report.id}
-                      style={({ pressed }) => [
-                        styles.voteBtn,
-                        pressed && styles.reportBtnPressed,
-                        confirmingId === report.id && { opacity: 0.5 },
-                      ]}>
-                      <Text style={styles.voteBtnText}>
-                        {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              );
-            })}
+            ) : null}
+            <StationPriceTable rows={stationRows} areaRows={areaRows} />
             <Pressable
               onPress={() => router.push('/(tabs)/prices/report')}
               style={({ pressed }) => [styles.reportBtn, pressed && styles.reportBtnPressed]}>
-              <Text style={styles.reportBtnText}>Report a price</Text>
+              <Text style={styles.reportBtnText}>Report a station price</Text>
             </Pressable>
           </Card>
+
+          {pendingForFuel.length > 0 ? (
+            <>
+              <SectionHeader
+                title="Help verify"
+                subtitle={`Confirm a station price (${VERIFY_CONFIRMATIONS_REQUIRED} needed)`}
+                module="community"
+              />
+              <Card elevated>
+                {pendingForFuel.map((report, index) => {
+                  const isOwn = Boolean(user && report.reported_by === user.id);
+                  const alreadyVoted = confirmedIds.has(report.id);
+                  const isLast = index === pendingForFuel.length - 1;
+                  const stationTitle = report.station?.name ?? 'Station';
+                  const fuelPart = report.fuel_type?.name ?? 'Fuel';
+                  return (
+                    <View
+                      key={report.id}
+                      style={[
+                        styles.pendingRow,
+                        !isLast && {
+                          borderBottomColor: theme.borderLight,
+                          borderBottomWidth: StyleSheet.hairlineWidth,
+                        },
+                      ]}>
+                      <View style={styles.verifyRow}>
+                        <View style={styles.verifyText}>
+                          <Text
+                            style={[styles.verifyTitle, { color: theme.text }]}
+                            numberOfLines={2}>
+                            {stationTitle}
+                          </Text>
+                          <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                            {formatCurrency(report.reported_price)}/L · {fuelPart} ·{' '}
+                            {usersConfirmedLabel(report.confirmation_count)}
+                          </Text>
+                        </View>
+                      </View>
+                      {isOwn ? (
+                        <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                          You reported this · {report.confirmation_count}/
+                          {VERIFY_CONFIRMATIONS_REQUIRED} needed
+                        </Text>
+                      ) : alreadyVoted ? (
+                        <Text style={[styles.voteHint, { color: theme.textSecondary }]}>
+                          You confirmed this · {usersConfirmedLabel(report.confirmation_count)}
+                        </Text>
+                      ) : (
+                        <Pressable
+                          onPress={() => handleConfirmPrice(report)}
+                          disabled={confirmingId === report.id}
+                          style={({ pressed }) => [
+                            styles.voteBtn,
+                            pressed && styles.reportBtnPressed,
+                            confirmingId === report.id && { opacity: 0.5 },
+                          ]}>
+                          <Text style={styles.voteBtnText}>
+                            {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  );
+                })}
+              </Card>
+            </>
+          ) : null}
         </>
       ) : (
         <>
@@ -394,13 +777,11 @@ export default function FuelPricesScreen() {
               title="Pick a brand"
               subtitle={`Weekly ${fuelLabel} prices for ${companyName}`}
               module="prices">
-              <ChipSelect
-                label="Company"
-                options={companyOptions}
+              <SelectField
+                label="Brand"
                 value={trendCompanySlug}
+                options={companyOptions}
                 onChange={setTrendCompanySlug}
-                hideLabel
-                module="prices"
               />
             </FormSection>
           ) : null}
@@ -485,19 +866,160 @@ export default function FuelPricesScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  compareCard: { paddingVertical: spacing.xs },
+  padding: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
+  compareCard: { paddingVertical: spacing.sm },
+  filterSection: {
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  filterSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  filterSectionAccent: {
+    width: 4,
+    minHeight: 30,
+    borderRadius: 2,
+    backgroundColor: PRICE_GREEN,
+  },
+  filterSectionCopy: { flex: 1 },
+  filterSectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  filterSectionSubtitle: {
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  filterCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    padding: spacing.md,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  filterField: {
+    marginBottom: spacing.md,
+  },
+  filterLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  filterIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  filterControl: {
+    minHeight: 50,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  filterValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  filterBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 49, 92, 0.38)',
+    justifyContent: 'flex-end',
+  },
+  filterSheet: {
+    maxHeight: '70%',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  filterSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  filterSheetTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  filterOptionList: {
+    paddingHorizontal: spacing.md,
+  },
+  filterOption: {
+    minHeight: 50,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterOptionText: {
+    flex: 1,
+    fontSize: 15,
+    paddingRight: spacing.sm,
+  },
+  stationListCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    padding: spacing.md,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
   inlineLoading: {
     paddingVertical: spacing.xxl,
     alignItems: 'center',
   },
-  emptyCommunity: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: spacing.md,
+  softLoading: {
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+  },
+  hint: {
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 0,
+    marginBottom: spacing.sm,
   },
   pendingRow: {
     paddingBottom: spacing.sm,
+  },
+  verifyRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  verifyText: { flex: 1 },
+  verifyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 2,
   },
   voteHint: {
     fontSize: 12,
@@ -509,10 +1031,15 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginHorizontal: spacing.sm,
     marginBottom: spacing.sm,
-    backgroundColor: GasTaColors.forest,
+    backgroundColor: palette.success,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: 999,
+    borderRadius: radii.pill,
+    shadowColor: palette.success,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 2,
   },
   voteBtnText: {
     color: GasTaColors.textOnForest,
@@ -521,27 +1048,28 @@ const styles = StyleSheet.create({
   },
   reportBtn: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    backgroundColor: GasTaColors.creamLight,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: 999,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
+    borderColor: GasTaColors.forestGlow,
     marginTop: spacing.sm,
   },
   reportBtnPressed: { opacity: 0.88 },
   reportBtnText: {
-    color: GasTaColors.forestDark,
+    color: GasTaColors.textPrimary,
     fontSize: 13,
     fontWeight: '700',
   },
   summaryTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
+    letterSpacing: -0.2,
     marginBottom: spacing.xs,
   },
   summaryBody: {
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
 });

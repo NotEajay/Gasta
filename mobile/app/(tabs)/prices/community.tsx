@@ -46,18 +46,23 @@ export default function CommunityPricesScreen() {
     try {
       const [v, p] = await Promise.all([
         fetchFreshVerifiedPrices(),
-        user ? fetchPendingReports() : Promise.resolve([]),
+        fetchPendingReports(),
       ]);
       setVerified(v);
       setPending(p);
+    } catch (e) {
+      console.warn('Community prices load failed', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
+      // Reset state and reload to ensure fresh data from database
+      setVerified([]);
+      setPending([]);
       void load();
     }, [load])
   );

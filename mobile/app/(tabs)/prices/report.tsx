@@ -43,12 +43,12 @@ export default function ReportPriceScreen() {
   const { user, loading: authLoading } = useAuth();
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
-  const [companies, setCompanies] = useState<{ id: string; name: string; slug: string }[]>([]);
-  const [companyId, setCompanyId] = useState<string | null>(null);
-  const [stationType, setStationType] = useState('');
   const [stations, setStations] = useState<FuelStationOption[]>([]);
+  const [companies, setCompanies] = useState<{ id: string; name: string; slug: string }[]>([]);
   const [listedStationId, setListedStationId] = useState<string | null>(null);
   const [stationName, setStationName] = useState('');
+  const [stationType, setStationType] = useState('');
+  const [companyId, setCompanyId] = useState<string | null>(null);
   const [price, setPrice] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
@@ -218,7 +218,7 @@ export default function ReportPriceScreen() {
 
       <FormSection
         title="Station"
-        subtitle="Type the brand and station name. New stations stay in this region only."
+        subtitle="Type the brand and full station name (street + city). New stations stay in this region only."
         module="community">
         <ChipSelect
           label="Region"
@@ -236,7 +236,7 @@ export default function ReportPriceScreen() {
             setCompanyId(match?.id ?? null);
             setListedStationId(null);
           }}
-          placeholder="e.g. Petron, Shell, independent"
+          placeholder="e.g. Petron, Shell, PTT, Flying V"
           autoCapitalize="words"
         />
         {companies.length > 0 ? (
@@ -259,7 +259,7 @@ export default function ReportPriceScreen() {
             setStationName(text);
             setListedStationId(null);
           }}
-          placeholder="e.g. Petron EDSA Shaw"
+          placeholder="e.g. PTT Camarin Road Caloocan"
           autoCapitalize="words"
         />
         {stationOptions.length > 0 ? (
@@ -339,7 +339,10 @@ export default function ReportPriceScreen() {
             ) : null}
             <PrimaryButton
               label="Back to Fuel Prices"
-              onPress={() => router.replace('/(tabs)/prices')}
+              onPress={() => {
+                resetForm();
+                router.replace('/(tabs)/prices');
+              }}
               style={styles.successBtn}
             />
             <PrimaryButton label="Report another" variant="secondary" onPress={resetForm} />

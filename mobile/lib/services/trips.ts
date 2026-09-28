@@ -76,6 +76,21 @@ export async function fetchRecentTrips(userId: string, limit = 50): Promise<Trip
   return (data ?? []).map(parseTripRecord);
 }
 
+export async function fetchTripsForVehicle(
+  vehicleId: string,
+  limit = 100,
+): Promise<TripRecord[]> {
+  const { data, error } = await supabase
+    .from('trip_records')
+    .select('*')
+    .eq('vehicle_id', vehicleId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return (data ?? []).map(parseTripRecord);
+}
+
 export async function deleteTripRecord(tripRecordId: string): Promise<void> {
   const { error } = await supabase.from('trip_records').delete().eq('id', tripRecordId);
   if (error) throw error;

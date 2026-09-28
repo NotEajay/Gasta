@@ -21,7 +21,7 @@ export default function LabeledInput({ label, style, ...props }: LabeledInputPro
           {
             color: theme.text,
             borderColor: theme.border,
-            backgroundColor: '#FFFFFF',
+            backgroundColor: theme.surface,
           },
           style,
         ]}

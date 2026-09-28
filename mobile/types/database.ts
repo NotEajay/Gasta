@@ -84,21 +84,30 @@ export interface Database {
           id: string;
           bulletin_date: string;
           source_pdf_url: string | null;
+          source_urls: Record<string, string>;
           notes: string | null;
+          data_freshness_days: number | null;
+          last_loaded_at: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           bulletin_date: string;
           source_pdf_url?: string | null;
+          source_urls?: Record<string, string>;
           notes?: string | null;
+          data_freshness_days?: number | null;
+          last_loaded_at?: string | null;
           created_at?: string;
         };
         Update: {
           id?: string;
           bulletin_date?: string;
           source_pdf_url?: string | null;
+          source_urls?: Record<string, string>;
           notes?: string | null;
+          data_freshness_days?: number | null;
+          last_loaded_at?: string | null;
           created_at?: string;
         };
         Relationships: [];
@@ -111,6 +120,7 @@ export interface Database {
           oil_company_id: string;
           fuel_type_id: string;
           price_per_liter: number;
+          area_name: string;
           created_at: string;
         };
         Insert: {
@@ -120,6 +130,7 @@ export interface Database {
           oil_company_id: string;
           fuel_type_id: string;
           price_per_liter: number;
+          area_name?: string;
           created_at?: string;
         };
         Update: {
@@ -129,6 +140,7 @@ export interface Database {
           oil_company_id?: string;
           fuel_type_id?: string;
           price_per_liter?: number;
+          area_name?: string;
           created_at?: string;
         };
         Relationships: [];
@@ -208,6 +220,60 @@ export interface Database {
           last_refill_at?: string | null;
           created_at?: string;
           updated_at?: string;
+        };
+        Relationships: [];
+      };
+      profiles: {
+        Row: {
+          id: string;
+          full_name: string | null;
+          email: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id: string;
+          full_name?: string | null;
+          email?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          full_name?: string | null;
+          email?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      vehicle_shares: {
+        Row: {
+          "ShareID": string;
+          "vehicleID": string;
+          shared_by: string;
+          shared_with: string;
+          role: string;
+          created_at: string;
+          revoked: boolean;
+        };
+        Insert: {
+          "ShareID"?: string;
+          "vehicleID": string;
+          shared_by: string;
+          shared_with: string;
+          role: string;
+          created_at?: string;
+          revoked?: boolean;
+        };
+        Update: {
+          "ShareID"?: string;
+          "vehicleID"?: string;
+          shared_by?: string;
+          shared_with?: string;
+          role?: string;
+          created_at?: string;
+          revoked?: boolean;
         };
         Relationships: [];
       };
@@ -440,6 +506,42 @@ export interface Database {
         };
         Relationships: [];
       };
+      region_bulletin_weeks: {
+        Row: {
+          region_id: string;
+          region_code: string;
+          bulletin_id: string;
+          bulletin_date: string;
+          data_freshness_days: number | null;
+          last_loaded_at: string | null;
+          price_count: number;
+        };
+        Relationships: [];
+      };
+      doe_etl_state: {
+        Row: {
+          id: number;
+          last_website_fetch_at: string;
+          last_trigger: string | null;
+          last_run_id: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: number;
+          last_website_fetch_at: string;
+          last_trigger?: string | null;
+          last_run_id?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: number;
+          last_website_fetch_at?: string;
+          last_trigger?: string | null;
+          last_run_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
       submit_community_fuel_report: {
@@ -475,6 +577,15 @@ export interface Database {
           p_name: string;
         };
         Returns: string;
+      };
+      find_user_by_email: {
+        Args: {
+          lookup_email: string;
+        };
+        Returns: {
+          id: string;
+          full_name: string | null;
+        }[];
       };
     };
     Enums: Record<string, never>;

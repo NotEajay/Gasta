@@ -8,6 +8,7 @@ export default function TripLayout() {
         contentStyle: { backgroundColor: 'transparent' },
       }}>
       <Stack.Screen name="index" />
+      <Stack.Screen name="pick-map" />
       <Stack.Screen name="saved" />
       <Stack.Screen name="history" />
     </Stack>

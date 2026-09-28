@@ -1,11 +1,13 @@
 import { useFonts } from 'expo-font';
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
+import { DefaultTheme, ThemeProvider } from 'expo-router';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
 import { AppProviders, RootStack } from '@/components/auth/AuthGate';
-import { useColorScheme } from '@/components/useColorScheme';
+import { GasTaColors } from '@/constants/Theme';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -40,14 +42,29 @@ export default function RootLayout() {
   return <RootLayoutNav />;
 }
 
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+const GasTaNavigationTheme = {
+  ...DefaultTheme,
+  dark: false,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: GasTaColors.forest,
+    background: GasTaColors.white,
+    card: GasTaColors.cream,
+    text: GasTaColors.textPrimary,
+    border: GasTaColors.glassBorderSubtle,
+    notification: GasTaColors.forest,
+  },
+};
 
+function RootLayoutNav() {
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AppProviders>
-        <RootStack />
-      </AppProviders>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider value={GasTaNavigationTheme}>
+        <StatusBar style="dark" />
+        <AppProviders>
+          <RootStack />
+        </AppProviders>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }

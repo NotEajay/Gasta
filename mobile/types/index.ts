@@ -53,6 +53,99 @@ export interface VehicleCatalogEntry {
   fuel_type?: { code: string; name: string };
 }
 
+/**
+ * Access roles for a shared vehicle. The Owner is NOT one of these — ownership
+ * stays structural in vehicles.user_id and never appears in vehicle_shares.
+ */
+export type VehicleShareRole = 'Member' | 'Driver' | 'Operator' | 'Viewer';
+
+export const VEHICLE_SHARE_ROLES: readonly VehicleShareRole[] = [
+  'Member',
+  'Driver',
+  'Operator',
+  'Viewer',
+];
+
+/** Roles that may create/edit/void refills. Viewer is deliberately absent. */
+export const REFUILL_WRITE_ROLES: readonly VehicleShareRole[] = [
+  'Member',
+  'Driver',
+  'Operator',
+];
+
+/** Plain-English meaning shown under the role selector. */
+export const VEHICLE_SHARE_ROLE_DESCRIPTIONS: Record<VehicleShareRole, string> = {
+  Member: 'Regular shared access for someone who also uses this vehicle.',
+  Driver: 'For someone who drives this vehicle on behalf of the owner or as part of their work.',
+  Operator: 'For someone who helps manage the vehicle’s day-to-day operations.',
+  Viewer: 'Can view shared vehicle information and history only.',
+};
+
+/**
+ * A real refuelling event (migration 20240812000014). One row per refill, shared
+ * by every member of the vehicle.
+ *
+ * Declared as a `type` (not `interface`) on purpose: only type aliases get an
+ * implicit index signature, which is what lets it satisfy the supabase-js
+ * GenericTable constraint. types/database.ts is generated and is NOT hand-edited.
+ */
+export type VehicleRefill = {
+  id: string;
+  vehicle_id: string;
+  total_amount: number;
+  price_per_liter: number;
+  liters: number | null;
+  fuel_type_id: string | null;
+  logged_by: string;
+  paid_by: string;
+  occurred_at: string;
+  notes: string | null;
+  receipt_ref: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VehicleMemberRole = 'Owner' | VehicleShareRole;
+
+/** Returned by the vehicle_members(uuid) RPC — the only valid `paid_by` choices. */
+export type VehicleMember = {
+  user_id: string;
+  full_name: string | null;
+  role: VehicleMemberRole;
+};
+
+export interface UserProfile {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+}
+
+export interface UserProfileLookup {
+  id: string;
+  full_name: string | null;
+}
+
+export interface VehicleShare {
+  ShareID: string;
+  vehicleID: string;
+  shared_by: string;
+  shared_with: string;
+  role: VehicleShareRole;
+  created_at: string;
+  revoked: boolean;
+}
+
+export type SharedVehicle = {
+  vehicleId: string;
+  brand: string;
+  model: string;
+  /** Real fuel type from the vehicle row, so shared refills record it correctly. */
+  fuelTypeId: string | null;
+  role: VehicleShareRole;
+};
+
 export interface Vehicle {
   id: string;
   user_id: string;
@@ -103,3 +196,79 @@ export interface SavedTrip {
 }
 
 export type { MCDAWeights, ModeEvaluation, TripRecord } from './mcda';
+
+/* ------------------------------------------------------------------ *
+ * Phase 2: refill expense allocation
+ * ------------------------------------------------------------------ */
+
+/**
+ * Lifecycle of one proposed share of a refill.
+ *
+ * `pending` is the only state that is waiting on a human. `accepted` is the
+ * only state that counts toward a personal budget, and it only counts if the
+ * refill itself is not voided.
+ */
+export type RefillAllocationStatus = 'pending' | 'accepted' | 'rejected' | 'cancelled';
+
+/** `cancelled` is terminal and system-driven, so it is never user-selectable. */
+export const REFILL_ALLOCATION_STATUSES: readonly RefillAllocationStatus[] = [
+  'pending',
+  'accepted',
+  'rejected',
+  'cancelled',
+];
+
+/**
+ * Declared as a `type` (not `interface`) for the same reason as VehicleRefill:
+ * only type aliases get an implicit index signature, which is what satisfies the
+ * supabase-js GenericTable/GenericFunction constraint.
+ */
+export type RefillAllocation = {
+  id: string;
+  refill_id: string;
+  /** Recipient who must accept. NOT necessarily who paid at the station. */
+  user_id: string;
+  amount: number;
+  status: RefillAllocationStatus;
+  /** Collaborator who proposed this allocation. */
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  responded_at: string | null;
+  response_note: string | null;
+};
+
+/** Server-computed figures for one refill. Never derived on the client. */
+export type RefillAllocationSummary = {
+  /** pending + accepted. The amount actually spoken for. */
+  reserved: number;
+  acceptedTotal: number;
+  pendingTotal: number;
+  unassigned: number;
+};
+
+/** A split row as the UI needs it: allocation + who the person is. */
+export type RefillAllocationRow = RefillAllocation & {
+  fullName: string;
+  role: string;
+};
+
+export type SplitDraftLine = {
+  userId: string;
+  amount: string;
+};
+
+/** One row of my_pending_refill_allocations(). */
+export type PendingRefillAllocation = {
+  allocation_id: string;
+  refill_id: string;
+  amount: number;
+  created_by: string;
+  created_by_name: string;
+  vehicle_id: string;
+  brand: string;
+  model: string;
+  refill_total: number;
+  occurred_at: string;
+  response_note: string | null;
+};

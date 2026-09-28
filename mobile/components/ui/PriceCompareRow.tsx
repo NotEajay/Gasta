@@ -2,7 +2,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import ProgressBar from '@/components/ui/ProgressBar';
-import { palette, radii, spacing, typography } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
 import { useTheme } from '@/lib/useTheme';
 
@@ -35,7 +35,9 @@ export default function PriceCompareRow({
         styles.row,
         !isLast && { borderBottomColor: theme.borderLight, borderBottomWidth: StyleSheet.hairlineWidth },
         isLowest && {
-          backgroundColor: theme.scheme === 'dark' ? '#064E3B33' : palette.successSoft,
+          backgroundColor: theme.scheme === 'dark' ? '#4CAF5033' : palette.successSoft,
+          borderWidth: 1,
+          borderColor: 'rgba(76, 175, 80, 0.28)',
           borderRadius: radii.md,
           marginHorizontal: -spacing.xs,
           paddingHorizontal: spacing.sm,
@@ -51,7 +53,7 @@ export default function PriceCompareRow({
         <Text
           style={[
             styles.rank,
-            { color: isLowest ? '#F8F0E5' : theme.textSecondary },
+            { color: isLowest ? GasTaColors.white : theme.textSecondary },
           ]}>
           {rank}
         </Text>
@@ -115,9 +117,16 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   badge: {
+    alignSelf: 'flex-start',
+    backgroundColor: palette.successSoft,
     color: palette.success,
     fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
+    fontWeight: '800',
+    lineHeight: 16,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    overflow: 'hidden',
+    marginTop: 4,
   },
 });
