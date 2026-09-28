@@ -8,8 +8,9 @@ from datetime import date
 from pathlib import Path
 
 from .constants import ALL_REGION_KEYS, REGION_KEY_BY_CODE
-from .discover import DiscoveredBulletin, discover_latest_weeks
-from .download import download_region_bulletins, normalize_region, slug_to_url
+from .discover import DiscoveredBulletin, UpstreamUnavailableError, discover_latest_weeks
+from .download import download_region_bulletins, normalize_region
+from .freshness import describe_freshness, is_bulletin_stale
 from .load_supabase import _client, load_bulletin, record_doe_website_fetch, touch_bulletin_fetched_at
 from .parse_bulletin import (
     BulletinDateUnknown,
@@ -27,6 +28,57 @@ class SyncResult:
     companies: int
     skipped: bool = False
     message: str = ""
+    # True when the newest week this region has -- either just resolved or already
+    # stored -- is too old for the app to be considered current. A stale result must
+    # fail the run even when it was "skipped", which is the silent pass that let NCR
+    # sit on 2026-08-25 while every scheduled run reported success.
+    stale: bool = False
+    # True when DOE is not currently serving this region's page at all. This is a
+    # property of the source, not of the pipeline: there is nothing to download,
+    # parse, or load, so it is reported as a warning rather than a run failure. It is
+    # never inferred from a region being old -- an old-but-real bulletin stays stale.
+    upstream_unavailable: bool = False
+
+    @property
+    def status(self) -> str:
+        """Short status label used in the run's per-region log table."""
+        if self.upstream_unavailable:
+            return "UPSTREAM UNAVAILABLE"
+        if self.stale:
+            return "STALE"
+        if "Failed" in self.message:
+            return "ERROR"
+        if not self.week_start:
+            return "NO DATA"
+        return "CURRENT"
+
+
+def summarise_results(results: list[SyncResult]) -> str:
+    """One-line overall verdict for a sync-all run.
+
+    Semantics, in order:
+      * any available region STALE or ERROR   -> FAILED
+      * every region upstream unavailable     -> FAILED (no usable data source at all)
+      * some unavailable, rest current        -> SUCCESS WITH N UPSTREAM-UNAVAILABLE
+      * all current                           -> SUCCESS
+
+    "Upstream unavailable" is deliberately not a blanket catch-all: it only downgrades
+    a region that DOE is genuinely not serving, and it can never make a run pass when
+    nothing usable was retrieved, nor when a reachable region is stale or broken.
+    """
+    if not results:
+        return "FAILED (no regions processed)"
+    unavailable = [r for r in results if r.upstream_unavailable]
+    available = [r for r in results if not r.upstream_unavailable]
+    broken = [r for r in available if r.stale or r.status == "ERROR" or not r.week_start]
+    if broken:
+        return "FAILED"
+    if not available:
+        return "FAILED (all regions upstream unavailable)"
+    if unavailable:
+        return f"SUCCESS WITH {len(unavailable)} UPSTREAM-UNAVAILABLE REGION"
+    return "SUCCESS"
+
 
 
 def _region_already_loaded(bulletin_date: date, region_code: str) -> bool:
@@ -61,23 +113,56 @@ def _region_already_loaded(bulletin_date: date, region_code: str) -> bool:
     return bool(rows)
 
 
+def _newest_stored_week(region_code: str) -> date | None:
+    """Newest bulletin week that actually has prices for a region."""
+    client = _client()
+    response = (
+        client.table("region_bulletin_weeks")
+        .select("bulletin_date")
+        .eq("region_code", region_code)
+        .order("bulletin_date", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data if response else []
+    if not rows:
+        return None
+    return date.fromisoformat(rows[0]["bulletin_date"])
+
+
 def _sync_discovered(
     discovered: DiscoveredBulletin,
     *,
     dest_dir: str | Path = "data/bulletins",
     dry_run: bool = False,
     force: bool = False,
+    today: date | None = None,
 ) -> SyncResult:
     region_code = discovered.region_code
     region_key = REGION_KEY_BY_CODE[region_code]
+    today = today or date.today()
+    # Freshness is judged on the newest week this region has, whether just resolved or
+    # already stored. Judging only the resolved week would let a re-parse of an old
+    # week look stale even when the database is current, and judging only the stored
+    # week would hide a fresh week that failed to load.
+    newest_known = _newest_stored_week(region_code)
+    judged_week = max(
+        (w for w in (discovered.week_start, newest_known) if w is not None),
+        default=discovered.week_start,
+    )
+    stale = is_bulletin_stale(judged_week, today)
 
-    pdf_paths = download_region_bulletins(region_key, discovered.slugs, dest_dir)
+    pdf_paths = download_region_bulletins(
+        region_key, discovered.slugs, dest_dir, discovered.urls
+    )
     parsed = parse_region_pdfs(
         pdf_paths,
         region_code,
         fallback_week_start=discovered.week_start,
-        source_urls=[slug_to_url(slug) for slug in discovered.slugs],
+        source_urls=list(discovered.download_urls()),
     )
+
+    freshness_note = describe_freshness(judged_week, today)
 
     # Check for validation errors
     if parsed.validation_errors:
@@ -90,6 +175,7 @@ def _sync_discovered(
                 companies=len({p.company for p in parsed.prices}),
                 skipped=True,
                 message=f"Validation errors: {'; '.join(parsed.validation_errors)}",
+                stale=stale,
             )
 
     if not force and not dry_run and _region_already_loaded(parsed.bulletin_date, region_code):
@@ -103,8 +189,9 @@ def _sync_discovered(
             skipped=True,
             message=(
                 f"{region_code} prices for bulletin {parsed.bulletin_date.isoformat()} "
-                "already in Supabase - skipped."
+                f"already in Supabase - skipped. {freshness_note}."
             ),
+            stale=stale,
         )
 
     pdf_path_display = "; ".join(str(p) for p in pdf_paths)
@@ -117,6 +204,7 @@ def _sync_discovered(
             price_rows=len(parsed.prices),
             companies=len({p.company for p in parsed.prices}),
             message="Dry run - no database write.",
+            stale=stale,
         )
 
     load_stats = load_bulletin(parsed)
@@ -131,6 +219,7 @@ def _sync_discovered(
         price_rows=load_stats["price_rows"],
         companies=load_stats["companies"],
         message=message,
+        stale=stale,
     )
 
 
@@ -202,6 +291,21 @@ def sync_all_regions(
                     force=force,
                 )
             )
+        except UpstreamUnavailableError as exc:
+            # DOE is not serving this region right now. Reported, but non-fatal: the
+            # other regions are still ingested normally, and nothing is loaded or
+            # faked for this one.
+            results.append(
+                SyncResult(
+                    region_code=normalize_region(region_key),
+                    week_start="",
+                    pdf_path="",
+                    price_rows=0,
+                    companies=0,
+                    message=f"Upstream unavailable: {exc}",
+                    upstream_unavailable=True,
+                )
+            )
         except Exception as exc:  # noqa: BLE001 — one region must not stop the rest
             results.append(
                 SyncResult(
@@ -211,10 +315,23 @@ def sync_all_regions(
                     price_rows=0,
                     companies=0,
                     message=f"Failed: {type(exc).__name__}: {exc}",
+                    # A region that could not be resolved at all is by definition not current.
+                    stale=True,
                 )
             )
-    # Any region that resolved a DOE week means we contacted the website/CMS.
-    if not dry_run and any(r.week_start for r in results):
+    # The UI-facing "latest DOE fetch" timestamp means "we hold current data", not
+    # "we reached the website". Bumping it after a run whose newest week is stale is
+    # exactly what let the app show a fresh timestamp beside a month-old bulletin.
+    #
+    # Regions DOE is not serving are excluded from the judgement: they contribute no
+    # data, so they cannot make the stored dataset stale, and they must not stop the
+    # remaining regions from being recorded as refreshed. A run that retrieved nothing,
+    # or in which any *available* region was stale or broken, records nothing.
+    available = [r for r in results if not r.upstream_unavailable]
+    all_available_current = bool(available) and all(
+        not r.stale and r.week_start and "Failed" not in r.message for r in available
+    )
+    if not dry_run and all_available_current:
         record_doe_website_fetch()
     return results
 

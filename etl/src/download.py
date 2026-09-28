@@ -99,9 +99,14 @@ def slug_filename(region_code: str, slug: str) -> str:
     return f"{prefix}-{short}.pdf"
 
 
-def download_slug(region_code: str, slug: str, dest_dir: str | Path) -> Path:
+def download_slug(region_code: str, slug: str, dest_dir: str | Path, url: str | None = None) -> Path:
+    """Download one bulletin.
+
+    `url` is the link discovery actually found. It is required for DOE's media-API
+    documents, where reconstructing a legacy CMS guest URL from the filename 404s.
+    """
     dest = Path(dest_dir) / slug_filename(region_code, slug)
-    return download_pdf(slug_to_url(slug), dest)
+    return download_pdf(url or slug_to_url(slug), dest)
 
 
 def download_ncr_bulletin(week_start: date, dest_dir: str | Path) -> Path:
@@ -113,10 +118,18 @@ def download_region_bulletins(
     region_key: str,
     slugs: tuple[str, ...],
     dest_dir: str | Path,
+    urls: tuple[str | None, ...] = (),
 ) -> list[Path]:
-    """Download every CMS guest slug that makes up one macro-region bulletin week."""
+    """Download every bulletin PDF that makes up one macro-region week.
+
+    `urls` is parallel to `slugs`; a None entry falls back to the legacy CMS guest
+    URL built from that slug.
+    """
     region_code = normalize_region(region_key)
-    return [download_slug(region_code, slug, dest_dir) for slug in slugs]
+    return [
+        download_slug(region_code, slug, dest_dir, urls[index] if index < len(urls) else None)
+        for index, slug in enumerate(slugs)
+    ]
 
 
 def normalize_region(region: str) -> str:

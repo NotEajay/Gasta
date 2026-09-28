@@ -89,6 +89,16 @@ REGION_CODES = {
 
 DOE_CMS_GUEST_BASE = "https://prod-cms.doe.gov.ph/documents/d/guest/"
 
+# DOE moved bulletin hosting to a CloudFront media API. The region archive pages now
+# link to `/api/media/file/<url-encoded filename>?prefix=dev%2Fmedia` instead of the
+# legacy `documents/d/guest/<slug>` CMS paths. Both forms are still present on the
+# page — the legacy ones are frozen at older weeks — so discovery must read both.
+#
+# This is matched on the path segment rather than the CDN hostname on purpose: pinning
+# the hostname is exactly what made the previous breakage invisible, because a future
+# CDN change would again yield zero links and a silent fallback to stale data.
+DOE_MEDIA_PATH_MARKER = "/api/media/file/"
+
 # NCR PDF URL pattern on prod-cms.doe.gov.ph (week start date MMDDYYYY)
 NCR_PDF_URL_TEMPLATE = DOE_CMS_GUEST_BASE + "ncr-price-monitoring-{mmddyyyy}-pdf"
 
@@ -106,12 +116,23 @@ REGION_PAGE_SLUGS = {
     "MINDANAO": "mindanao-pump-prices",
 }
 
+# DOE intermittently serves its "Page Not Found" body, with HTTP 200, in place of a
+# region page that is actually available (observed for Visayas on 2026-09-28, failing
+# roughly two requests in three). A single 404 therefore proves nothing, and neither do
+# three: the page is retried several times before a region is reported as genuinely
+# unavailable, which keeps a flaky source from being mislabelled every other run.
+DOE_PAGE_UNAVAILABLE_ATTEMPTS = 5
+DOE_PAGE_UNAVAILABLE_RETRY_SECONDS = 3
+
 # Slug shapes that identify a genuine weekly price-monitoring bulletin for a region.
 # DOE has renamed these files many times, so each region accepts several families.
 REGION_SLUG_PATTERNS: dict[str, tuple[str, ...]] = {
     "NCR": (
         r"ncr-price-monitoring",
         r"^petro[-_]ncr",
+        # Current media series is titled "List of NCR Pump Prices for <range>.pdf",
+        # which carries neither of the historical markers above.
+        r"ncr-pump-prices",
     ),
     "NORTH_LUZON": (
         r"price-monitoring",
@@ -128,6 +149,12 @@ REGION_SLUG_PATTERNS: dict[str, tuple[str, ...]] = {
         r"^vfo[-_].*price-monitoring",
         r"visayas.*price-monitoring",
         r"^petro[-_]vis",
+        # Current media series: "NEW VFO PRICE MONITORING 092226.pdf" is prefixed
+        # with NEW, and "List of Visayas Pump Prices for <range>.pdf" carries no
+        # "price-monitoring" wording at all. Both are anchored to a Visayas/VFO
+        # marker so unrelated attachments stay rejected.
+        r"^new[-_]vfo[-_].*price-monitoring",
+        r"visayas[-_]pump[-_]prices",
     ),
     "MINDANAO": (
         r"lfro-price-monitoring",

@@ -91,7 +91,83 @@ Each macro-region has a retail pump prices archive page:
 https://doe.gov.ph/data-and-prices/liquid-fuels/retail-pump-prices/{region}-pump-prices
 ```
 
-That page server-renders a link to **every** bulletin PDF DOE has published for the region, so a plain HTTP request returns the full archive — no headless browser is involved. The PDFs themselves are served from CMS guest URLs on `prod-cms.doe.gov.ph`.
+That page links every bulletin PDF for the region. **Two link families are present and
+both are read:**
+
+| Family | Shape | Status |
+|--------|-------|--------|
+| Legacy CMS | `prod-cms.doe.gov.ph/documents/d/guest/<slug>` | Still rendered, but **frozen at 2026-08-25** |
+| Current media API | `<cdn>/api/media/file/<url-encoded filename>?prefix=dev%2Fmedia` | Serves all current weeks |
+
+When the same bulletin appears under both, the media link wins. The new family is
+matched on the `/api/media/file/` **path marker rather than the CDN hostname**, so a
+future CDN change fails the tests instead of silently reverting to stale data.
+
+> **Regression fixture:** `tests/fixtures/doe_ncr_pump_prices_2026-09-28.html` is a
+> sanitized capture of the current page. `test_discover_media.py` asserts discovery
+> finds the newest weeks from it. **If DOE changes its hosting again, update that
+> fixture first** — the failure mode this guards against is silent, not loud.
+
+### Staleness guard
+
+A run **fails (exit 1)** when the newest bulletin a region has is more than
+`MAX_BULLETIN_AGE_DAYS` (14) old. See `src/freshness.py`.
+
+This exists because a run could otherwise be "successful" while serving a month-old
+bulletin: discovery found an old week, that week was already stored, so the result was
+`skipped` and nothing counted as a failure. A stale week is reported even when it was
+skipped.
+
+**Why 14 days:** DOE weeks start Tuesday, so the current week is up to 6 days old.
+DOE also "regularly uploads a week's bulletin several days late (sometimes not until
+the following week)", which is 13 days — 14 absorbs that without masking a real outage.
+
+### Regional availability
+
+Not every region is published at all times. DOE serves its `"Page Not Found"` body —
+**with HTTP 200**, so status codes cannot detect it — for a region it is not currently
+publishing. It also serves that body *intermittently* for pages that are actually up
+(observed for Visayas on 2026-09-28, alternating roughly one request in two), so a
+single 404 proves nothing: the page is retried `DOE_PAGE_UNAVAILABLE_ATTEMPTS` times
+before a region is declared unavailable.
+
+Three conditions are kept strictly apart:
+
+| Condition | Meaning | Effect on the run |
+|-----------|---------|-------------------|
+| `CURRENT` | A fresh bulletin was found or already stored | healthy |
+| `STALE` | A real bulletin exists but is too old | **failure** |
+| `ERROR` | Download/parse/load failed | **failure** |
+| `UPSTREAM UNAVAILABLE` | DOE is not serving this region at all | **warning** |
+
+Rules that follow from that:
+
+- **No synthetic data is ever created.** An unavailable region loads nothing and its
+  old rows are left untouched — they simply are not reported as current.
+- **Unavailable is never inferred from age.** An old-but-real bulletin stays `STALE`
+  and still fails the run.
+- **Unavailable is not a blanket catch-all.** If *every* region is unavailable the run
+  fails: no usable data source must never look healthy. Likewise a reachable region
+  that is stale or broken fails regardless of how many other regions are unavailable.
+- **A reachable page with zero bulletin links is NOT unavailable.** The source is up,
+  so an empty archive is a genuine finding and keeps failing loudly.
+- **Recovery is automatic.** When DOE serves the page again, normal discovery and
+  freshness checks resume on the next run. No per-region exemption list exists, and no
+  code change is required.
+- The overall schedule can therefore succeed with partial regional availability.
+
+Detection is anchored to the `<title>` element rather than a body substring, because
+every valid DOE page embeds `"404 — Page Not Found"` and `NEXT_HTTP_ERROR_FALLBACK;404`
+inside its Next.js hydration payload.
+
+### Freshness timestamp
+
+The `doe_etl_state` timestamp shown in the app ("Latest DOE fetch") is advanced only
+when **every region that DOE is actually serving** came back current. It means *latest
+successful DOE data refresh*, not *all regions are current* — a region DOE is not
+publishing contributes no data and so cannot make the stored dataset stale.
+
+Fetching that page is a plain HTTP request — no headless browser is involved.
 
 NCR is also probed directly at its predictable slug `ncr-price-monitoring-MMDDYYYY-pdf`, because the archive page sometimes lags a week or two behind files that are already live on the CMS.
 

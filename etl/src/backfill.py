@@ -23,7 +23,7 @@ from .discover import (
     discover_region_documents,
     resolve_region_code,
 )
-from .download import download_slug, slug_to_url
+from .download import download_slug
 from .load_supabase import fetch_loaded_weeks, load_bulletin
 from .parse_bulletin import (
     BulletinDateUnknown,
@@ -107,13 +107,15 @@ def _parse_documents(
     parsed: list[ParsedBulletin] = []
     for document in documents:
         try:
-            path = download_slug(region_code, document.slug, dest_dir)
+            # Media-API documents must be fetched from the link DOE actually serves;
+            # rebuilding a legacy CMS guest URL from the filename 404s.
+            path = download_slug(region_code, document.slug, dest_dir, document.url)
             parsed.append(
                 parse_bulletin_pdf(
                     path,
                     region_code,
                     fallback_week_start=document.week_start,
-                    source_url=slug_to_url(document.slug),
+                    source_url=document.download_url(),
                 )
             )
         except BulletinNotMachineReadable as exc:

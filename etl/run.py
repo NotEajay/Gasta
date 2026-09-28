@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.automation import (
+    summarise_results,
     sync_all_regions,
     sync_latest_ncr,
     sync_latest_region,
@@ -23,6 +24,7 @@ from src.constants import ALL_REGION_KEYS
 from src.discover import discover_latest_region, discover_region_bulletins
 from src.download import download_ncr_bulletin, download_region_bulletins, normalize_region
 from src.export_sql import export_bulletin_sql
+from src.freshness import MAX_BULLETIN_AGE_DAYS, describe_freshness
 from src.load_supabase import load_bulletin
 from src.parse_bulletin import parse_bulletin_pdf, parse_region_pdfs
 
@@ -70,6 +72,63 @@ def cmd_export_sql(args: argparse.Namespace) -> None:
     print(f"Wrote {out} ({len(parsed.prices)} price rows)")
 
 
+def _status_table(results: list) -> str:
+    """Per-region status table, so a scheduled log never implies a region was
+    refreshed when it was not."""
+    width = max((len(r.region_code) for r in results), default=9)
+    lines = []
+    for result in results:
+        week = result.week_start or "-"
+        lines.append(f"{result.region_code:<{width}}  {result.status:<22}  {week}")
+    return "\n".join(lines)
+
+
+def _report_staleness(results: list) -> None:
+    """Explain, on stderr, exactly why a run is being failed for stale data."""
+    stale = [r for r in results if getattr(r, "stale", False) and not r.upstream_unavailable]
+    if not stale:
+        return
+    today = date.today()
+    print("STALE: newest bulletin is too old to serve as current DOE data.", file=sys.stderr)
+    for result in stale:
+        week = date.fromisoformat(result.week_start) if result.week_start else None
+        print(
+            f"  - {result.region_code}: {result.week_start or 'no week resolved'}; "
+            f"{describe_freshness(week, today)}",
+            file=sys.stderr,
+        )
+    print(
+        f"  Threshold: {MAX_BULLETIN_AGE_DAYS} days. DOE weeks start Tuesday, so a week is "
+        "up to 6 days old on its Tuesday; 14 days also absorbs the one full week of "
+        "publication delay DOE routinely has.",
+        file=sys.stderr,
+    )
+    print(
+        "  This usually means DOE's archive page changed and discovery is no longer "
+        "finding the newest bulletin. Check `python run.py list-weeks --region ncr`.",
+        file=sys.stderr,
+    )
+
+
+def _report_unavailable(results: list) -> None:
+    """Name the regions DOE is not currently serving, without calling them refreshed."""
+    unavailable = [r for r in results if r.upstream_unavailable]
+    if not unavailable:
+        return
+    print(
+        f"WARNING: {len(unavailable)} region(s) are not currently published by DOE "
+        "(upstream unavailable). No data was loaded for them:",
+        file=sys.stderr,
+    )
+    for result in unavailable:
+        print(f"  - {result.region_code}: {result.message}", file=sys.stderr)
+    print(
+        "  Ingestion resumes automatically once DOE serves the page again; no code "
+        "change is needed.",
+        file=sys.stderr,
+    )
+
+
 def cmd_sync_ncr(args: argparse.Namespace) -> None:
     result = sync_latest_ncr(
         dest_dir=args.out_dir,
@@ -77,6 +136,9 @@ def cmd_sync_ncr(args: argparse.Namespace) -> None:
         force=args.force,
     )
     print(sync_result_to_json(result))
+    _report_staleness([result])
+    if result.stale:
+        sys.exit(1)
     if result.skipped:
         sys.exit(0)
     if result.price_rows == 0 and not args.dry_run and "Failed" not in result.message:
@@ -91,6 +153,9 @@ def cmd_sync_region(args: argparse.Namespace) -> None:
         force=args.force,
     )
     print(sync_result_to_json(result))
+    _report_staleness([result])
+    if result.stale:
+        sys.exit(1)
     if result.price_rows == 0 and not args.dry_run and not result.skipped and "Failed" not in result.message:
         sys.exit(1)
 
@@ -102,6 +167,23 @@ def cmd_sync_all(args: argparse.Namespace) -> None:
         force=args.force,
     )
     print(json.dumps([json.loads(sync_result_to_json(r)) for r in results], indent=2))
+
+    print("\nDOE region status")
+    print("----------------")
+    print(_status_table(results))
+
+    _report_unavailable(results)
+    _report_staleness(results)
+
+    verdict = summarise_results(results)
+    print(f"\nOverall: {verdict}")
+
+    # Upstream-unavailable regions are reported but non-fatal. Everything else that is
+    # not "current" is a real failure: a stale week that is already stored reports
+    # `skipped`, which the price-row failure check ignores -- that combination is how
+    # NCR sat on 2026-08-25 while every scheduled run exited 0.
+    if verdict.startswith("FAILED"):
+        sys.exit(1)
     failures = [r for r in results if r.price_rows == 0 and not r.skipped and "Failed" in r.message]
     if failures and not args.dry_run:
         sys.exit(1)

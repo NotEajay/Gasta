@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  Sanitized excerpt of DOE's "Page Not Found" body, served with HTTP 200 in place of
+  a region archive page (observed for visayas-pump-prices on 2026-09-28).
+
+  DOE's site is a Next.js app, so this body is the 404 route's markup. Only the parts
+  that matter for detection are kept. Note the title is the reliable signal: a VALID
+  DOE region page also embeds the strings "404 - Page Not Found" and
+  "NEXT_HTTP_ERROR_FALLBACK;404" inside its hydration payload, so a naive body
+  substring search would misclassify healthy pages.
+-->
+<html lang="en">
+  <head>
+    <title>Page Not Found | Department of Energy</title>
+    <meta name="robots" content="noindex"/>
+  </head>
+  <body>
+    <main>
+      <h1>404 &mdash; Page Not Found</h1>
+      <p>The page you are looking for could not be found.</p>
+    </main>
+    <script>
+      self.__next_f.push([1, "6:E{\"digest\":\"NEXT_HTTP_ERROR_FALLBACK;404\"}"]);
+      self.__next_f.push([1, "e:[[\"$\",\"title\",\"0\",{\"children\":\"Page Not Found  Department of Energy\"}]]"]);
+    </script>
+  </body>
+</html>

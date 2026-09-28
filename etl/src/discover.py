@@ -11,13 +11,19 @@ files that are already live on the CMS.
 
 from __future__ import annotations
 
+import html
 import re
+import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
 from .constants import (
     CMS_PROBE_LOOKBACK_WEEKS,
+    DOE_MEDIA_PATH_MARKER,
+    DOE_PAGE_UNAVAILABLE_ATTEMPTS,
+    DOE_PAGE_UNAVAILABLE_RETRY_SECONDS,
     DOE_REGION_PAGE_URL,
     REGION_CODES,
     REGION_PAGE_SLUGS,
@@ -35,6 +41,17 @@ from .slug_dates import (
 )
 
 GUEST_SLUG_RE = re.compile(r"documents/d/guest/([a-z0-9][a-z0-9\-_]*pdf)", re.I)
+
+# DOE's current media links. Matched on the path marker rather than the CDN hostname,
+# so a future CDN change cannot silently blind discovery again. The filename segment is
+# percent-encoded and the link may carry a `?prefix=...` query that must be preserved
+# verbatim for the download to work, so the whole attribute value is captured and split
+# apart later by `split_media_url`.
+MEDIA_LINK_RE = re.compile(
+    r"""(?:href|src)\s*=\s*["']([^"']*""" + re.escape(DOE_MEDIA_PATH_MARKER) + r"""[^"']*)["']""",
+    re.I,
+)
+
 TRAILING_SEQUENCE_RE = re.compile(r"-(\d{1,3})$")
 LEADING_SEQUENCE_RE = re.compile(r"^(\d{1,3})-")
 MONTH_IN_SLUG_RE = re.compile(rf"(?<![a-z])({MONTH_ALTERNATION})(?![a-z])")
@@ -54,6 +71,63 @@ class BulletinDocument:
     sequence: int | None
     # Position on the DOE archive page, which lists the current series first.
     page_index: int = 0
+    # Where to actually GET this PDF. None means "use the legacy CMS guest URL for
+    # `slug`". Media-API documents must carry their real link here, because
+    # reconstructing a legacy guest URL from a media filename yields a 404.
+    url: str | None = None
+
+    def download_url(self) -> str:
+        """The URL that serves this document."""
+        if self.url:
+            return self.url
+        return slug_to_url(self.slug)
+
+
+def split_media_url(raw_url: str, base_url: str | None = None) -> tuple[str, str] | None:
+    """Split a DOE media-API link into (download_url, slug), or None if it isn't one.
+
+    The download URL is preserved as DOE serves it -- percent-encoding and the
+    `?prefix=dev%2Fmedia` query are both required, so it is never rebuilt. The slug is
+    derived from the decoded filename and normalised to the same shape the legacy
+    guest slugs use, so every downstream date/region/filename helper keeps working
+    unchanged.
+    """
+    candidate = html.unescape(raw_url.strip())
+    if DOE_MEDIA_PATH_MARKER not in candidate:
+        return None
+
+    # DOE emits absolute links today, but urljoin keeps a relative form working.
+    if base_url:
+        candidate = urllib.parse.urljoin(base_url, candidate)
+
+    parsed = urllib.parse.urlsplit(candidate)
+    filename = parsed.path.split(DOE_MEDIA_PATH_MARKER, 1)[1]
+    filename = urllib.parse.unquote(filename).strip().strip("/")
+    if not filename:
+        return None
+
+    # Rebuild the URL with the same scheme/netloc/path/query but a decoded path, so
+    # the download works whether DOE percent-encodes or not.
+    decoded_path = parsed.path.split(DOE_MEDIA_PATH_MARKER, 1)[0] + DOE_MEDIA_PATH_MARKER
+    download_url = urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, urllib.parse.quote(decoded_path + filename), parsed.query, "")
+    )
+
+    return download_url, media_filename_to_slug(filename)
+
+
+def media_filename_to_slug(filename: str) -> str:
+    """Turn a DOE media filename into the slug shape the rest of the ETL expects.
+
+    DOE's media filenames are human-readable ("NCR Price Monitoring Sep 1-7 2026.pdf")
+    rather than CMS slugs. `normalize_slug` deliberately leaves whitespace alone --
+    legacy guest slugs never contain any -- so spaces are folded to hyphens here, and
+    every resulting slug then passes the unchanged region, date, sub-region and
+    sequence helpers.
+    """
+    stem = filename.removesuffix(".pdf").strip()
+    stem = re.sub(r"\s+", "-", stem)
+    return normalize_slug(stem)
 
 
 @dataclass(frozen=True)
@@ -64,6 +138,17 @@ class DiscoveredBulletin:
     week_start: date
     slugs: tuple[str, ...]
     source: str = "doe-region-page"
+    # Parallel to `slugs`. Entry None means "resolve from the slug via the legacy CMS
+    # base". Media-API bulletins carry their real link so the download actually works.
+    urls: tuple[str | None, ...] = ()
+
+    def download_urls(self) -> tuple[str, ...]:
+        """Real download URL for each slug, filling legacy entries from the CMS base."""
+        resolved: list[str] = []
+        for index, slug in enumerate(self.slugs):
+            url = self.urls[index] if index < len(self.urls) else None
+            resolved.append(url if url else slug_to_url(slug))
+        return tuple(resolved)
 
 
 def resolve_region_code(region_key: str) -> str:
@@ -79,17 +164,100 @@ def region_page_url(region_code: str) -> str:
     return DOE_REGION_PAGE_URL.format(page_slug=page_slug)
 
 
+class UpstreamUnavailableError(RuntimeError):
+    """DOE is not currently serving a region's page.
+
+    Distinct from a parser failure and from stale data: the source itself is absent,
+    so there is nothing to download, parse, or load. Raised only after the page has
+    been retried, because DOE intermittently serves its "Page Not Found" body in
+    place of a region page that is in fact up.
+    """
+
+
+def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
+    """Every bulletin link on a region's archive page, in page order.
+
+    DOE sometimes answers with its "Page Not Found" body for a page that is really
+    available (observed repeatedly for Visayas on 2026-09-28, alternating one request
+    in two). The page is therefore retried before being declared unavailable, so a
+    transient 404 is never mistaken for a regional outage.
+
+    Raises `UpstreamUnavailableError` when every attempt returned DOE's 404 body.
+    """
+    page_url = region_page_url(region_code)
+    html_text = ""
+    for attempt in range(1, DOE_PAGE_UNAVAILABLE_ATTEMPTS + 1):
+        html_text = read_url_text(page_url)
+        if not is_upstream_unavailable_page(html_text):
+            break
+        if attempt < DOE_PAGE_UNAVAILABLE_ATTEMPTS:
+            time.sleep(DOE_PAGE_UNAVAILABLE_RETRY_SECONDS * attempt)
+    else:
+        raise UpstreamUnavailableError(
+            f"DOE served 'Page Not Found' for {page_url} on "
+            f"{DOE_PAGE_UNAVAILABLE_ATTEMPTS} consecutive attempts. "
+            "This region is not currently published upstream."
+        )
+
+    # slug -> url, where None means "resolve from the slug via the legacy CMS base".
+    found: dict[str, str | None] = {}
+    order: list[str] = []
+
+    def remember(slug: str, url: str | None) -> None:
+        if slug not in found:
+            found[slug] = None
+            order.append(slug)
+        if url is not None:
+            # A media link always supersedes a legacy-derived entry for that slug.
+            found[slug] = url
+
+    for match in GUEST_SLUG_RE.finditer(html_text):
+        remember(match.group(1).lower(), None)
+
+    for match in MEDIA_LINK_RE.finditer(html_text):
+        split = split_media_url(match.group(1), page_url)
+        if split is None:
+            continue
+        url, slug = split
+        if slug:
+            remember(slug, url)
+
+    return [(slug, found[slug]) for slug in order]
+
+
 def fetch_region_page_slugs(region_code: str) -> list[str]:
-    """Every guest-document slug linked from a region's archive page, in page order."""
-    html = read_url_text(region_page_url(region_code))
-    slugs: list[str] = []
-    seen: set[str] = set()
-    for match in GUEST_SLUG_RE.finditer(html):
-        slug = match.group(1).lower()
-        if slug not in seen:
-            seen.add(slug)
-            slugs.append(slug)
-    return slugs
+    """Every bulletin slug linked from a region's archive page, in page order."""
+    return [slug for slug, _url in fetch_region_page_links(region_code)]
+
+
+# DOE serves its "Page Not Found" body with HTTP 200, so status alone cannot detect
+# it. The check is anchored to the <title> element on purpose: every *valid* DOE page
+# embeds the strings "404 - Page Not Found" and "NEXT_HTTP_ERROR_FALLBACK;404" inside
+# its Next.js hydration payload, so a naive whole-body substring search would classify
+# healthy pages as unavailable.
+_PAGE_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_PAGE_NOT_FOUND_TITLE_RE = re.compile(r"page\s+not\s+found", re.I)
+
+
+def page_title(html: str) -> str:
+    """The page's <title>, or '' when it has none."""
+    match = _PAGE_TITLE_RE.search(html)
+    return re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
+
+
+def is_upstream_unavailable_page(html: str) -> bool:
+    """True when DOE served its "Page Not Found" body instead of a region page.
+
+    This is a distinct condition from a parse failure or from stale-but-real data:
+    DOE simply is not serving this region right now. It is a property of the source,
+    not of the pipeline, and it is detected from the response body because DOE
+    answers with HTTP 200.
+
+    A page that is reachable but carries zero bulletin links is deliberately NOT
+    treated as unavailable -- the source is up, so an empty archive is a real finding
+    that should still fail loudly.
+    """
+    return bool(_PAGE_NOT_FOUND_TITLE_RE.search(page_title(html)))
 
 
 def is_bulletin_slug(region_code: str, slug: str) -> bool:
@@ -131,7 +299,7 @@ def sequence_for_slug(slug: str) -> int | None:
 def discover_region_documents(region_code: str) -> list[BulletinDocument]:
     """All bulletin PDFs DOE currently publishes for a macro-region."""
     documents: list[BulletinDocument] = []
-    for slug in fetch_region_page_slugs(region_code):
+    for slug, url in fetch_region_page_links(region_code):
         if not is_bulletin_slug(region_code, slug):
             continue
         documents.append(
@@ -142,6 +310,7 @@ def discover_region_documents(region_code: str) -> list[BulletinDocument]:
                 subregion=subregion_for_slug(region_code, slug),
                 sequence=sequence_for_slug(slug),
                 page_index=len(documents),
+                url=url,
             )
         )
     return documents
@@ -155,23 +324,24 @@ def group_documents_by_week(
     Undatable documents are not guesswork material: DOE numbers some files
     sequentially instead of dating them, and only the PDF header states their week.
     """
-    weeks: dict[date, list[str]] = {}
+    weeks: dict[date, list[BulletinDocument]] = {}
     undated: list[BulletinDocument] = []
 
     for document in documents:
         if document.week_start is None:
             undated.append(document)
             continue
-        weeks.setdefault(document.week_start, []).append(document.slug)
+        weeks.setdefault(document.week_start, []).append(document)
 
     region_code = documents[0].region_code if documents else ""
     bulletins = [
         DiscoveredBulletin(
             region_code=region_code,
             week_start=week_start,
-            slugs=tuple(slugs),
+            slugs=tuple(document.slug for document in group),
+            urls=tuple(document.url for document in group),
         )
-        for week_start, slugs in sorted(weeks.items(), reverse=True)
+        for week_start, group in sorted(weeks.items(), reverse=True)
     ]
     return bulletins, undated
 

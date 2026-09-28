@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  Sanitized excerpt of the CURRENT DOE region archive page
+  (https://doe.gov.ph/data-and-prices/liquid-fuels/retail-pump-prices/ncr-pump-prices).
+
+  Purpose: lock in the link structure DOE uses today so a future hosting change fails
+  CI instead of silently producing stale data. When DOE migrates again, this file and
+  the tests that read it are the thing that must be updated first.
+
+  Captured 2026-09-28. Real page is ~314 KB; only the document links are kept, and no
+  prose, personal data, or tracking content is included.
+
+  Two link families are present at once:
+    * legacy CMS  — prod-cms.doe.gov.ph/documents/d/guest/...  (frozen at older weeks)
+    * current     — d24qbtp4vooyzi.cloudfront.net/api/media/file/... (all recent weeks)
+-->
+<html lang="en">
+  <head><title>Retail Pump Prices — NCR (excerpt)</title></head>
+  <body>
+    <main>
+      <h1>NCR Retail Pump Prices</h1>
+      <ul class="attachments">
+
+        <!-- Current series: the weeks the ETL must find. -->
+        <li>
+          <a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/NCR%20Price%20Monitoring%2009222026.pdf?prefix=dev%2Fmedia">
+            NCR Price Monitoring 09222026
+          </a>
+        </li>
+        <li>
+          <a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/NCR%20Price%20Monitoring%2015-21%20September%202026.pdf?prefix=dev%2Fmedia">
+            NCR Price Monitoring 15-21 September 2026
+          </a>
+        </li>
+        <li>
+          <a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/NCR%20Price%20Monitoring%208-14%20Sep%202026.pdf?prefix=dev%2Fmedia">
+            NCR Price Monitoring 8-14 Sep 2026
+          </a>
+        </li>
+        <li>
+          <a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/NCR%20Price%20Monitoring%20Sep%201-7%202026.pdf?prefix=dev%2Fmedia">
+            NCR Price Monitoring Sep 1-7 2026
+          </a>
+        </li>
+        <li>
+          <a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/List%20of%20NCR%20Pump%20Prices%20for%2025%20to%2031%20August%202026.pdf?prefix=dev%2Fmedia">
+            List of NCR Pump Prices for 25 to 31 August 2026
+          </a>
+        </li>
+
+        <!-- Legacy CMS links, still rendered by DOE but frozen on old weeks. -->
+        <li>
+          <a href="https://prod-cms.doe.gov.ph/documents/d/guest/petro_ncr_2025-jan-7-jan-13-pdf">
+            Price Monitoring Jan 7-13 2025
+          </a>
+        </li>
+        <li>
+          <a href="https://prod-cms.doe.gov.ph/documents/d/guest/petro_ncr_2024-sep-24-30-pdf">
+            Price Monitoring Sep 24-30 2024
+          </a>
+        </li>
+        <li>
+          <a href="https://prod-cms.doe.gov.ph/documents/d/oimb/petro_ncr_2023-aug-31-pdf">
+            Price Monitoring Aug 31 2023 (oimb path — not a guest document)
+          </a>
+        </li>
+
+        <!-- Non-bulletin attachments that discovery must keep rejecting. -->
+        <li><a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/DOE%20PH%20Logo.pdf?prefix=dev%2Fmedia">DOE PH Logo</a></li>
+        <li>
+          <a href="https://d24qbtp4vooyzi.cloudfront.net/api/media/file/Liquid%20Petroleum%20Products%20Price%20Data%20Province%20of%20Bohol.pdf?prefix=dev%2Fmedia">
+            Liquid Petroleum Products Price Data
+          </a>
+        </li>
+      </ul>
+    </main>
+    <!--
+      DOE is a Next.js app, so a real page carries the site's 404 strings in its
+      hydration payload. They are included here deliberately: any "Page Not Found"
+      detection that searches the whole body rather than the <title> will trip on this
+      and wrongly declare a healthy region unavailable.
+    -->
+    <script>
+      self.__next_f.push([1, "1b:I[27201,[\"/_next/static/chunks/0afbyrqcanz46.js\"],\"IconMark\""]);
+      self.__next_f.push([1, "404 — Page Not Found"]);
+      self.__next_f.push([1, "NEXT_HTTP_ERROR_FALLBACK;404"]);
+    </script>
+  </body>
+</html>

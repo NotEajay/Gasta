@@ -58,6 +58,18 @@ MAX_YEAR = 2100
 _YEAR_FIRST_RE = re.compile(rf"(?<!\d)(20\d{{2}})-({MONTH_ALTERNATION})-(\d{{1,2}})(?!\d)")
 _MONTH_FIRST_RE = re.compile(rf"(?<![a-z])({MONTH_ALTERNATION})-(\d{{1,2}})(?!\d)")
 _DAY_FIRST_RE = re.compile(rf"(?<!\d)(\d{{1,2}})-\d{{1,2}}-({MONTH_ALTERNATION})-(20\d{{2}})(?!\d)")
+
+# "25 to 31 August 2026" / "25-31 August 2026" / "25–31 August 2026" — DOE's current
+# media filenames phrase a week as a day range *before* the month, which
+# `_DAY_FIRST_RE` cannot match. The first number is the week start, so it is what
+# gets read. Hyphenating the filename turns "25 to 31" into "25-to-31", so the
+# separator has to absorb a dash on either side of the word "to".
+_RANGE_SEP = r"(?:[-‐‑‒–—―]?\s*to\s*[-‐‑‒–—―]?|[-‐‑‒–—―])"
+_DAY_RANGE_THEN_MONTH_RE = re.compile(
+    rf"(?<!\d)(\d{{1,2}}){_RANGE_SEP}\d{{1,2}}{_RANGE_SEP}"
+    rf"({MONTH_ALTERNATION}){_RANGE_SEP}(20\d{{2}})(?!\d)"
+)
+
 _YMD_RE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
 _MDY8_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)")
 _MDY_DASHED_RE = re.compile(r"(?<!\d)(\d{1,2})-(\d{1,2})-(20\d{2})(?!\d)")
@@ -153,6 +165,15 @@ def parse_week_start_from_slug(slug: str) -> date | None:
         parsed = _safe_date(int(match.group(3)), MONTHS[match.group(2)], int(match.group(1)))
         if parsed:
             candidates.append((match.start(), parsed))
+
+    # list-of-ncr-pump-prices-for-25-to-31-august-2026 (day range, then month+year)
+    for match in _DAY_RANGE_THEN_MONTH_RE.finditer(text):
+        parsed = _safe_date(
+            int(match.group(3)), MONTHS[match.group(2)], int(match.group(1))
+        )
+        if parsed:
+            candidates.append((match.start(), parsed))
+        break
 
     if candidates:
         return normalize_bulletin_week_start(min(candidates)[1])
