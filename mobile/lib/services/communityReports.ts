@@ -408,6 +408,78 @@ export async function confirmCommunityReport(reportId: string, observedPrice?: n
   if (error) throw error;
 }
 
+/**
+ * Reports submitted by the signed-in user, newest first.
+ *
+ * No extra RLS is needed to read these: `community_fuel_reports_select_pending`
+ * already exposes every pending report, and `..._select_own_private` exposes the
+ * author's own `rejected` / `needs_review` rows. Verified rows are readable only
+ * while they are still fresh (7 days) or already public, so an older verified
+ * report of the user's simply does not come back -- that is the correct
+ * behaviour, not a bug, and it is why the UI only offers deletion for `pending`.
+ */
+export async function fetchMyCommunityReports(userId: string): Promise<PendingCommunityReport[]> {
+  let query = supabase
+    .from('community_fuel_reports')
+    .select(
+      `
+      id,
+      reported_price,
+      confirmation_count,
+      status,
+      created_at,
+      notes,
+      reported_by,
+      station_id,
+      fuel_type_id,
+      station:fuel_stations!inner (
+        name,
+        region_id,
+        region:regions!inner ( code )
+      ),
+      fuel_type:fuel_types ( code, name )
+    `
+    )
+    .eq('reported_by', userId)
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as PendingCommunityReport[];
+  return rows.map((row) => ({
+    ...row,
+    reported_price: Number(row.reported_price),
+  }));
+}
+
+/**
+ * Withdraw one of your own pending reports.
+ *
+ * Ownership is enforced in the database by `delete_community_fuel_report`, a
+ * SECURITY DEFINER function that re-checks `reported_by = auth.uid()` and
+ * `status = 'pending'` before deleting. RLS has no DELETE policy on
+ * `community_fuel_reports`, so a raw client-side `.delete()` is refused by
+ * Postgres for every user, including the author -- the RPC is the only path.
+ *
+ * That is why this function takes no `userId`: there is no client-side filter to
+ * apply, and passing the id through would only look like a security check while
+ * the database silently did the real one. Verified reports are intentionally
+ * not deletable -- they are promoted automatically at 3 confirmations and feed
+ * `fresh_verified_community_prices`, which other users' station prices read from.
+ */
+export async function deleteCommunityReport(reportId: string): Promise<void> {
+  const { error } = await supabase.rpc('delete_community_fuel_report', {
+    p_report_id: reportId,
+  });
+  if (error) throw error;
+}
+
+/** Mirrors the DB rule: only `pending` reports can be withdrawn. */
+export function canDeleteCommunityReport(status: string): boolean {
+  return status === 'pending';
+}
+
 export function confirmationsLabel(count: number): string {
   return `${count}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`;
 }

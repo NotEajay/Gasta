@@ -560,6 +560,12 @@ export interface Database {
         };
         Returns: undefined;
       };
+      delete_community_fuel_report: {
+        Args: {
+          p_report_id: string;
+        };
+        Returns: undefined;
+      };
       create_fuel_station: {
         Args: {
           p_name: string;

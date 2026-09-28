@@ -13,6 +13,7 @@ import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
+import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_REGIONS, REGION_CENTROIDS, type DoeRegionCode } from '@/constants/regions';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
@@ -236,9 +237,23 @@ export default function ReportPriceScreen() {
       contentContainerStyle={styles.padding}>
       <SubPageHeader
         module="community"
-        title="Report a Price"
-        subtitle="Type the station and what you paid. 3 confirmations makes it verified."
+        title="Report a price"
+        subtitle="Help drivers see more recent fuel prices."
       />
+
+      {/* Sets expectations up front so a submission is never read as instantly
+          trusted. The full rule is repeated on the success sheet. */}
+      <View style={styles.expectRow}>
+        <MaterialCommunityIcons
+          name="shield-check-outline"
+          size={13}
+          color={GasTaColors.forestMuted}
+        />
+        <Text style={styles.expectText}>
+          Reports are checked by other drivers, not by GasTa. A report stays Unverified until{' '}
+          {VERIFY_CONFIRMATIONS_REQUIRED} people confirm the price.
+        </Text>
+      </View>
 
       {/* WHERE */}
       {/*
@@ -391,9 +406,12 @@ export default function ReportPriceScreen() {
             <View style={styles.successBadge}>
               <Text style={styles.successCheck}>✓</Text>
             </View>
-            <Text style={[styles.successTitle, { color: theme.text }]}>Report submitted</Text>
+            <Text style={[styles.successTitle, { color: theme.text }]}>
+              Submitted for community verification
+            </Text>
             <Text style={[styles.successBody, { color: theme.textSecondary }]}>
-              It is listed under Community prices as Unverified until 3 more people confirm it.
+              GasTa hasn&apos;t verified this yet. It appears as Unverified until{' '}
+              {VERIFY_CONFIRMATIONS_REQUIRED} other drivers confirm the price.
             </Text>
             {submitted ? (
               <View style={[styles.summary, { backgroundColor: theme.overlay }]}>
@@ -438,6 +456,27 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: GasTaColors.textSoft,
     marginBottom: spacing.sm,
+  },
+  /* Restrained inline note -- sets the verification expectation without
+     implying GasTa or the DOE has approved the figure. */
+  expectRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  expectText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: GasTaColors.forestMuted,
   },
   /* Fuel identity for the form's section heads, added around the shared
      FormSection rather than by changing it. */
