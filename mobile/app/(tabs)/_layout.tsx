@@ -38,7 +38,16 @@ import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarV
  * absolute` over this canvas and keeps its own opaque white surface, so the bar
  * reads as floating over cream rather than as a white navigation region.
  */
-const CREAM_CANVAS_ROUTES = ['/home', '/profile', '/budget', '/vehicles'];
+const CREAM_CANVAS_ROUTES = [
+  '/home',
+  '/profile',
+  '/budget',
+  '/vehicles',
+  // Prices is a stack route, so the tab pathname is `/prices` and the index
+  // screen inside it is `/prices/index`. The parent entry covers both, because
+  // isCreamCanvasRoute matches on an exact hit or a `/` prefix.
+  '/prices',
+];
 
 function isCreamCanvasRoute(pathname: string) {
   return CREAM_CANVAS_ROUTES.some(

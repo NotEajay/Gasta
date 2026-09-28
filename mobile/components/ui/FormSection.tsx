@@ -8,7 +8,12 @@ import { spacing, typography } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 interface FormSectionProps extends ViewProps {
-  title: string;
+  /**
+   * Section heading. Optional so a caller can render its own header and use
+   * FormSection purely as the field container. Every existing caller passes a
+   * title, so their output is unchanged.
+   */
+  title?: string;
   subtitle?: string;
   module?: ModuleKey;
 }
@@ -26,15 +31,17 @@ export default function FormSection({
 
   return (
     <View style={[styles.wrap, style]} {...props}>
-      <View style={styles.header}>
-        <View style={[styles.dot, { backgroundColor: accent }]} />
-        <View style={styles.headerText}>
-          <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
-          {subtitle ? (
-            <Text style={[styles.subtitle, { color: theme.textSecondary }]}>{subtitle}</Text>
-          ) : null}
+      {title ? (
+        <View style={styles.header}>
+          <View style={[styles.dot, { backgroundColor: accent }]} />
+          <View style={styles.headerText}>
+            <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
+            {subtitle ? (
+              <Text style={[styles.subtitle, { color: theme.textSecondary }]}>{subtitle}</Text>
+            ) : null}
+          </View>
         </View>
-      </View>
+      ) : null}
       <Card elevated style={styles.card}>
         {children}
       </Card>
