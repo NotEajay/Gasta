@@ -61,11 +61,11 @@ python run.py discover-region --region visayas   # latest week only
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `doe-etl-weekly.yml` | **Every Tuesday** 01:00, 06:00 and 11:00 UTC (09:00 / 14:00 / 19:00 PH), plus a Wednesday 02:00 UTC safety net | `sync-all` |
+| `doe-etl-weekly.yml` | **Tuesday only** — several PH slots (06:00–23:00) | `sync-all` |
 | `doe-etl-backfill.yml` | Manual only | `backfill` with region / since / dry-run inputs |
 | `etl-tests.yml` | Push or PR touching `etl/` | `pytest` |
 
-DOE bulletin weeks start Tuesday and the files appear at different times through the day, so the weekly workflow tries three times on Tuesday and once more on Wednesday. Runs after the first successful one are no-ops because each region's week is already stored.
+DOE bulletin weeks start Tuesday and files can appear at different times that day, so the weekly workflow tries multiple Tuesday slots. Runs after the first successful one are no-ops because each region's week is already stored. Use **Run workflow** manually if DOE publishes after Tuesday.
 
 **One-time setup**
 
