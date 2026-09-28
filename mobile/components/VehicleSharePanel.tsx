@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, Modal, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import LabeledInput from '@/components/ui/LabeledInput';
@@ -10,6 +10,7 @@ import SelectField, { type SelectOption } from '@/components/ui/SelectField';
 // sharing panel sits on the same cream/forest canvas as the vehicle card it
 // lives inside. Only the colour SOURCE changed — no behaviour, flow, or gating.
 import { GasTaColors, GasTaRadius, GasTaSpacing, palette } from '@/constants/Theme';
+import { fetchVehicleMembers } from '@/lib/services/vehicleRefills';
 import {
   createVehicleShare,
   fetchUserProfileById,
@@ -22,12 +23,51 @@ import {
   VEHICLE_SHARE_ROLE_DESCRIPTIONS,
   type UserProfile,
   type UserProfileLookup,
+  type VehicleMember,
   type VehicleShare,
   type VehicleShareRole,
 } from '@/types';
 
 /** Faint forest tint, matching the vehicle card this panel lives inside. */
 const TINT_BG = 'rgba(1, 68, 33, 0.06)';
+
+/**
+ * Collaborator display name.
+ *
+ * `profiles` is own-row-only under RLS ("Users can view own profile", using
+ * auth.uid() = id), so reading a collaborator's row directly always failed and
+ * every collaborator degraded to the "Shared user" fallback.
+ *
+ * The project already ships the narrow, vehicle-scoped exception:
+ * `vehicle_members(uuid)` (migration 20240812000017) is SECURITY DEFINER,
+ * returns only `user_id + full_name + role`, is gated on `has_vehicle_access()`,
+ * and is revoked from public/anon. The refill UI already uses it. So the name
+ * was available all along — this panel simply was not reading it. No backend
+ * change, no new migration, no broader profile access.
+ *
+ * Email is deliberately NOT resolved here: `vehicle_members` returns no email,
+ * and surfacing one would need a new RPC.
+ */
+function resolveName(members: VehicleMember[], userId: string): string | null {
+  const match = members.find((m) => m.user_id === userId);
+  const name = match?.full_name?.trim();
+  return name ? name : null;
+}
+
+/** Restrained initials for the row avatar. No photos, no invented names. */
+function initialsOf(name: string | null): string {
+  if (!name) return '?';
+  return (
+    name
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
 
 type RoleValue = VehicleShareRole | '';
 
@@ -94,7 +134,10 @@ export default function VehicleSharePanel({
   const [lookedUpUser, setLookedUpUser] = useState<UserProfileLookup | null>(null);
   const [shareRole, setShareRole] = useState<RoleValue>('');
   const [shares, setShares] = useState<VehicleShare[]>([]);
-  const [profiles, setProfiles] = useState<Record<string, UserProfile | null>>({});
+  // Collaborator names, read through the vehicle-scoped `vehicle_members` RPC
+  // instead of the own-row-only `profiles` table.
+  const [members, setMembers] = useState<VehicleMember[]>([]);
+  const [rowMenuFor, setRowMenuFor] = useState<VehicleShare | null>(null);
   const [loadingShares, setLoadingShares] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -130,21 +173,15 @@ export default function VehicleSharePanel({
   const loadShares = useCallback(async () => {
     setLoadingShares(true);
     try {
-      const nextShares = await fetchVehicleShares(vehicleId, ownerId);
-      const nextProfiles: Record<string, UserProfile | null> = {};
-
-      await Promise.all(
-        nextShares.map(async (share) => {
-          try {
-            nextProfiles[share.shared_with] = await fetchUserProfileById(share.shared_with);
-          } catch {
-            nextProfiles[share.shared_with] = null;
-          }
-        }),
-      );
+      // Shares and members are independent: a member-lookup failure must never
+      // hide the collaborator list, it only costs the names.
+      const [nextShares, nextMembers] = await Promise.all([
+        fetchVehicleShares(vehicleId, ownerId),
+        fetchVehicleMembers(vehicleId).catch(() => [] as VehicleMember[]),
+      ]);
 
       setShares(nextShares);
-      setProfiles(nextProfiles);
+      setMembers(nextMembers);
     } catch (error) {
       setMessage({
         kind: 'error',
@@ -295,8 +332,8 @@ export default function VehicleSharePanel({
   };
 
   const handleRemove = (share: VehicleShare) => {
-    const profile = profiles[share.shared_with];
-    const displayName = profile?.full_name?.trim() || profile?.email || 'this user';
+    // Same real name the row shows, via the same vehicle-scoped source.
+    const displayName = resolveName(members, share.shared_with) ?? 'this user';
 
     Alert.alert(
       'Remove access',
@@ -387,7 +424,7 @@ export default function VehicleSharePanel({
                 <Text style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
                   {lookedUpUser.full_name?.trim() || 'GasTa user'}
                 </Text>
-                <Text style={[styles.sharedUserMeta, { color: GasTaColors.textMuted }]}>
+                <Text style={[styles.sharedUserEmail, { color: GasTaColors.textSoft }]}>
                   {email}
                 </Text>
               </View>
@@ -465,39 +502,119 @@ export default function VehicleSharePanel({
             </Text>
           ) : (
             activeShares.map((share) => {
-              const profile = profiles[share.shared_with];
-              const displayName = profile?.full_name?.trim() || profile?.email || 'Shared user';
-              const isRevoking = revokingId === share['ShareID'];
+              // Real name via the vehicle-scoped members RPC. The email is only
+              // shown when this is the account the owner just looked up, since
+              // that string is already in memory and typed by them. No other
+              // source may safely expose a collaborator's email today.
+              const name = resolveName(members, share.shared_with);
+              const displayName = name ?? 'Shared user';
+              const knownEmail =
+                lookedUpUser?.id === share.shared_with && email ? email : null;
+              const isViewer = share.role === 'Viewer';
 
               return (
-                <View
-                  key={share['ShareID']}
-                  style={[styles.sharedUser, { backgroundColor: TINT_BG }]}>
+                <View key={share['ShareID']} style={styles.sharedUser}>
+                  <View style={styles.rowAvatar}>
+                    <Text style={styles.rowAvatarText}>{initialsOf(name)}</Text>
+                  </View>
+
                   <View style={styles.sharedUserInfo}>
-                    <Text style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
+                    <Text
+                      numberOfLines={2}
+                      style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
                       {displayName}
                     </Text>
-                    <Text style={[styles.sharedUserMeta, { color: GasTaColors.textMuted }]}>
-                      {share.role}
-                    </Text>
-                    {profile?.email ? (
-                      <Text style={[styles.sharedUserEmail, { color: GasTaColors.textMuted }]}>
-                        {profile.email}
+                    {knownEmail ? (
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.sharedUserEmail, { color: GasTaColors.textSoft }]}>
+                        {knownEmail}
                       </Text>
                     ) : null}
                   </View>
-                  <PrimaryButton
-                    label={isRevoking ? 'Removing…' : 'Remove access'}
-                    variant="danger"
-                    size="sm"
-                    onPress={() => handleRemove(share)}
-                    disabled={isRevoking}
-                    style={styles.removeButton}
-                  />
+
+                  <View style={[styles.rowRole, isViewer && styles.rowRoleNeutral]}>
+                    <Text
+                      style={[styles.rowRoleText, isViewer && styles.rowRoleTextNeutral]}>
+                      {share.role}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    accessibilityLabel={`More actions for ${displayName}`}
+                    accessibilityRole="button"
+                    hitSlop={8}
+                    onPress={() => setRowMenuFor(share)}
+                    style={({ pressed }) => [styles.rowMore, pressed && styles.rowMorePressed]}>
+                    <Ionicons
+                      name="ellipsis-vertical"
+                      size={16}
+                      color={GasTaColors.textSoft}
+                    />
+                  </Pressable>
                 </View>
               );
             })
           )}
+
+          {/* Contextual per-row menu. The destructive confirmation Alert and the
+              revoke handler below are used exactly as they were — only the
+              affordance that reaches them moved. */}
+          <Modal
+            animationType="fade"
+            transparent
+            visible={rowMenuFor !== null}
+            onRequestClose={() => setRowMenuFor(null)}>
+            <Pressable
+              style={styles.rowMenuBackdrop}
+              accessibilityLabel="Close menu"
+              onPress={() => setRowMenuFor(null)}>
+              <View pointerEvents="box-none" style={styles.rowMenuWrap}>
+                <View style={styles.rowMenu}>
+                  <Text style={styles.rowMenuHeading}>
+                    {rowMenuFor
+                      ? resolveName(members, rowMenuFor.shared_with) ?? 'this collaborator'
+                      : ''}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="menuitem"
+                    accessibilityLabel={
+                      rowMenuFor
+                        ? `Remove access for ${
+                            resolveName(members, rowMenuFor.shared_with) ?? 'this collaborator'
+                          }`
+                        : 'Remove access'
+                    }
+                    // Keeps the busy state the old inline button had: the
+                    // confirmation Alert is still what does the work, so this
+                    // only reflects the in-flight request.
+                    disabled={revokingId !== null}
+                    onPress={() => {
+                      const target = rowMenuFor;
+                      setRowMenuFor(null);
+                      if (target) handleRemove(target);
+                    }}
+                    style={({ pressed }) => [
+                      styles.rowMenuItem,
+                      pressed && styles.rowMenuItemPressed,
+                    ]}>
+                    <Ionicons
+                      name={rowMenuFor && revokingId === rowMenuFor['ShareID']
+                        ? 'hourglass-outline'
+                        : 'close-circle-outline'}
+                      size={16}
+                      color={palette.danger}
+                    />
+                    <Text style={styles.rowMenuItemDanger}>
+                      {rowMenuFor && revokingId === rowMenuFor['ShareID']
+                        ? 'Removing…'
+                        : 'Remove access'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </Pressable>
+          </Modal>
         </View>
       ) : null}
     </View>
@@ -599,30 +716,120 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: GasTaSpacing.sm,
   },
+  // ---- collaborator row ----------------------------------------------------
+  // Flat row, no tint fill, no always-red button. Identity on the left, role
+  // as a chip on the right, one quiet contextual control.
   sharedUser: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: GasTaRadius.md,
-    padding: GasTaSpacing.sm,
-    marginBottom: GasTaSpacing.sm,
+    gap: GasTaSpacing.sm,
+    paddingVertical: GasTaSpacing.sm,
+    paddingHorizontal: GasTaSpacing.xs,
+    borderRadius: GasTaRadius.sm,
+  },
+  rowAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: GasTaRadius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TINT_BG,
+  },
+  rowAvatarText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: GasTaColors.forest,
   },
   sharedUserInfo: {
     flex: 1,
+    minWidth: 0,
   },
   sharedUserName: {
     fontSize: 14,
+    lineHeight: 18,
     fontWeight: '700',
-  },
-  sharedUserMeta: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 2,
   },
   sharedUserEmail: {
     fontSize: 12,
+    lineHeight: 16,
     marginTop: 1,
   },
-  removeButton: {
-    marginLeft: GasTaSpacing.sm,
+  // Member / Driver / Operator: soft forest tint.
+  rowRole: {
+    paddingHorizontal: GasTaSpacing.sm,
+    paddingVertical: 2,
+    borderRadius: GasTaRadius.pill,
+    backgroundColor: TINT_BG,
+  },
+  // Viewer: deliberately quieter, and never colour-only — the role text is
+  // always present and readable.
+  rowRoleNeutral: {
+    backgroundColor: GasTaColors.creamDark,
+  },
+  rowRoleText: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+  },
+  rowRoleTextNeutral: {
+    color: GasTaColors.textMuted,
+  },
+  rowMore: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: GasTaRadius.sm,
+  },
+  rowMorePressed: {
+    backgroundColor: TINT_BG,
+  },
+  rowMenuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 48, 25, 0.28)',
+  },
+  rowMenuWrap: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: GasTaSpacing.lg,
+  },
+  rowMenu: {
+    backgroundColor: GasTaColors.white,
+    borderRadius: GasTaRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+    paddingVertical: GasTaSpacing.xs,
+    paddingHorizontal: GasTaSpacing.sm,
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  rowMenuHeading: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    color: GasTaColors.textSoft,
+    paddingHorizontal: GasTaSpacing.sm,
+    paddingTop: GasTaSpacing.xs,
+    paddingBottom: GasTaSpacing.xs,
+  },
+  rowMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    paddingVertical: 12,
+    paddingHorizontal: GasTaSpacing.sm,
+    borderRadius: GasTaRadius.sm,
+  },
+  rowMenuItemPressed: {
+    backgroundColor: TINT_BG,
+  },
+  rowMenuItemDanger: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: palette.danger,
   },
 });
