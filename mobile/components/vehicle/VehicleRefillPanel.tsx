@@ -1011,6 +1011,20 @@ function ResponsibilityPill({
   );
 }
 
+/**
+ * One saved refill, in a compact ledger row.
+ *
+ * Density matters here: a vehicle accumulates 10-20 of these, so the row is
+ * built around three short lines -- amount/date, fuel figures, and who was
+ * involved -- with the actions on a single line beneath. `Paid by` and
+ * `Logged by` stay distinct facts but collapse onto one line, and the second
+ * identity is only spelled out when it differs from the first, since for most
+ * refills the person who paid is the person who logged it.
+ *
+ * The destructive action lives in an overflow menu rather than beside the
+ * normal one, so a row of ordinary refills is not mostly buttons. The
+ * confirmation Alert and the void handler itself are unchanged.
+ */
 function RefillRow({
   refill,
   canVoid,
@@ -1031,36 +1045,53 @@ function RefillRow({
   onSplit: () => void;
 }) {
   const voided = refill.voided_at !== null;
-  return (
-    <View style={[styles.refillRow, voided && styles.refillRowVoided]}>
-      <View style={styles.refillHead}>
-        <Text style={styles.refillAmount}>{formatCurrency(refill.total_amount)}</Text>
-        <Text style={styles.refillDate}>{formatDate(refill.occurred_at)}</Text>
-      </View>
-      <Text style={styles.refillMeta}>
-        {formatCurrency(refill.price_per_liter)}/L
-        {refill.liters != null ? ` · ${refill.liters} L` : ''}
-      </Text>
-      <Text style={styles.refillWho}>Paid by {nameOf(refill.paid_by)}</Text>
-      <Text style={styles.refillWhoMuted}>Logged by {nameOf(refill.logged_by)}</Text>
-      {voided ? (
-        <Text style={styles.voidedTag}>Voided</Text>
-      ) : (
-        <View style={styles.rowActions}>
-          {canVoid ? (
-            <Pressable
-              accessibilityLabel="Void refill"
-              accessibilityRole="button"
-              onPress={onVoid}
-              style={({ pressed }) => [styles.voidBtn, pressed && styles.voidBtnPressed]}>
-              <Ionicons name="close-circle-outline" size={15} color={palette.danger} />
-              <Text style={styles.voidBtnText}>Void refill</Text>
-            </Pressable>
-          ) : null}
+  const [menuOpen, setMenuOpen] = useState(false);
 
-          {canAllocate ? (
+  const dateLabel = formatDate(refill.occurred_at);
+  const payer = nameOf(refill.paid_by);
+  const logger = nameOf(refill.logged_by);
+  // "Paid by Danna" reads "Paid by Danna · Logged by Marc" only when the two
+  // really are different people.
+  const samePerson = refill.paid_by === refill.logged_by;
+
+  // No contextual action means no menu at all, rather than a menu holding a
+  // disabled Void.
+  const showOverflow = canVoid && !voided;
+  const showSplit = canAllocate && !voided;
+
+  return (
+    <View style={styles.refillRow}>
+      <View style={styles.refillHead}>
+        <Text
+          numberOfLines={1}
+          style={[styles.refillAmount, voided && styles.refillAmountVoided]}>
+          {formatCurrency(refill.total_amount)}
+        </Text>
+        <View style={styles.refillHeadRight}>
+          {voided ? (
+            <View style={styles.voidedChip}>
+              <Text style={styles.voidedChipText}>Voided</Text>
+            </View>
+          ) : null}
+          <Text style={styles.refillDate}>{dateLabel}</Text>
+        </View>
+      </View>
+
+      <Text numberOfLines={1} style={styles.refillMeta}>
+        {refill.liters != null ? `${refill.liters} L · ` : ''}
+        {formatCurrency(refill.price_per_liter)}/L
+      </Text>
+
+      <Text numberOfLines={1} style={styles.refillWho}>
+        Paid by {payer}
+        {samePerson ? '' : ` · Logged by ${logger}`}
+      </Text>
+
+      {showSplit || showOverflow ? (
+        <View style={styles.rowActions}>
+          {showSplit ? (
             <Pressable
-              accessibilityLabel={actionLabel}
+              accessibilityLabel={`${actionLabel} for the refill on ${dateLabel}`}
               accessibilityRole="button"
               onPress={onSplit}
               style={({ pressed }) => [styles.splitBtn, pressed && styles.splitBtnPressed]}>
@@ -1072,8 +1103,60 @@ function RefillRow({
               <Text style={styles.splitBtnText}>{actionLabel}</Text>
             </Pressable>
           ) : null}
+
+          {showOverflow ? (
+            <Pressable
+              accessibilityLabel={`More actions for refill on ${dateLabel}`}
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={() => setMenuOpen(true)}
+              style={({ pressed }) => [styles.rowMore, pressed && styles.rowMorePressed]}>
+              <Ionicons
+                name="ellipsis-vertical"
+                size={16}
+                color={GasTaColors.textSoft}
+              />
+            </Pressable>
+          ) : null}
         </View>
-      )}
+      ) : null}
+
+      {/*
+        Per-row overflow. The confirmation Alert below is still what actually
+        voids the refill; this only moves the affordance that reaches it.
+      */}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setMenuOpen(false)}
+        transparent
+        visible={menuOpen}>
+        <Pressable
+          accessibilityLabel="Close menu"
+          onPress={() => setMenuOpen(false)}
+          style={styles.rowMenuBackdrop}>
+          <View pointerEvents="box-none" style={styles.rowMenuWrap}>
+            <View style={styles.rowMenu}>
+              <Text style={styles.rowMenuHeading}>Refill on {dateLabel}</Text>
+              <Pressable
+                accessibilityLabel={`Void refill from ${dateLabel}`}
+                accessibilityRole="menuitem"
+                onPress={() => {
+                  setMenuOpen(false);
+                  onVoid();
+                }}
+                style={({ pressed }) => [
+                  styles.rowMenuItem,
+                  pressed && styles.rowMenuItemPressed,
+                ]}>
+                <Ionicons name="trash-outline" size={16} color={palette.danger} />
+                <Text style={[styles.rowMenuItemText, styles.rowMenuItemDanger]}>
+                  Void refill
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1256,26 +1339,49 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  /**
+   * Compact ledger row. Padding is `sm` rather than `md` and the metadata lines
+   * are tight, which is what takes a row from roughly 130px to around 95px --
+   * the difference between scrolling a vehicle's refills and scanning them.
+   */
   refillRow: {
-    padding: spacing.md,
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
-  refillRowVoided: { opacity: 0.55 },
   refillHead: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
+  /**
+   * The amount leads and carries the financial hierarchy, so it is given the
+   * room. `flex: 1` + `minWidth: 0` let it shrink and ellipsis instead of
+   * shoving the date off the row on a wide figure like ₱123,456.78 at 320px.
+   */
   refillAmount: {
-    color: GasTaColors.forest,
-    fontSize: 17,
+    flex: 1,
+    minWidth: 0,
+    color: GasTaColors.forestDark,
+    fontSize: 18,
     lineHeight: 22,
     fontWeight: '800',
+  },
+  /** A voided refill stays readable; only its amount is desaturated. */
+  refillAmountVoided: {
+    color: GasTaColors.textSoft,
+    textDecorationLine: 'line-through',
+  },
+  refillHeadRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
   },
   refillDate: {
     color: GasTaColors.textSoft,
@@ -1284,50 +1390,100 @@ const styles = StyleSheet.create({
   },
   refillMeta: {
     color: GasTaColors.forestDark,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '600',
     marginTop: 2,
   },
   refillWho: {
-    color: GasTaColors.forestDark,
-    fontSize: 12,
-    lineHeight: 16,
-    marginTop: 6,
-  },
-  refillWhoMuted: {
     color: GasTaColors.textSoft,
     fontSize: 12,
     lineHeight: 16,
+    marginTop: 2,
   },
-  /** Compact but obvious destructive action — 40px tall, not a full-width block. */
+  /** Small danger-soft chip. Paired with the muted amount, never the only cue. */
+  voidedChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: palette.dangerSoft,
+  },
+  voidedChipText: {
+    color: palette.danger,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  /** Actions sit on one short line: the normal one left, overflow right. */
   rowActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
+    justifyContent: 'space-between',
     gap: spacing.sm,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
-  voidBtn: {
-    flexDirection: 'row',
+  rowMore: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
-    minHeight: 40,
-    paddingHorizontal: spacing.md,
     borderRadius: radii.sm,
+    marginLeft: 'auto',
+  },
+  rowMorePressed: {
+    backgroundColor: TINT_BG,
+  },
+  rowMenuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 48, 25, 0.28)',
+  },
+  rowMenuWrap: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: spacing.lg,
+  },
+  rowMenu: {
+    backgroundColor: GasTaColors.white,
+    borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.danger,
-    backgroundColor: 'rgba(220, 38, 38, 0.06)',
+    borderColor: GasTaColors.glassBorderSubtle,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 8,
   },
-  voidBtnPressed: {
-    backgroundColor: 'rgba(220, 38, 38, 0.14)',
-  },
-  voidBtnText: {
-    color: palette.danger,
-    fontSize: 13,
-    lineHeight: 18,
+  rowMenuHeading: {
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
+    color: GasTaColors.textSoft,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.xs,
+  },
+  rowMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 12,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.sm,
+  },
+  rowMenuItemPressed: {
+    backgroundColor: TINT_BG,
+  },
+  rowMenuItemText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+  },
+  rowMenuItemDanger: {
+    fontWeight: '700',
+    color: palette.danger,
   },
   splitBtn: {
     flexDirection: 'row',
@@ -1351,14 +1507,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '700',
   },
-  voidedTag: {
-    color: GasTaColors.textSoft,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '700',
-    marginTop: spacing.sm,
-  },
-
   notice: {
     color: GasTaColors.forest,
     fontSize: 12,
