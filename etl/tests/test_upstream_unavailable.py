@@ -172,6 +172,17 @@ def test_status_labels() -> None:
     assert _unavailable().status == "UPSTREAM UNAVAILABLE"
     no_data = SyncResult("NCR", "", "", 0, 0, message="Loaded successfully.")
     assert no_data.status == "NO DATA"
+    fuel_gap = SyncResult(
+        region_code="NCR",
+        week_start="2026-09-22",
+        pdf_path="",
+        price_rows=10,
+        companies=3,
+        message="Loaded successfully. Missing core fuels after parse: RON_91.",
+        missing_fuels=("RON_91",),
+    )
+    assert fuel_gap.status == "FUEL GAP"
+    assert summarise_results([_current("VISAYAS"), fuel_gap]) == "FAILED"
 
 
 def test_region_becoming_available_again_needs_no_code_change() -> None:

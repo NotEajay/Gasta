@@ -129,6 +129,24 @@ def _report_unavailable(results: list) -> None:
     )
 
 
+def _report_fuel_gaps(results: list) -> None:
+    """Call out regions whose parse/load still lacks RON 91 or Diesel Plus."""
+    gaps = [r for r in results if getattr(r, "missing_fuels", ())]
+    if not gaps:
+        return
+    print(
+        "FUEL GAP: RON 91 and/or Diesel Plus missing — Prices filters for those "
+        "fuels will be empty:",
+        file=sys.stderr,
+    )
+    for result in gaps:
+        print(
+            f"  - {result.region_code} ({result.week_start or 'no week'}): "
+            f"{', '.join(result.missing_fuels)}",
+            file=sys.stderr,
+        )
+
+
 def cmd_sync_ncr(args: argparse.Namespace) -> None:
     result = sync_latest_ncr(
         dest_dir=args.out_dir,
@@ -174,6 +192,7 @@ def cmd_sync_all(args: argparse.Namespace) -> None:
 
     _report_unavailable(results)
     _report_staleness(results)
+    _report_fuel_gaps(results)
 
     verdict = summarise_results(results)
     print(f"\nOverall: {verdict}")

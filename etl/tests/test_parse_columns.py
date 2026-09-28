@@ -13,11 +13,14 @@ import pytest
 
 from src.parse_bulletin import (
     BulletinNotMachineReadable,
+    ParsedPrice,
     _assign_prices_by_column,
     _cluster_words_into_rows,
     _find_header_anchors,
+    _parse_fuel_line,
     _reject_corrupt_text_layer,
     detect_company_columns,
+    missing_core_fuels,
 )
 
 # x positions copied from a real NCR bulletin's header row.
@@ -188,3 +191,43 @@ def test_clean_prices_pass_the_text_layer_check() -> None:
     text = " ".join(f"8{n}.40 9{n}.60" for n in range(15))
 
     _reject_corrupt_text_layer("good.pdf", text)
+
+
+def test_diesel_plus_line_is_not_classified_as_diesel() -> None:
+    """Prefix matching must prefer DIESEL PLUS over DIESEL (text fallback path)."""
+    fuel, prices = _parse_fuel_line(
+        "DIESEL PLUS 60.10 60.10 65.40 69.45 60.10 69.45 61.00"
+    )
+    assert fuel == "DIESEL PLUS"
+    assert prices[0] == 60.10
+
+    fuel_plain, _ = _parse_fuel_line(
+        "DIESEL 53.60 57.10 56.45 58.24 60.19 54.75 51.05"
+    )
+    assert fuel_plain == "DIESEL"
+
+
+def test_ron_91_line_parses() -> None:
+    fuel, prices = _parse_fuel_line(
+        "RON 91 56.20 61.80 58.75 61.85 62.40 56.30 53.20"
+    )
+    assert fuel == "RON 91"
+    assert len(prices) >= 3
+
+
+def test_missing_core_fuels_when_siblings_present() -> None:
+    prices = [
+        ParsedPrice(company="Petron", fuel_type_code="RON_95", price_per_liter=60.0),
+        ParsedPrice(company="Petron", fuel_type_code="DIESEL", price_per_liter=55.0),
+    ]
+    assert missing_core_fuels(prices) == ["RON_91", "DIESEL_PLUS"]
+
+
+def test_missing_core_fuels_empty_when_both_present() -> None:
+    prices = [
+        ParsedPrice(company="Petron", fuel_type_code="RON_91", price_per_liter=58.0),
+        ParsedPrice(company="Shell", fuel_type_code="DIESEL_PLUS", price_per_liter=62.0),
+        ParsedPrice(company="Petron", fuel_type_code="DIESEL", price_per_liter=55.0),
+    ]
+    assert missing_core_fuels(prices) == []
+

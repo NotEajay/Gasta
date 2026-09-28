@@ -12,6 +12,7 @@ import pdfplumber
 from .constants import (
     COMPANY_HEADER_ALIASES,
     COMPANY_NAMES,
+    CORE_FUEL_CODES,
     FUEL_TYPE_CODES,
     FUEL_TYPES,
     MAX_PRICE,
@@ -125,7 +126,8 @@ def _extract_prices_from_line(line: str) -> list[float]:
 def _parse_fuel_line(line: str) -> tuple[str, list[float]] | None:
     stripped = line.strip()
     upper = stripped.upper()
-    for fuel in FUEL_TYPES:
+    # Longest first: "DIESEL PLUS …" must not be claimed by the "DIESEL " prefix.
+    for fuel in sorted(FUEL_TYPES, key=len, reverse=True):
         prefix = fuel + " "
         if upper.startswith(prefix):
             prices = _extract_prices_from_line(stripped[len(fuel) :].strip())
@@ -449,6 +451,41 @@ def _propagate_block_areas(
     return filled
 
 
+def missing_core_fuels(prices: list[ParsedPrice]) -> list[str]:
+    """Return CORE_FUEL_CODES absent from parsed rows when the bulletin otherwise has data.
+
+    Used by sync so every ETL run can reload (or flag) weeks that never stored
+    RON 91 / Diesel Plus — the fuels the app defaults to.
+    """
+    present = {p.fuel_type_code for p in prices}
+    if len(present) < 2:
+        return []
+    return [code for code in CORE_FUEL_CODES if code not in present]
+
+
+def _core_fuel_coverage_warnings(prices: list[ParsedPrice], text: str) -> list[str]:
+    """Warn when a product label is printed but no prices were extracted for it."""
+    missing = missing_core_fuels(prices)
+    if not missing:
+        return []
+    upper = text.upper()
+    warnings: list[str] = []
+    label_by_code = {code: label for label, code in FUEL_TYPE_CODES.items()}
+    for code in missing:
+        label = label_by_code.get(code, code)
+        if label in upper:
+            warnings.append(
+                f"Parsed prices are missing {label} ({code}) even though that product "
+                "appears in the bulletin text — check fuel-label matching"
+            )
+        else:
+            warnings.append(
+                f"Parsed prices are missing {label} ({code}); the app Prices filter "
+                "for this fuel will be empty for this week"
+            )
+    return warnings
+
+
 def _validate_document_structure(text: str, region_code: str) -> list[str]:
     """Validate that the PDF has expected structure for a DOE bulletin.
 
@@ -696,6 +733,7 @@ def parse_bulletin_pdf(
     field_errors = _validate_field_level(parsed_prices, company_columns)
     validation_errors.extend(field_errors)
     structure_valid = structure_valid and len(field_errors) == 0
+    warnings.extend(_core_fuel_coverage_warnings(parsed_prices, full_text))
 
     return ParsedBulletin(
         region_code=region_code,

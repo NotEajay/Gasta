@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 
-from .constants import ALL_REGION_KEYS, REGION_KEY_BY_CODE
+from .constants import ALL_REGION_KEYS, CORE_FUEL_CODES, REGION_KEY_BY_CODE
 from .discover import DiscoveredBulletin, UpstreamUnavailableError, discover_latest_weeks
 from .download import download_region_bulletins, normalize_region
 from .freshness import describe_freshness, is_bulletin_stale
@@ -15,6 +15,7 @@ from .load_supabase import _client, load_bulletin, record_doe_website_fetch, tou
 from .parse_bulletin import (
     BulletinDateUnknown,
     BulletinNotMachineReadable,
+    missing_core_fuels,
     parse_region_pdfs,
 )
 
@@ -38,6 +39,8 @@ class SyncResult:
     # parse, or load, so it is reported as a warning rather than a run failure. It is
     # never inferred from a region being old -- an old-but-real bulletin stays stale.
     upstream_unavailable: bool = False
+    # Core fuels (RON_91, DIESEL_PLUS) absent after parse/load — Prices UI empty.
+    missing_fuels: tuple[str, ...] = ()
 
     @property
     def status(self) -> str:
@@ -48,6 +51,8 @@ class SyncResult:
             return "STALE"
         if "Failed" in self.message:
             return "ERROR"
+        if self.missing_fuels:
+            return "FUEL GAP"
         if not self.week_start:
             return "NO DATA"
         return "CURRENT"
@@ -57,7 +62,7 @@ def summarise_results(results: list[SyncResult]) -> str:
     """One-line overall verdict for a sync-all run.
 
     Semantics, in order:
-      * any available region STALE or ERROR   -> FAILED
+      * any available region STALE, ERROR, or FUEL GAP -> FAILED
       * every region upstream unavailable     -> FAILED (no usable data source at all)
       * some unavailable, rest current        -> SUCCESS WITH N UPSTREAM-UNAVAILABLE
       * all current                           -> SUCCESS
@@ -70,7 +75,11 @@ def summarise_results(results: list[SyncResult]) -> str:
         return "FAILED (no regions processed)"
     unavailable = [r for r in results if r.upstream_unavailable]
     available = [r for r in results if not r.upstream_unavailable]
-    broken = [r for r in available if r.stale or r.status == "ERROR" or not r.week_start]
+    broken = [
+        r
+        for r in available
+        if r.stale or r.status == "ERROR" or r.missing_fuels or not r.week_start
+    ]
     if broken:
         return "FAILED"
     if not available:
@@ -111,6 +120,57 @@ def _region_already_loaded(bulletin_date: date, region_code: str) -> bool:
     )
     rows = prices_resp.data if prices_resp else []
     return bool(rows)
+
+
+def _missing_core_fuels_in_db(bulletin_date: date, region_code: str) -> list[str]:
+    """Which CORE_FUEL_CODES are absent for this region/week in Supabase.
+
+    Every scheduled ETL run uses this so a week that was stored without RON 91 or
+    Diesel Plus (bad parse / old loader) is reloaded instead of skipped.
+    """
+    client = _client()
+    bulletin_resp = (
+        client.table("fuel_price_bulletins")
+        .select("id")
+        .eq("bulletin_date", bulletin_date.isoformat())
+        .maybe_single()
+        .execute()
+    )
+    if not bulletin_resp or not bulletin_resp.data:
+        return list(CORE_FUEL_CODES)
+
+    region_resp = (
+        client.table("regions").select("id").eq("code", region_code).maybe_single().execute()
+    )
+    if not region_resp or not region_resp.data:
+        return list(CORE_FUEL_CODES)
+
+    fuel_resp = (
+        client.table("fuel_types").select("id, code").in_("code", list(CORE_FUEL_CODES)).execute()
+    )
+    fuel_rows = fuel_resp.data if fuel_resp else []
+    if not fuel_rows:
+        return list(CORE_FUEL_CODES)
+
+    bulletin_id = bulletin_resp.data["id"]
+    region_id = region_resp.data["id"]
+    missing: list[str] = []
+    for fuel in fuel_rows:
+        prices_resp = (
+            client.table("fuel_prices")
+            .select("id")
+            .eq("bulletin_id", bulletin_id)
+            .eq("region_id", region_id)
+            .eq("fuel_type_id", fuel["id"])
+            .limit(1)
+            .execute()
+        )
+        rows = prices_resp.data if prices_resp else []
+        if not rows:
+            missing.append(fuel["code"])
+    # Preserve CORE_FUEL_CODES order for stable logs.
+    order = {code: index for index, code in enumerate(CORE_FUEL_CODES)}
+    return sorted(missing, key=lambda code: order.get(code, 99))
 
 
 def _newest_stored_week(region_code: str) -> date | None:
@@ -163,6 +223,14 @@ def _sync_discovered(
     )
 
     freshness_note = describe_freshness(judged_week, today)
+    parsed_missing = tuple(missing_core_fuels(parsed.prices))
+    coverage_note = ""
+    if parsed_missing:
+        coverage_note = (
+            f" Missing core fuels after parse: {', '.join(parsed_missing)}."
+        )
+    if parsed.warnings:
+        coverage_note += " " + "; ".join(parsed.warnings[:3])
 
     # Check for validation errors
     if parsed.validation_errors:
@@ -176,22 +244,35 @@ def _sync_discovered(
                 skipped=True,
                 message=f"Validation errors: {'; '.join(parsed.validation_errors)}",
                 stale=stale,
+                missing_fuels=parsed_missing,
             )
 
-    if not force and not dry_run and _region_already_loaded(parsed.bulletin_date, region_code):
-        touch_bulletin_fetched_at(parsed.bulletin_date)
-        return SyncResult(
-            region_code=region_code,
-            week_start=parsed.bulletin_date.isoformat(),
-            pdf_path="",
-            price_rows=0,
-            companies=0,
-            skipped=True,
-            message=(
-                f"{region_code} prices for bulletin {parsed.bulletin_date.isoformat()} "
-                f"already in Supabase - skipped. {freshness_note}."
-            ),
-            stale=stale,
+    already = (
+        not force
+        and not dry_run
+        and _region_already_loaded(parsed.bulletin_date, region_code)
+    )
+    if already:
+        db_missing = _missing_core_fuels_in_db(parsed.bulletin_date, region_code)
+        if not db_missing:
+            touch_bulletin_fetched_at(parsed.bulletin_date)
+            return SyncResult(
+                region_code=region_code,
+                week_start=parsed.bulletin_date.isoformat(),
+                pdf_path="",
+                price_rows=0,
+                companies=0,
+                skipped=True,
+                message=(
+                    f"{region_code} prices for bulletin {parsed.bulletin_date.isoformat()} "
+                    f"already in Supabase - skipped. {freshness_note}."
+                ),
+                stale=stale,
+            )
+        # Week was stored without RON 91 / Diesel Plus — reload on every ETL trigger.
+        coverage_note = (
+            f" Reloading: stored week is missing {', '.join(db_missing)}."
+            + coverage_note
         )
 
     pdf_path_display = "; ".join(str(p) for p in pdf_paths)
@@ -203,15 +284,16 @@ def _sync_discovered(
             pdf_path=pdf_path_display,
             price_rows=len(parsed.prices),
             companies=len({p.company for p in parsed.prices}),
-            message="Dry run - no database write.",
+            message="Dry run - no database write." + coverage_note,
             stale=stale,
+            missing_fuels=parsed_missing,
         )
 
     load_stats = load_bulletin(parsed)
-    message = "Loaded successfully."
+    message = "Loaded successfully." + coverage_note
     if load_stats.get("duplicates_skipped", 0) > 0:
         message += f" Skipped {load_stats['duplicates_skipped']} duplicate price entries."
-    
+
     return SyncResult(
         region_code=region_code,
         week_start=parsed.bulletin_date.isoformat(),
@@ -220,6 +302,7 @@ def _sync_discovered(
         companies=load_stats["companies"],
         message=message,
         stale=stale,
+        missing_fuels=parsed_missing,
     )
 
 
