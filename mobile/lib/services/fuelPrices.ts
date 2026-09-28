@@ -20,8 +20,24 @@ export interface BulletinWeek {
   last_loaded_at: string | null;
 }
 
-/** DOE publishes weekly, so prices older than this mean a sync has been missed. */
-export const STALE_AFTER_DAYS = 10;
+/**
+ * DOE publishes weekly, so prices older than this mean a sync has been missed.
+ *
+ * This mirrors the ETL's own bulletin freshness rule
+ * (`MAX_BULLETIN_AGE_DAYS = 14` in etl/src/freshness.py) so the app never calls
+ * a bulletin "stale" that the ETL still considers current -- South Luzon at 13
+ * days is current to the pipeline and must read as current in the UI too.
+ *
+ * Kept as a local constant on purpose: the mobile app must not import ETL code
+ * or gain a runtime dependency on the pipeline. The two values are maintained
+ * in step by this comment, and the ETL remains the single source of truth for
+ * what it refuses to load.
+ *
+ * Usage: this is the DOE bulletin freshness rule and nothing else. It is read
+ * by `isBulletinStale` and by the Prices freshness label; no unrelated product
+ * rule should borrow it.
+ */
+export const STALE_AFTER_DAYS = 14;
 
 /** Calendar days since a bulletin week started. Negative = that week is still in the future. */
 export function bulletinAgeInDays(bulletinDate: string, now = new Date()): number {
