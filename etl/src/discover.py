@@ -260,14 +260,40 @@ def is_upstream_unavailable_page(html: str) -> bool:
     return bool(_PAGE_NOT_FOUND_TITLE_RE.search(page_title(html)))
 
 
+# How many early page links to keep as "latest site PDFs" when renaming breaks
+# the strict bulletin patterns. DOE lists the current series first.
+PAGE_HEAD_CANDIDATE_LIMIT = 12
+
+# Loose keywords for PDFs that look like pump-price bulletins but use a new title.
+_LOOSE_PRICE_PDF_RE = re.compile(
+    r"(?:price|pump|fuel|monitoring|lfro|vfo|petro|bulletin|calabarzon|"
+    r"mimaropa|bicol|luzon|visayas|mindanao|ncr)",
+    re.I,
+)
+
+
+def is_rejected_slug(slug: str) -> bool:
+    """True for logos and other non-bulletin attachments on the region page."""
+    text = normalize_slug(slug)
+    if not text:
+        return True
+    return any(re.search(pattern, text) for pattern in SLUG_REJECT_PATTERNS)
+
+
 def is_bulletin_slug(region_code: str, slug: str) -> bool:
     """True when a slug looks like the region's weekly price-monitoring bulletin."""
     text = normalize_slug(slug)
-    if not text:
-        return False
-    if any(re.search(pattern, text) for pattern in SLUG_REJECT_PATTERNS):
+    if not text or is_rejected_slug(slug):
         return False
     return any(re.search(pattern, text) for pattern in REGION_SLUG_PATTERNS[region_code])
+
+
+def is_loose_price_pdf_slug(slug: str) -> bool:
+    """True for a non-logo PDF that likely carries pump prices (rename-tolerant)."""
+    text = normalize_slug(slug)
+    if not text or is_rejected_slug(slug):
+        return False
+    return bool(_LOOSE_PRICE_PDF_RE.search(text))
 
 
 def subregion_for_slug(region_code: str, slug: str) -> str | None:
@@ -297,11 +323,26 @@ def sequence_for_slug(slug: str) -> int | None:
 
 
 def discover_region_documents(region_code: str) -> list[BulletinDocument]:
-    """All bulletin PDFs DOE currently publishes for a macro-region."""
+    """All bulletin PDFs DOE currently publishes for a macro-region.
+
+    Prefer strict region bulletin patterns. Also keep the first few non-logo PDFs
+    from the page (DOE lists the current series first) so a rename cannot blank
+    discovery while Sep 22–28 files are still linked on the site.
+    """
     documents: list[BulletinDocument] = []
+    seen: set[str] = set()
+    loose_kept = 0
+
     for slug, url in fetch_region_page_links(region_code):
-        if not is_bulletin_slug(region_code, slug):
+        if slug in seen or is_rejected_slug(slug):
             continue
+        strict = is_bulletin_slug(region_code, slug)
+        loose = (not strict) and is_loose_price_pdf_slug(slug) and loose_kept < PAGE_HEAD_CANDIDATE_LIMIT
+        if not strict and not loose:
+            continue
+        if loose:
+            loose_kept += 1
+        seen.add(slug)
         documents.append(
             BulletinDocument(
                 region_code=region_code,
@@ -515,6 +556,10 @@ def discover_latest_weeks(
     directly as well, because the archive page is often a week or two behind the files
     already published on the CMS. Regions whose newest filenames carry no date need
     their PDFs opened to find their week, which is what `probe_dir` caches.
+
+    Ordering prefers a dated week from the archive/CMS when available, then undated
+    page-head PDFs (opened for their header date), so a live Sep 22–28 file on the
+    site wins even when the calendar already expects the next Tuesday.
     """
     region_code = resolve_region_code(region_key)
     documents = discover_region_documents(region_code)
@@ -527,6 +572,7 @@ def discover_latest_weeks(
 
     # DOE stopped dating some regions' filenames, so an undated PDF can be newer than
     # every dated one. Its week is only known once the PDF header is read.
+    # Also used when the page lists renamed files that our strict patterns used to miss.
     if undated:
         latest_undated = _latest_undated_group(region_code, undated, probe_dir=probe_dir)
         if latest_undated:

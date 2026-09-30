@@ -13,6 +13,8 @@ from src.discover import (
     discover_cms_weeks,
     group_documents_by_week,
     is_bulletin_slug,
+    is_loose_price_pdf_slug,
+    is_rejected_slug,
     leading_sequence_for_slug,
     sequence_for_slug,
     subregion_for_slug,
@@ -23,15 +25,22 @@ from src.slug_dates import parse_week_start_from_slug
 BULLETIN_SLUGS = [
     ("NCR", "ncr-price-monitoring-08182026-pdf"),
     ("NCR", "petro_ncr_2024-dec-3-9-pdf"),
+    ("NCR", "list-of-ncr-pump-prices-for-22-to-28-september-2026-pdf"),
     ("NORTH_LUZON", "lf-price-monitoring-for-july-7-13-2026-pdf"),
     ("NORTH_LUZON", "nluz_car_apr-1-7_2025-pdf"),
     ("NORTH_LUZON", "april-21-27-2026-pdf"),
+    (
+        "NORTH_LUZON",
+        "northern-luzon-liquid-fuel-price-monitoring-report-for-the-period-of-sept-22-to-28-2026-2-17-pdf",
+    ),
     ("SOUTH_LUZON", "region-iv-a-calabarzon-20-pdf"),
     ("SOUTH_LUZON", "petro_sluz_2025-mar-18-24_cavite-pdf"),
     ("VISAYAS", "vfo-price-monitoring-081826_with-lgu-and-field-pdf"),
     ("VISAYAS", "petro_vis_2025-mar-4-10-pdf"),
+    ("VISAYAS", "list-of-visayas-pump-prices-for-22-to-28-september-2026-pdf"),
     ("MINDANAO", "33-lfro-price-monitoring-august-18-24-2026-pdf"),
     ("MINDANAO", "petro_min_2025_apr-1-4-pdf"),
+    ("MINDANAO", "mfo-lfro-price-monitoring-22-28-september-2026-pdf"),
 ]
 
 NON_BULLETIN_SLUGS = [
@@ -54,6 +63,12 @@ def test_accepts_region_bulletin_slugs(region_code: str, slug: str) -> None:
 @pytest.mark.parametrize(("region_code", "slug"), NON_BULLETIN_SLUGS)
 def test_rejects_non_bulletin_slugs(region_code: str, slug: str) -> None:
     assert not is_bulletin_slug(region_code, slug)
+
+
+def test_loose_price_pdf_keeps_renamed_bulletins() -> None:
+    assert is_loose_price_pdf_slug("weekly-pump-prices-september-2026-pdf")
+    assert is_rejected_slug("doe-ph-logo-pdf")
+    assert not is_loose_price_pdf_slug("doe-ph-logo-pdf")
 
 
 @pytest.mark.parametrize(
