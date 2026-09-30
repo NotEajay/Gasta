@@ -20,16 +20,26 @@ import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency, formatDate, formatPeso, transportModeLabel } from '@/lib/format';
 import {
+  DASHBOARD_FUEL_TYPE,
+  DASHBOARD_REGION,
   fetchDashboardBudgetSummary,
+  fetchDashboardPendingSummary,
   fetchDashboardPriceSummary,
   fetchRecentUserReports,
+  resolveVehicleFuelCode,
   type DashboardBudgetSummary,
+  type DashboardPendingSummary,
   type DashboardPriceSummary,
   type DashboardReport,
 } from '@/lib/services/dashboard';
+import { resolveCurrentPlace } from '@/lib/services/location';
 import { fetchRecentTrips } from '@/lib/services/trips';
 import { fetchVehicles } from '@/lib/services/vehicles';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import type { DoeFuelTypeCode } from '@/constants/fuelTypes';
+import { DOE_FUEL_TYPES } from '@/constants/fuelTypes';
+import type { DoeRegionCode } from '@/constants/regions';
+import { DOE_REGIONS } from '@/constants/regions';
 import type { TripRecord } from '@/types/mcda';
 import type { Vehicle } from '@/types';
 
@@ -113,7 +123,18 @@ const ON_FOREST = {
   over: '#FCA5A5',
 } as const;
 
-/** "Sunday, September 28" — local device date, no network, no stored state. */
+/** "NCR" -> "National Capital Region", from the shared region table. */
+function regionDisplayName(code: DoeRegionCode): string {
+  return DOE_REGIONS.find((region) => region.code === code)?.name ?? code;
+}
+
+/** "RON_91" -> "RON 91", from the shared fuel table. */
+function fuelDisplayName(code: DoeFuelTypeCode): string {
+  return DOE_FUEL_TYPES.find((fuel) => fuel.code === code)?.name ?? code;
+}
+
+/**
+ * "Sunday, September 28" — local device date, no network, no stored state. */
 function getTodayLabel(now = new Date()): string {
   return now.toLocaleDateString(undefined, {
     weekday: 'long',
@@ -241,6 +262,23 @@ export default function HomeScreen() {
    * so no refill history is fetched at all.
    */
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [pending, setPending] = useState<DashboardPendingSummary | null>(null);
+  /**
+   * Macro-region resolved from the user's own coordinates.
+   *
+   * Null when location was never granted, was denied, or could not be mapped.
+   * It is resolved WITHOUT prompting: `requestIfNeeded: false` means Home reads
+   * an existing grant and never raises an OS dialog on its own, so focusing Home
+   * repeatedly cannot nag. Prices owns the explicit user-facing request.
+   */
+  const [regionCode, setRegionCode] = useState<DoeRegionCode | null>(null);
+  /**
+   * Fuel type taken from the primary vehicle's own `fuel_type_id`.
+   *
+   * Null when there is no vehicle, or the vehicle's fuel type is not one the DOE
+   * price services understand. Never guessed from the vehicle model.
+   */
+  const [vehicleFuelCode, setVehicleFuelCode] = useState<DoeFuelTypeCode | null>(null);
   const [loading, setLoading] = useState(true);
   /** Local-only expansion of the already-loaded activity list. No query. */
   const [showAllRecent, setShowAllRecent] = useState(false);
@@ -253,19 +291,56 @@ export default function HomeScreen() {
 
     setLoading(true);
     const now = new Date();
-    const [nextPrice, nextBudget, nextTrips, nextReports, nextVehicles] = await Promise.all([
-      fetchDashboardPriceSummary().catch(() => null),
-      fetchDashboardBudgetSummary(user.id, now.getFullYear(), now.getMonth() + 1).catch(() => null),
-      fetchRecentTrips(user.id, 8).catch(() => [] as TripRecord[]),
-      fetchRecentUserReports(user.id, 8).catch(() => [] as DashboardReport[]),
-      fetchVehicles(user.id).catch(() => [] as Vehicle[]),
-    ]);
 
-    setPrice(nextPrice);
+    /*
+     * Two phases, both internally parallel.
+     *
+     * Phase 1 is everything that does not depend on a resolved value: budget,
+     * trips, reports, vehicles, pending, and the location read. Phase 2 is the
+     * price query, because it needs the region and fuel type that phase 1
+     * produces.
+     *
+     * Every call keeps its own `.catch()`, so one failing source degrades to an
+     * empty section instead of an error screen. There is still no N+1 and no
+     * per-vehicle refill query.
+     */
+    const [nextBudget, nextTrips, nextReports, nextVehicles, nextPending, place] =
+      await Promise.all([
+        fetchDashboardBudgetSummary(user.id, now.getFullYear(), now.getMonth() + 1).catch(
+          () => null
+        ),
+        fetchRecentTrips(user.id, 8).catch(() => [] as TripRecord[]),
+        fetchRecentUserReports(user.id, 8).catch(() => [] as DashboardReport[]),
+        fetchVehicles(user.id).catch(() => [] as Vehicle[]),
+        fetchDashboardPendingSummary(),
+        // Non-prompting: reads an existing grant, returns null otherwise.
+        resolveCurrentPlace({ requestIfNeeded: false }).catch(() => null),
+      ]);
+
     setBudget(nextBudget);
     setTrips(nextTrips);
     setReports(nextReports);
     setVehicles(nextVehicles);
+    setPending(nextPending);
+    setRegionCode(place?.regionCode ?? null);
+
+    // The primary vehicle's own fuel type, resolved id -> DOE code. A failure
+    // resolves to null, which falls back to the labelled reference fuel.
+    const primaryVehicleFuel = nextVehicles[0]?.fuel_type_id ?? null;
+    const resolvedFuel = await resolveVehicleFuelCode(primaryVehicleFuel);
+    setVehicleFuelCode(resolvedFuel);
+
+    const effectiveRegion = place?.regionCode ?? DASHBOARD_REGION;
+    const effectiveFuel = resolvedFuel ?? DASHBOARD_FUEL_TYPE;
+
+    const nextPrice = await fetchDashboardPriceSummary(
+      effectiveRegion,
+      effectiveFuel,
+      place?.regionCode != null,
+      resolvedFuel != null
+    ).catch(() => null);
+
+    setPrice(nextPrice);
     setLoading(false);
   }, [user]);
 
@@ -417,11 +492,36 @@ export default function HomeScreen() {
       ? `${Math.round(budget.progress * 100)}%`
       : null;
 
-  // Attribution only. The existing summary carries no timestamp, so none is invented.
+  // Attribution, made honest about SCOPE rather than just source.
+  //
+  // A DOE row priced for a whole region is a reference figure, not a station
+  // quote, and saying only "DOE bulletin" let it read like the latter. The
+  // "<Region> reference" suffix is dropped entirely when the region came from the
+  // user and the fuel came from their vehicle.
   const priceSource = price
     ? price.source === 'community'
       ? 'Community verified'
-      : 'DOE bulletin'
+      : price.isRegionFallback
+        ? `DOE bulletin · ${regionDisplayName(price.regionCode ?? DASHBOARD_REGION)} reference`
+        : 'DOE bulletin · regional reference'
+    : null;
+
+  /**
+   * Section heading. Never "Nearby": Home resolves a MACRO-REGION from
+   * coordinates, never a station or a city, so any "nearby" wording would
+   * overclaim. When location is unknown the heading drops the region entirely
+   * rather than naming the fallback.
+   */
+  const fuelSectionTitle = regionCode ? `Fuel price · ${regionDisplayName(regionCode)}` : 'Fuel price';
+
+  /**
+   * A quiet qualifier under the price when the fuel is NOT the vehicle's own --
+   * either no vehicle exists, or its fuel type could not be resolved. Without
+   * this, a RON 91 reference figure sits directly beside a diesel vehicle with
+   * nothing signalling the mismatch.
+   */
+  const fuelFallbackNote = price?.isFuelFallback
+    ? `${fuelDisplayName(price.fuelCode)} reference · not your vehicle's fuel`
     : null;
 
   // Budget figures are ACTUAL accepted refill spending, shared with the Budget
@@ -649,7 +749,7 @@ export default function HomeScreen() {
                   <View style={styles.glanceIcon}>
                     <Ionicons name="water-outline" size={15} color={GasTaColors.forest} />
                   </View>
-                  <Text style={styles.glanceLabel}>Last refill</Text>
+                  <Text style={styles.glanceLabel}>Last refill price</Text>
                   {primaryVehicle.last_refill_price != null ? (
                     <>
                       <Text numberOfLines={1} style={styles.glanceValue}>
@@ -685,7 +785,7 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.block}>
-            <Text style={styles.sectionLabel}>Nearby fuel</Text>
+            <Text style={styles.sectionLabel}>{fuelSectionTitle}</Text>
             {price ? (
               <Pressable
                 accessibilityRole="link"
@@ -722,13 +822,52 @@ export default function HomeScreen() {
             ) : (
               <Text style={styles.emptyLine}>No price data yet</Text>
             )}
+
+            {/*
+              Only rendered when the queried fuel is NOT the vehicle's own. Sits
+              under the card rather than inside it so the price row keeps its
+              existing height.
+            */}
+            {fuelFallbackNote ? (
+              <Text style={styles.fuelNote}>{fuelFallbackNote}</Text>
+            ) : null}
           </View>
 
           {/*
-            A "Needs attention" block (pending refill allocations) belongs here.
-            It is deliberately absent: Home does not fetch pending allocations,
-            and an always-empty section would be worse than none.
+            PENDING RESPONSIBILITY.
+
+            A signal only, never an addition to the budget figures above: Home's
+            spend is accepted allocations alone, and a share still awaiting a
+            response is not yet a personal charge. Folding it in would make this
+            screen disagree with the Budget page, which keeps the same separation.
+
+            Rendered only when there is something to respond to, so the common
+            case costs no vertical space.
           */}
+          {pending && pending.count > 0 ? (
+            <View style={styles.block}>
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel="Review pending refill responsibility"
+                accessibilityHint="Opens your vehicles"
+                onPress={goToVehicles}
+                style={({ pressed }) => [styles.pendingCard, pressed && styles.pressed]}>
+                <View style={styles.pendingIcon}>
+                  <Ionicons name="hourglass-outline" size={15} color={palette.warning} />
+                </View>
+                <View style={styles.pendingText}>
+                  <Text style={styles.pendingTitle}>Pending responsibility</Text>
+                  <Text numberOfLines={1} style={styles.pendingHint}>
+                    {pending.count === 1
+                      ? '1 refill awaiting your response'
+                      : `${pending.count} refills awaiting your response`}
+                  </Text>
+                </View>
+                <Text style={styles.pendingValue}>{formatPeso(pending.total)}</Text>
+                <Ionicons name="chevron-forward" size={14} color={GasTaColors.forestMuted} />
+              </Pressable>
+            </View>
+          ) : null}
 
           <View style={styles.blockLast}>
             <View style={styles.sectionHead}>
@@ -1054,6 +1193,62 @@ const styles = StyleSheet.create({
   fuelPrice: { color: GasTaColors.forestDark, fontSize: 16, lineHeight: 20, fontWeight: '800' },
   fuelUnit: { fontSize: 11, fontWeight: '600', color: GasTaColors.textMuted },
   fuelSource: { color: GasTaColors.textSoft, fontSize: 10, lineHeight: 14, marginTop: 2 },
+  /**
+   * Qualifier under the price card, shown only when the fuel is not the
+   * vehicle's own. Muted so it reads as a footnote on the figure above rather
+   * than a second headline.
+   */
+  fuelNote: {
+    color: GasTaColors.forestMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: spacing.xs + 2,
+  },
+
+  /* ---- pending responsibility ---------------------------------------------- */
+  /*
+   * Warm-white row, matching every other Home card. The only colour cue is the
+   * amber icon and value, so it reads as "needs a response" without becoming an
+   * alarm or being mistaken for money already spent.
+   */
+  pendingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm + 2,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    backgroundColor: GasTaColors.white,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.forestBorder,
+  },
+  pendingIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(180, 83, 9, 0.10)',
+  },
+  // minWidth 0 lets the text column shrink at 320px instead of pushing the
+  // peso value and chevron off the row.
+  pendingText: { flex: 1, minWidth: 0 },
+  pendingTitle: {
+    color: GasTaColors.forestDark,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  pendingHint: {
+    color: GasTaColors.forestMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 1,
+  },
+  pendingValue: {
+    color: GasTaColors.forestDark,
+    fontSize: 15,
+    fontWeight: '800',
+  },
 
   /* ---- recent ------------------------------------------------------------ */
   recentCard: {

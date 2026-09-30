@@ -11,10 +11,64 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import { fetchLowestPrice, type FuelPriceRow } from '@/lib/services/fuelPrices';
+import { fetchMyPendingAllocations } from '@/lib/services/refillAllocations';
 import { supabase } from '@/lib/supabase';
 
+/**
+ * Fallbacks for when the user has told us nothing.
+ *
+ * These are used ONLY when region and fuel type cannot be resolved, and both
+ * are surfaced in the UI as an explicit "<X> reference" label. They are never
+ * presented as the user's location: a fixed default that reads as local is the
+ * one thing this pass exists to remove.
+ */
 export const DASHBOARD_REGION: DoeRegionCode = 'NCR';
 export const DASHBOARD_FUEL_TYPE: DoeFuelTypeCode = 'RON_91';
+
+/**
+ * `fuel_types.code` -> the DOE code the price services accept.
+ *
+ * A vehicle's `fuel_type_id` is a UUID into `fuel_types`, but every price query
+ * takes a DOE fuel CODE, so the id has to be resolved to a row and then mapped
+ * through a whitelist. The explicit map (rather than a cast) means an
+ * unrecognised or future fuel type resolves to null instead of reaching the
+ * price query as a bogus code.
+ *
+ * This mirrors the same mapping in `tripFuelPrice.ts`, which does the same
+ * id -> code resolution for the Trip screen.
+ */
+const FUEL_CODE_TO_DOE: Record<string, DoeFuelTypeCode> = {
+  RON_91: 'RON_91',
+  RON_95: 'RON_95',
+  RON_97: 'RON_97',
+  RON_100: 'RON_100',
+  DIESEL: 'DIESEL',
+  DIESEL_PLUS: 'DIESEL_PLUS',
+  KEROSENE: 'KEROSENE',
+};
+
+/**
+ * A vehicle's `fuel_type_id` -> the DOE fuel code used to price it.
+ *
+ * Returns null when the vehicle has no usable fuel type, so the caller can fall
+ * back explicitly rather than silently guessing.
+ */
+export async function resolveVehicleFuelCode(
+  fuelTypeId: string | null | undefined
+): Promise<DoeFuelTypeCode | null> {
+  if (!fuelTypeId) return null;
+  const { data, error } = await supabase
+    .from('fuel_types')
+    .select('id, code')
+    .eq('id', fuelTypeId)
+    .maybeSingle();
+
+  // A failed lookup must not break Home: the caller falls back to the labelled
+  // reference fuel instead.
+  if (error) return null;
+  if (!data?.code) return null;
+  return FUEL_CODE_TO_DOE[data.code] ?? null;
+}
 
 export type DashboardPriceSource = 'community' | 'doe';
 
@@ -23,6 +77,20 @@ export interface DashboardPriceSummary {
   stationName: string;
   location: string;
   source: DashboardPriceSource;
+  /**
+   * The macro-region this figure was actually priced for.
+   *
+   * Null when the region could not be resolved and the labelled fallback region
+   * was used, which is what makes the UI say "reference" instead of implying
+   * this is where the user is.
+   */
+  regionCode: DoeRegionCode | null;
+  /** True when this is the fixed fallback region, not the user's own. */
+  isRegionFallback: boolean;
+  /** True when this is the fixed fallback fuel, not the vehicle's own. */
+  isFuelFallback: boolean;
+  /** The DOE fuel code actually queried, e.g. 'DIESEL'. */
+  fuelCode: DoeFuelTypeCode;
 }
 
 export interface DashboardBudgetSummary {
@@ -63,7 +131,16 @@ export interface DashboardReport {
   status: string;
 }
 
-function communityPriceSummary(rows: VerifiedCommunityPrice[]): DashboardPriceSummary | null {
+/** Provenance flags attached to whichever price row wins the community/DOE race. */
+type PriceQueryContext = Pick<
+  DashboardPriceSummary,
+  'regionCode' | 'isRegionFallback' | 'isFuelFallback' | 'fuelCode'
+>;
+
+function communityPriceSummary(
+  rows: VerifiedCommunityPrice[],
+  context: PriceQueryContext
+): DashboardPriceSummary | null {
   const row = rows
     .filter((item) => Number.isFinite(item.reported_price) && item.reported_price > 0)
     .sort((a, b) => a.reported_price - b.reported_price)[0];
@@ -73,36 +150,83 @@ function communityPriceSummary(rows: VerifiedCommunityPrice[]): DashboardPriceSu
   return {
     price: row.reported_price,
     stationName: row.station_name || 'Station',
-    location: row.address || 'NCR',
+    // No invented region: an absent address reads as unknown, not as NCR.
+    location: row.address || 'Address unavailable',
     source: 'community',
+    ...context,
   };
 }
 
-function doePriceSummary(row: FuelPriceRow | null): DashboardPriceSummary | null {
+function doePriceSummary(
+  row: FuelPriceRow | null,
+  context: PriceQueryContext
+): DashboardPriceSummary | null {
   if (!row) return null;
 
   return {
     price: row.price_per_liter,
+    // DOE prices are company/area reference figures, not a named station.
     stationName: row.oil_company?.name || 'DOE price',
-    location: row.area_name || row.region?.name || 'NCR',
+    location: row.area_name || row.region?.name || 'Region-wide reference',
     source: 'doe',
+    ...context,
   };
 }
 
 /**
  * Read-only dashboard price summary. Community prices are preferred because they
  * identify a station; the existing DOE lowest-price service is the fallback.
+ *
+ * Region and fuel type are supplied explicitly by the caller. The parameter
+ * defaults remain for any other caller, but Home always passes resolved values
+ * so a fixed default can never silently masquerade as the user's own location.
  */
 export async function fetchDashboardPriceSummary(
   regionCode: DoeRegionCode = DASHBOARD_REGION,
   fuelTypeCode: DoeFuelTypeCode = DASHBOARD_FUEL_TYPE,
+  resolvedRegion: boolean = true,
+  resolvedFuel: boolean = true
 ): Promise<DashboardPriceSummary | null> {
+  const context: PriceQueryContext = {
+    regionCode: resolvedRegion ? regionCode : null,
+    isRegionFallback: !resolvedRegion,
+    isFuelFallback: !resolvedFuel,
+    fuelCode: fuelTypeCode,
+  };
+
   const [communityRows, doeRow] = await Promise.all([
     fetchFreshVerifiedPrices(regionCode, fuelTypeCode).catch(() => [] as VerifiedCommunityPrice[]),
     fetchLowestPrice(regionCode, fuelTypeCode).catch(() => null),
   ]);
 
-  return communityPriceSummary(communityRows) ?? doePriceSummary(doeRow);
+  return communityPriceSummary(communityRows, context) ?? doePriceSummary(doeRow, context);
+}
+
+/**
+ * Refill shares waiting on the signed-in user's response.
+ *
+ * This is a SIGNAL ONLY. It is deliberately not folded into any budget figure:
+ * Home's spend comes from accepted allocations alone, and a pending share is not
+ * yet a personal charge. Adding it here would make the headline disagree with the
+ * Budget page.
+ */
+export interface DashboardPendingSummary {
+  count: number;
+  total: number;
+}
+
+export async function fetchDashboardPendingSummary(): Promise<DashboardPendingSummary> {
+  try {
+    const rows = await fetchMyPendingAllocations();
+    return {
+      count: rows.length,
+      total: rows.reduce((sum, row) => sum + Number(row.amount), 0),
+    };
+  } catch {
+    // A missing Phase 2 RPC must not break Home. Zero here means "nothing we can
+    // see", not "nothing pending" -- but it is far better than an error screen.
+    return { count: 0, total: 0 };
+  }
 }
 
 /**
