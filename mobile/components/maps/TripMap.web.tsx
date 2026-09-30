@@ -658,7 +658,11 @@ const styles = StyleSheet.create({
     backgroundColor: GasTaColors.cream,
   },
   banner: {
-    ...StyleSheet.absoluteFillObject,
+    // StyleSheet.absoluteFill is the registered style id, which is what can be
+    // spread. `absoluteFillObject` is the underlying plain object and is not
+    // present on StyleSheet in React Native for Web's typings, so the previous
+    // spread did not typecheck. GlassSurface.tsx uses this same spread form.
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
     gap: 8,

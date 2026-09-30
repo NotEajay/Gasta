@@ -148,7 +148,12 @@ export default function SavedTripsScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+  // spacing.xxxl does not exist; the token set stops at xxl (48). xxl is what
+  // the other bottom-anchored tab screens use for the same purpose (see
+  // trip/index.tsx content padding and budget.tsx), so this restores the
+  // intended "extra room to clear the floating tab bar" without inventing a
+  // new global spacing step for two call sites.
+  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
   title: { fontSize: 17, fontWeight: '700', marginBottom: 4 },
   meta: { opacity: 0.85, marginTop: 2 },
   actionBtn: { marginTop: 10 },

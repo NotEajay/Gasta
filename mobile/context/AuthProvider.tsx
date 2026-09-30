@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import {
+  type AuthResult,
   createSessionFromUrl,
   getSession,
   isEmailVerified,
@@ -37,7 +38,17 @@ type AuthContextValue = {
     password: string,
     fullName: string,
   ) => Promise<{ error: string | null; needsVerification: boolean }>;
-  signInWithGoogle: () => Promise<{ error: string | null }>;
+  /**
+   * Google sign-in.
+   *
+   * Typed as the full `AuthResult`, which is what the wrapper in lib/auth.ts
+   * actually returns. This was previously narrowed to `{ error: string | null }`,
+   * which silently hid `pendingRedirect` and `session` from every consumer of
+   * the context even though the auth screen has always read and branched on both.
+   * The login flow, redirect behaviour and session handling are untouched; only
+   * the type now describes what was already being returned.
+   */
+  signInWithGoogle: () => Promise<AuthResult>;
   signOut: () => Promise<{ error: string | null }>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
   resendVerification: (email: string) => Promise<{ error: string | null }>;

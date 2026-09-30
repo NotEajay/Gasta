@@ -1,5 +1,40 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { supabase } from '@/lib/supabase';
+
+/**
+ * Narrow client that types the one table the generated `Database` does not know.
+ *
+ * `community_fuel_report_confirmations` is created in migration
+ * 20240812000005_community_fuel_stations.sql and has been queried from here
+ * all along, but `types/database.ts` predates it, so `.from(...)` rejects the
+ * table name and the `.eq('user_id', ...)` chain fails to resolve.
+ *
+ * Only the two columns this file reads are declared. This follows the same
+ * adapter pattern already used in refillAllocations.ts, vehicleRefills.ts and
+ * lib/profile.ts for the other not-yet-generated objects: type exactly what is
+ * called, rather than casting the result to `any` or editing the generated file
+ * or the database. Delete once `supabase gen types` has been re-run.
+ */
+interface ConfirmationDatabase {
+  public: {
+    Tables: {
+      community_fuel_report_confirmations: {
+        Row: { id: string; report_id: string; user_id: string; observed_price: number };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+    };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
+}
+
+const confirmationDb = supabase as unknown as SupabaseClient<ConfirmationDatabase>;
 
 export interface FuelStationOption {
   id: string;
@@ -60,26 +95,55 @@ export async function fetchFuelStationsByRegion(regionCode: string): Promise<Fue
       region:regions ( id, code, name )
     `;
 
-  let { data, error } = await supabase
+  /*
+   * Raw shape of a station row as it comes back from PostgREST.
+   *
+   * Declared locally because the generated `Database` type predates the
+   * `fuel_stations.brand_label` column (added in migration 007) and does not
+   * model the embedded `oil_company` / `region` relations, so supabase-js
+   * infers a `SelectQueryError` union for them. Both selects below therefore
+   * normalise into this one row type rather than into two incompatible
+   * inferred shapes -- the retry path used to fail to typecheck precisely
+   * because it assigned a differently-inferred result onto `data`.
+   *
+   * `brand_label` is genuinely nullable: custom brands store their name there,
+   * so the first select can legitimately return it and the fallback one cannot
+   * ask for it at all.
+   */
+  type StationRow = {
+    id: string;
+    name: string;
+    address: string | null;
+    brand_label?: string | null;
+    oil_company: { id: string; name: string; slug: string } | null;
+    region: { id: string; code: string; name: string } | null;
+  };
+
+  let rows: StationRow[] = [];
+  const first = await supabase
     .from('fuel_stations')
     .select(selectWithBrand)
     .eq('region_id', regionId)
     .order('name');
 
-  if (error) {
+  if (!first.error) {
+    rows = (first.data ?? []) as unknown as StationRow[];
+  } else {
+    // Older deployments have no brand_label column. Retry without it; the row
+    // shape is identical, which is why both branches share one type.
     const retry = await supabase
       .from('fuel_stations')
       .select(selectBasic)
       .eq('region_id', regionId)
       .order('name');
     if (retry.error) throw retry.error;
-    data = retry.data;
+    rows = (retry.data ?? []) as unknown as StationRow[];
   }
 
-  return ((data ?? []) as unknown as FuelStationOption[]).map((row) => ({
+  return rows.map((row) => ({
     ...row,
     brand_label: row.brand_label ?? null,
-  }));
+  })) as FuelStationOption[];
 }
 
 export async function findOilCompanyByName(name: string): Promise<string | null> {
@@ -343,12 +407,25 @@ async function fetchPendingReportsFallback(
   if (stationsRes.error) throw stationsRes.error;
   if (fuelTypesRes.error) throw fuelTypesRes.error;
 
+  // Narrow raw row for the embedded relation below. The generated `Database`
+  // type does not model `fuel_stations -> regions`, so supabase-js infers a
+  // SelectQueryError for `station.region`; `unwrapOne` then cannot accept it.
+  // Casting once at the query boundary keeps the mapping below honest: PostgREST
+  // returns either a single embedded object or a one-element array depending on
+  // whether the embed was treated as a to-one or to-many, and `unwrapOne`
+  // handles both.
+  type StationWithRegionRow = {
+    id: string;
+    name: string;
+    region: unknown;
+  };
+
   const stationsById = new Map(
-    (stationsRes.data ?? []).map((station) => {
+    ((stationsRes.data ?? []) as unknown as StationWithRegionRow[]).map((station) => {
       const region = unwrapOne(station.region as { code: string } | { code: string }[] | null);
       return [
         station.id,
-        { name: station.name as string, region: region ? { code: region.code } : { code: '' } },
+        { name: station.name, region: region ? { code: region.code } : { code: '' } },
       ];
     })
   );
@@ -374,7 +451,9 @@ export async function fetchConfirmedReportIds(
   reportIds: string[]
 ): Promise<Set<string>> {
   if (reportIds.length === 0) return new Set();
-  const { data, error } = await supabase
+  // Same table, same columns, same filters, same error handling -- only the
+  // client differs, because the generated types do not know this table.
+  const { data, error } = await confirmationDb
     .from('community_fuel_report_confirmations')
     .select('report_id')
     .eq('user_id', userId)
