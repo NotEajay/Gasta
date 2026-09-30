@@ -13,11 +13,15 @@ import pytest
 
 from src.parse_bulletin import (
     BulletinNotMachineReadable,
+    ParsedPrice,
     _assign_prices_by_column,
     _cluster_words_into_rows,
     _find_header_anchors,
+    _match_fuel_label,
+    _parse_fuel_line,
     _reject_corrupt_text_layer,
     detect_company_columns,
+    missing_core_fuels,
 )
 
 # x positions copied from a real NCR bulletin's header row.
@@ -188,3 +192,86 @@ def test_clean_prices_pass_the_text_layer_check() -> None:
     text = " ".join(f"8{n}.40 9{n}.60" for n in range(15))
 
     _reject_corrupt_text_layer("good.pdf", text)
+
+
+def test_diesel_plus_line_is_not_classified_as_diesel() -> None:
+    """Prefix matching must prefer DIESEL PLUS over DIESEL (text fallback path)."""
+    fuel, prices = _parse_fuel_line(
+        "DIESEL PLUS 60.10 60.10 65.40 69.45 60.10 69.45 61.00"
+    )
+    assert fuel == "DIESEL PLUS"
+    assert prices[0] == 60.10
+
+    fuel_plain, _ = _parse_fuel_line(
+        "DIESEL 53.60 57.10 56.45 58.24 60.19 54.75 51.05"
+    )
+    assert fuel_plain == "DIESEL"
+
+
+def test_ron_91_line_parses() -> None:
+    fuel, prices = _parse_fuel_line(
+        "RON 91 56.20 61.80 58.75 61.85 62.40 56.30 53.20"
+    )
+    assert fuel == "RON 91"
+    assert len(prices) >= 3
+
+
+def test_missing_core_fuels_when_siblings_present() -> None:
+    prices = [
+        ParsedPrice(company="Petron", fuel_type_code="RON_95", price_per_liter=60.0),
+        ParsedPrice(company="Petron", fuel_type_code="DIESEL", price_per_liter=55.0),
+    ]
+    assert missing_core_fuels(prices) == ["RON_91", "DIESEL_PLUS"]
+
+
+def test_missing_core_fuels_empty_when_both_present() -> None:
+    prices = [
+        ParsedPrice(company="Petron", fuel_type_code="RON_91", price_per_liter=58.0),
+        ParsedPrice(company="Shell", fuel_type_code="DIESEL_PLUS", price_per_liter=62.0),
+        ParsedPrice(company="Petron", fuel_type_code="DIESEL", price_per_liter=55.0),
+    ]
+    assert missing_core_fuels(prices) == []
+
+
+@pytest.mark.parametrize(
+    "label,area,fuel",
+    [
+        ("BAGUIO CITY RON 91", "BAGUIO CITY", "RON 91"),
+        ("BAGUIO CITY RON91", "BAGUIO CITY", "RON 91"),
+        ("BAGUIO CITY RON 9l", "BAGUIO CITY", "RON 91"),
+        ("BAGUIO CITY RON 9I", "BAGUIO CITY", "RON 91"),
+        ("BANGUED CITY DIESEL PLUS", "BANGUED CITY", "DIESEL PLUS"),
+        ("BANGUED CITY DIESELPLUS", "BANGUED CITY", "DIESEL PLUS"),
+        ("BANGUED CITY DIESEL +", "BANGUED CITY", "DIESEL PLUS"),
+        ("RON 91", "", "RON 91"),
+        ("DIESEL PLUS", "", "DIESEL PLUS"),
+        ("LUNA DIESEL", "LUNA", "DIESEL"),
+    ],
+)
+def test_ocr_fuel_label_aliases(label: str, area: str, fuel: str) -> None:
+    assert _match_fuel_label(label) == (area, fuel)
+
+
+def test_diesel_plus_not_swallowed_by_diesel_alias() -> None:
+    assert _match_fuel_label("BAGUIO CITY DIESEL PLUS") == ("BAGUIO CITY", "DIESEL PLUS")
+    assert _parse_fuel_line("DIESELPLUS 104.20 104.20 108.60 106.70 104.20 108.60")[0] == (
+        "DIESEL PLUS"
+    )
+
+
+def test_north_luzon_city_prefixed_ron_91_line() -> None:
+    """Scanned NL bulletins print province/city before the product on the same line."""
+    fuel, prices = _parse_fuel_line(
+        "ABRA BANGUED CITY RON 91 90.50 90.50 90.50 90.50 90.50 90.50"
+    )
+    assert fuel == "RON 91"
+    assert prices[0] == 90.50
+
+
+def test_north_luzon_city_prefixed_diesel_plus_line() -> None:
+    fuel, prices = _parse_fuel_line(
+        "BENGUET BAGUIO CITY DIESEL PLUS 104.20 104.20 108.60 108.60 106.70 104.20"
+    )
+    assert fuel == "DIESEL PLUS"
+    assert 104.20 in prices
+

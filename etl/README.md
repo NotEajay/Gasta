@@ -23,6 +23,8 @@ python run.py sync-all
 
 This discovers, downloads, parses, and loads **NCR, North Luzon, South Luzon, Visayas, and Mindanao**. Each region is skipped independently if that region's prices for the bulletin week already exist in Supabase, so re-running is safe and cheap.
 
+**Core fuels:** every sync checks that **RON 91** and **Diesel Plus** are present. If a week was stored without them (bad parse / older loader), the next ETL run **reloads** that week instead of skipping. A remaining gap fails the run (`FUEL GAP`).
+
 Preview without writing:
 
 ```bash

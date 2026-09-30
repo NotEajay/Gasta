@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+# Longest names first so "DIESEL PLUS" wins over "DIESEL" on prefix/endswith matches.
 FUEL_TYPES = [
     "RON 100",
     "RON 97",
     "RON 95",
     "RON 91",
-    "DIESEL",
     "DIESEL PLUS",
+    "DIESEL",
     "KEROSENE",
 ]
 
@@ -17,10 +18,14 @@ FUEL_TYPE_CODES = {
     "RON 97": "RON_97",
     "RON 95": "RON_95",
     "RON 91": "RON_91",
-    "DIESEL": "DIESEL",
     "DIESEL PLUS": "DIESEL_PLUS",
+    "DIESEL": "DIESEL",
     "KEROSENE": "KEROSENE",
 }
+
+# Fuels the Prices screen defaults to / always offers — every ETL sync must keep
+# these present when a bulletin otherwise has usable prices.
+CORE_FUEL_CODES = ("RON_91", "DIESEL_PLUS")
 
 # Default column order in DOE NCR / South Luzon monitoring tables (left to right)
 COMPANY_COLUMNS = [
