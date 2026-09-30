@@ -19,6 +19,7 @@ from .parse_bulletin import (
     missing_core_fuels,
     parse_region_pdfs,
 )
+from .pending_downloads import clear_pending_download, upsert_pending_download
 
 
 @dataclass
@@ -216,6 +217,26 @@ def _sync_discovered(
     downloaded = download_region_bulletins(
         region_key, discovered.slugs, dest_dir, discovered.urls
     )
+    # Queue inaccessible PDFs for the daily pending-retry workflow; clear any
+    # that succeeded this run so daily automation stops for those gaps.
+    if not dry_run:
+        for skip in downloaded.skipped:
+            upsert_pending_download(
+                region_code=region_code,
+                bulletin_date=discovered.week_start,
+                slug=skip.slug,
+                source_url=skip.url,
+                last_error=skip.error,
+            )
+        skipped_slugs = {item.slug for item in downloaded.skipped}
+        for slug in discovered.slugs:
+            if slug not in skipped_slugs:
+                clear_pending_download(
+                    region_code=region_code,
+                    bulletin_date=discovered.week_start,
+                    slug=slug,
+                )
+
     pdf_paths = downloaded.paths
     parsed = parse_region_pdfs(
         pdf_paths,
@@ -233,7 +254,7 @@ def _sync_discovered(
     if downloaded.skipped:
         coverage_note += (
             f" Skipped {len(downloaded.skipped)} inaccessible PDF(s): "
-            + "; ".join(downloaded.skipped[:3])
+            + "; ".join(downloaded.skip_notes[:3])
             + "."
         )
     if carried_areas:

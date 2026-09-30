@@ -54,5 +54,5 @@ def test_download_region_skips_403_sibling(tmp_path: Path) -> None:
     assert len(result.paths) == 2
     assert len(result.urls) == 2
     assert len(result.skipped) == 1
-    assert "region-v-bicol" in result.skipped[0]
+    assert result.skipped[0].slug == "region-v-bicol"
     assert "Bicol.pdf" in result.urls[0] or "CALABARZON" in result.urls[0]

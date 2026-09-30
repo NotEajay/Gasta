@@ -204,6 +204,76 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
     }
 
 
+def merge_bulletin_prices(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str, int]:
+    """Upsert prices for one PDF into an existing region/week without wiping siblings.
+
+    Used when a previously 403 sub-region PDF (e.g. Bicol) becomes available: keep
+    Calabarzon/Mimaropa rows, replace only the area_names present in this parse
+    (so carried-forward placeholders for those cities are overwritten).
+    """
+    if parsed.region_code not in REGION_CODES.values():
+        raise ValueError(f"Unknown region code: {parsed.region_code}")
+
+    if dry_run:
+        return {
+            "bulletin_date": parsed.bulletin_date.isoformat(),
+            "price_rows": len(parsed.prices),
+            "companies": len({p.company for p in parsed.prices}),
+            "duplicates_skipped": 0,
+            "dry_run": 1,
+            "merged": 1,
+        }
+
+    client = _client()
+    require_history_schema()
+    region_ids = _fetch_id_map(client, "regions", "code")
+    fuel_type_ids = _fetch_id_map(client, "fuel_types", "code")
+    region_id = region_ids[parsed.region_code]
+
+    bulletin_id = _upsert_bulletin(client, parsed)
+    company_ids = _ensure_oil_companies(client, {p.company for p in parsed.prices})
+
+    areas = sorted({p.area_name or "" for p in parsed.prices})
+    for area_name in areas:
+        query = (
+            client.table("fuel_prices")
+            .delete()
+            .eq("bulletin_id", bulletin_id)
+            .eq("region_id", region_id)
+            .eq("area_name", area_name)
+        )
+        query.execute()
+
+    rows_to_upsert = []
+    for price in parsed.prices:
+        if price.fuel_type_code not in fuel_type_ids:
+            continue
+        rows_to_upsert.append(
+            {
+                "bulletin_id": bulletin_id,
+                "region_id": region_id,
+                "oil_company_id": company_ids[price.company],
+                "fuel_type_id": fuel_type_ids[price.fuel_type_code],
+                "area_name": price.area_name or "",
+                "price_per_liter": price.price_per_liter,
+            }
+        )
+
+    if rows_to_upsert:
+        client.table("fuel_prices").upsert(
+            rows_to_upsert,
+            on_conflict="bulletin_id,region_id,oil_company_id,fuel_type_id,area_name",
+        ).execute()
+
+    return {
+        "bulletin_date": parsed.bulletin_date.isoformat(),
+        "price_rows": len(rows_to_upsert),
+        "companies": len(company_ids),
+        "duplicates_skipped": 0,
+        "merged": 1,
+    }
+
+
 def touch_bulletin_fetched_at(bulletin_date: date) -> None:
     """Record that ETL successfully fetched this week from DOE (even if prices were skipped)."""
     client = _client()
