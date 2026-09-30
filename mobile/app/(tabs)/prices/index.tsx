@@ -439,8 +439,12 @@ export default function FuelPricesScreen() {
   const areaLabel = areaName || 'All cities';
 
   const areas = useMemo(() => {
-    if (doeAreas.length > 0) return doeAreas;
-    return [...(REGION_FALLBACK_CITIES[region] ?? [])];
+    // Always keep the curated fallback cities (incl. Bicol hubs) visible even
+    // when this week's PDF set is incomplete — selecting one with no city rows
+    // falls back to region-wide DOE prices.
+    const fallback = REGION_FALLBACK_CITIES[region] ?? [];
+    const merged = new Set<string>([...doeAreas, ...fallback]);
+    return [...merged].sort((a, b) => a.localeCompare(b, 'en'));
   }, [doeAreas, region]);
 
   const regionOptions = useMemo(
