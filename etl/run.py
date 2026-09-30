@@ -98,9 +98,9 @@ def _report_staleness(results: list) -> None:
             file=sys.stderr,
         )
     print(
-        f"  Threshold: {MAX_BULLETIN_AGE_DAYS} days. DOE weeks start Tuesday, so a week is "
-        "up to 6 days old on its Tuesday; 14 days also absorbs the one full week of "
-        "publication delay DOE routinely has.",
+        f"  Threshold: {MAX_BULLETIN_AGE_DAYS} days since estimated DOE post "
+        "(week start + 7 days — the following Tuesday). "
+        "That matches the old 14-day week-start grace for one late publication.",
         file=sys.stderr,
     )
     print(

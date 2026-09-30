@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from supabase import Client, create_client
 
 from .constants import FUEL_TYPE_CODES, REGION_CODES
+from .freshness import estimated_doe_posted_date
 from .parse_bulletin import ParsedBulletin, slugify_company
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -81,10 +82,12 @@ def _upsert_bulletin(client: Client, parsed: ParsedBulletin) -> str:
     """
     bulletin_date = parsed.bulletin_date.isoformat()
     load_date = datetime.now(timezone.utc)
-    bulletin_datetime = datetime.combine(
-        parsed.bulletin_date, datetime.min.time()
-    ).replace(tzinfo=timezone.utc)
-    days_old = (load_date - bulletin_datetime).days
+    # Age vs estimated DOE post day (week_start + 7), not the Tuesday week start.
+    posted = estimated_doe_posted_date(parsed.bulletin_date)
+    posted_datetime = datetime.combine(posted, datetime.min.time()).replace(
+        tzinfo=timezone.utc
+    )
+    days_old = (load_date - posted_datetime).days
     source = parsed.source_url or parsed.source_path
 
     existing = (

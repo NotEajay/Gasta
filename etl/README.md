@@ -113,16 +113,21 @@ future CDN change fails the tests instead of silently reverting to stale data.
 ### Staleness guard
 
 A run **fails (exit 1)** when the newest bulletin a region has is more than
-`MAX_BULLETIN_AGE_DAYS` (14) old. See `src/freshness.py`.
+`MAX_BULLETIN_AGE_DAYS` (7) days past its **estimated DOE post date**. See
+`src/freshness.py`.
+
+Age is measured from `week_start + 7` (the following Tuesday, when DOE typically
+posts that Tue–Mon week), not from the week-start Tuesday itself — so a Sep 22
+bulletin posted on Sep 29 is 1 day old on Sep 30.
 
 This exists because a run could otherwise be "successful" while serving a month-old
 bulletin: discovery found an old week, that week was already stored, so the result was
 `skipped` and nothing counted as a failure. A stale week is reported even when it was
 skipped.
 
-**Why 14 days:** DOE weeks start Tuesday, so the current week is up to 6 days old.
-DOE also "regularly uploads a week's bulletin several days late (sometimes not until
-the following week)", which is 13 days — 14 absorbs that without masking a real outage.
+**Why 7 days since post:** Equivalent to the old 14-day threshold from week start
+(`post = week_start + 7`). That still absorbs DOE posting a week late without
+masking a real multi-week outage.
 
 ### Regional availability
 
