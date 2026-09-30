@@ -192,20 +192,36 @@ export default function TabLayout() {
     [navBarVisibility],
   );
 
+  /*
+   * The floating nav no longer hides on scroll.
+   *
+   * It used to: any downward scroll past offset 72 with a delta over 2px called
+   * `animateTabBar(false)`, which animated the bar off-screen. That is a common
+   * pattern, but on this app it made the primary navigation feel unreliable --
+   * a small scroll could leave a user with no visible way to change section, and
+   * inside the long Trip form it was easy to lose the bar and not get it back
+   * without deliberately scrolling to the top.
+   *
+   * Navigation that hides itself is navigation users stop trusting, so the bar
+   * is now pinned on every top-level tab. The scroll handler is kept wired
+   * (screens still pass it, and it still resets the offset bookkeeping) so the
+   * provider, the `reset` callback and the existing `useTabBarScrollHandler`
+   * contract are untouched -- only the hiding decision is removed.
+   *
+   * Route-based hiding is unaffected: the full-screen map picker still hides the
+   * bar via `pathname.includes('pick-map')` below, which is a real navigation
+   * boundary rather than a scroll heuristic.
+   *
+   * Nothing here touches the ghost-screen protection: `detachInactiveScreens`,
+   * `freezeOnBlur`, the opaque per-scene `sceneStyle` background and the
+   * safe-area insets are all unchanged.
+   */
   const handleTabBarScroll = useCallback(
     (event: TabScrollEvent) => {
-      const offset = Math.max(0, event.nativeEvent.contentOffset.y);
-      const delta = offset - previousOffset.current;
-
-      if (offset <= 24 || delta < -2) {
-        animateTabBar(true);
-      } else if (delta > 2 && offset > 72) {
-        animateTabBar(false);
-      }
-
-      previousOffset.current = offset;
+      // Track the offset so `reset` stays meaningful, but never hide.
+      previousOffset.current = Math.max(0, event.nativeEvent.contentOffset.y);
     },
-    [animateTabBar],
+    [],
   );
 
   const resetTabBar = useCallback(() => {

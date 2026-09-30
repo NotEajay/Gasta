@@ -65,6 +65,7 @@ import {
   type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
+import { matchBulletinArea, resolveCurrentPlace } from '@/lib/services/location';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
 
@@ -304,6 +305,108 @@ export default function FuelPricesScreen() {
   const [areaName, setAreaName] = useState('');
   const [doeAreas, setDoeAreas] = useState<string[]>([]);
   const [areasFromDoe, setAreasFromDoe] = useState(false);
+  /*
+   * Location-derived filtering.
+   *
+   * `nearMePlace` is non-null only while the CURRENT Region/City selection came
+   * from the device location. Any manual filter change clears it, which is what
+   * stops the screen from snapping back to the user after they browse elsewhere.
+   *
+   * `regionTouchedManually` records that the user has chosen a region by hand at
+   * least once this session, so the one-time location default never fights them.
+   */
+  const [nearMePlace, setNearMePlace] = useState<{
+    regionCode: DoeRegionCode;
+    city: string | null;
+  } | null>(null);
+  const [regionTouchedManually, setRegionTouchedManually] = useState(false);
+  const [nearMeBusy, setNearMeBusy] = useState(false);
+  const [nearMeDenied, setNearMeDenied] = useState(false);
+  const initialisedFromLocation = useRef(false);
+
+  /**
+   * Apply a resolved place to the filters.
+   *
+   * Region is always set. City is set only when the reverse-geocoded city matches
+   * a REAL area name from this region's bulletin -- `matchBulletinArea` never
+   * invents one, so an unmatched city simply leaves City on "All cities" rather
+   * than failing the screen.
+   */
+  const applyPlace = useCallback(
+    async (place: { regionCode: DoeRegionCode; city: string | null }) => {
+      setRegion(place.regionCode);
+      setNearMePlace({ regionCode: place.regionCode, city: place.city });
+      setNearMeDenied(false);
+      try {
+        const week = await fetchLatestBulletinForRegion(place.regionCode);
+        if (!week) {
+          setAreaName('');
+          return;
+        }
+        const bulletinAreas = await fetchBulletinAreas(week.id, place.regionCode);
+        setAreaName(matchBulletinArea(place.city, bulletinAreas) ?? '');
+      } catch {
+        setAreaName('');
+      }
+    },
+    []
+  );
+
+  /**
+   * User-triggered `Near me`. This is the only path that actively asks for
+   * permission, so a refusal is never nagged -- it just leaves the filters
+   * exactly as they were.
+   */
+  const handleNearMe = useCallback(async () => {
+    setNearMeBusy(true);
+    try {
+      const place = await resolveCurrentPlace({ requestIfNeeded: true, force: true });
+      if (!place) {
+        setNearMeDenied(true);
+        return;
+      }
+      await applyPlace(place);
+    } finally {
+      setNearMeBusy(false);
+    }
+  }, [applyPlace]);
+
+  // Any manual change to Region or City means the user is driving the filters
+  // from here, so drop the location badge and retire the default.
+  const handleManualRegion = useCallback((next: DoeRegionCode) => {
+    setRegionTouchedManually(true);
+    setNearMePlace(null);
+    setNearMeDenied(false);
+    setRegion(next);
+  }, []);
+  const handleManualArea = useCallback((next: string) => {
+    setRegionTouchedManually(true);
+    setNearMePlace(null);
+    setNearMeDenied(false);
+    setAreaName(next);
+  }, []);
+
+  /*
+   * One-time location default. It reads an EXISTING grant without prompting and
+   * runs only until it succeeds once; a manual choice, or a missing grant,
+   * permanently retires it for the session.
+   */
+  useEffect(() => {
+    if (initialisedFromLocation.current || regionTouchedManually) return;
+    if (!isSupabaseConfigured) return;
+    let cancelled = false;
+    void (async () => {
+      const place = await resolveCurrentPlace();
+      if (cancelled) return;
+      // No grant (or unavailable). Mark as done so we never silently retry, and
+      // leave every manual filter fully functional.
+      initialisedFromLocation.current = true;
+      if (place) await applyPlace(place);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [regionTouchedManually, applyPlace]);
   const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
   const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
   const [doeFetchAt, setDoeFetchAt] = useState<string | null>(null);
@@ -907,6 +1010,69 @@ export default function FuelPricesScreen() {
       </View>
 
       {/*
+        Location status. A quiet line, not a banner: it only appears while the
+        CURRENT filters came from the device. Coordinates are never shown -- the
+        user gets a place name, or just the region when that is all that could
+        be resolved. Choosing a Region or City by hand clears it, because at
+        that point the location is no longer what is driving the screen.
+      */}
+      {nearMePlace || nearMeDenied ? (
+        <View style={styles.nearMeRow}>
+          {nearMePlace ? (
+            <>
+              <MaterialCommunityIcons
+                name="crosshairs-gps"
+                size={13}
+                color={GasTaColors.forest}
+              />
+              <Text style={styles.nearMeText} numberOfLines={1}>
+                Near you · {nearMePlace.city ?? nearMePlace.regionCode}
+              </Text>
+            </>
+          ) : (
+            <>
+              <MaterialCommunityIcons
+                name="map-marker-off-outline"
+                size={13}
+                color={GasTaColors.textSoft}
+              />
+              <Text style={styles.nearMeText} numberOfLines={2}>
+                Location access is off. Choose your area manually.
+              </Text>
+            </>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Use my current location"
+            disabled={nearMeBusy}
+            hitSlop={8}
+            onPress={() => void handleNearMe()}
+            style={({ pressed }) => [pressed && styles.pressed]}>
+            <Text style={styles.nearMeAction}>
+              {nearMeBusy ? 'Locating…' : 'Near me'}
+            </Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.nearMeRow}>
+          <Text style={styles.nearMeText} numberOfLines={1}>
+            Showing {areaLabel}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Use my current location"
+            disabled={nearMeBusy}
+            hitSlop={8}
+            onPress={() => void handleNearMe()}
+            style={({ pressed }) => [pressed && styles.pressed]}>
+            <Text style={styles.nearMeAction}>
+              {nearMeBusy ? 'Locating…' : 'Near me'}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/*
         Freshness of the numbers below. It names the source ("DOE bulletin"),
         the week they describe, and how many days ago that week started, so a
         user can judge a price before trusting it. Deliberately a quiet metadata
@@ -982,7 +1148,7 @@ export default function FuelPricesScreen() {
           label="Region"
           value={region}
           options={regionOptions}
-          onChange={setRegion}
+          onChange={handleManualRegion}
           icon="map-marker-outline"
           style={isCompact ? styles.filterFieldWrap : undefined}
         />
@@ -990,7 +1156,7 @@ export default function FuelPricesScreen() {
           label="City"
           value={areaName}
           options={areaOptions}
-          onChange={setAreaName}
+          onChange={handleManualArea}
           icon="office-building-outline"
           placeholder="All cities"
           style={isCompact ? styles.filterFieldWrap : undefined}
@@ -1412,6 +1578,26 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: GasTaColors.textSoft,
     marginTop: 2,
+  },
+  /* ---- location status ---- */
+  nearMeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  nearMeText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+  },
+  nearMeAction: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: GasTaColors.forest,
   },
   /* ---- freshness metadata ---- */
   freshnessRow: {

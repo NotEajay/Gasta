@@ -8,6 +8,24 @@ import type { TransportModeCode } from './transportModes';
  * real route. Absolute avgSpeedKmh is the fallback when no driving duration
  * is available, and is always used for walking.
  */
+/**
+ * Provenance for a fare that came from an official fare guide.
+ *
+ * Rendered in the Trip result so a regulated figure is never confused with a
+ * locally-guessed one. Absent for modes with no authoritative source, which is
+ * itself the important signal.
+ */
+export interface FareProvenance {
+  /** Issuing body, e.g. "LTFRB fare guide". */
+  authority: string;
+  /** Which class within that guide, e.g. "Traditional PUJ". */
+  className: string;
+  /** ISO date the guide took effect. */
+  effectiveDate: string;
+  /** Plain-language note about what the figure does and does not cover. */
+  note?: string;
+}
+
 export interface TransportModeDefaults {
   /** Legacy flat ₱/km used only when `fare` is omitted. */
   costPerKm: number;
@@ -24,22 +42,70 @@ export interface TransportModeDefaults {
     includedKm: number;
     perKmAfter: number;
   };
+  /**
+   * Present ONLY where an official guide backs these numbers. Its absence means
+   * the fare is a local assumption, and the UI says so rather than implying a
+   * regulated rate.
+   */
+  fareSource?: FareProvenance;
+  /**
+   * Documented discounts. Reported, never silently applied -- the app has no
+   * way to know whether this particular rider qualifies.
+   */
+  fareDiscounts?: { audience: string; percent: number; condition?: string }[];
 }
 
 export const TRANSPORT_MODE_DEFAULTS: Record<
   Exclude<TransportModeCode, 'OWN_VEHICLE'>,
   TransportModeDefaults
 > = {
-  // Urban jeepney: cheap fare, slower door-to-door (wait + stops).
+  /*
+   * JEEPNEY / PUJ. These are the current LTFRB-Approved figures, not the
+   * pre-2026 ones: the board adjusted all PUV fares effective 19 March 2026,
+   * taking the traditional base from P13 to P14 and the succeeding-kilometre
+   * rate from P1.80 to P2.00.
+   *
+   * The old constants in this file were exactly the superseded P13 / P1.80
+   * values, so they were quietly understating every jeepney estimate.
+   *
+   * TWO HONEST CAVEATS:
+   *  - LTFRB regulates the CLASS, and the board now distinguishes traditional
+   *    from modern/aircon/electric PUJ, which carry a higher base (P17 / P2.40).
+   *    The app has a single "Jeepney" option, so it uses the TRADITIONAL class,
+   *    the cheapest regulated variant. A rider in an aircon jeepney will pay
+   *    more than shown.
+   *  - A real PUJ fare is per ROUTE and set on a published fare matrix, not a
+   *    straight per-kilometre rate over a continuous trip. The base + per-km
+   *    shape is the regulator's own, but a cross-town ride is usually one fare
+   *    rather than a metered one. It remains an estimate.
+   */
   JEEPNEY: {
     costPerKm: 2.5,
     avgSpeedKmh: 18,
     drivingTimeFactor: 1.35,
     timeBufferMinutes: 6,
     maxDistanceKm: null,
-    fare: { baseFare: 13, includedKm: 4, perKmAfter: 1.8 },
+    fare: { baseFare: 14, includedKm: 4, perKmAfter: 2.0 },
+    fareSource: {
+      authority: 'LTFRB fare guide',
+      className: 'Traditional PUJ',
+      effectiveDate: '2026-03-19',
+      note: 'Modern and aircon PUJ carry a higher regulated base fare.',
+    },
+    fareDiscounts: [
+      { audience: 'Senior citizens and persons with disabilities', percent: 20 },
+      { audience: 'Students', percent: 20, condition: 'School days' },
+    ],
   },
-  // Typical short-hop tricycle; not competitive on longer trips.
+  /*
+   * TRICYCLE. NO fareSource on purpose. Tricycle fares sit with LGUs under the
+   * Local Government Code, and the LTFRB PUV adjustment explicitly did not
+   * cover them -- there is no national matrix to point at. The numbers below
+   * are a local assumption and the UI says "Local fares may vary", because in
+   * practice a tricycle fare is negotiated per trip or per zone rather than
+   * metered per kilometre. Accurate pricing needs an LGU fare matrix, which is
+   * a data-collection task, not a constant.
+   */
   TRICYCLE: {
     costPerKm: 10,
     avgSpeedKmh: 22,
@@ -48,7 +114,18 @@ export const TRANSPORT_MODE_DEFAULTS: Record<
     maxDistanceKm: 8,
     fare: { baseFare: 30, includedKm: 1, perKmAfter: 10 },
   },
-  // Ride-hailing tracks driving time closely, with a pickup buffer.
+  /*
+   * RIDE-HAILING / TNVS. NO fareSource on purpose. The 19 March 2026 LTFRB
+   * adjustment covered jeepney, city and provincial bus, and explicitly
+   * EXCLUDED taxis and motorcycle taxis; the TNVS and UV Express petitions
+   * were still undecided at the time of writing. So there is no current
+   * regulated figure to adopt, and these remain a local estimate.
+   *
+   * There is also no provider integration of any kind -- no Grab or Angkas
+   * quote call anywhere in the app. Traffic, surge and demand are not
+   * represented, which is why the result says the actual booking fare may
+   * vary.
+   */
   RIDE_HAILING: {
     costPerKm: 18,
     avgSpeedKmh: 30,

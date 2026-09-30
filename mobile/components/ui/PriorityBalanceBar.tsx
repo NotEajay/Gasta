@@ -34,6 +34,15 @@ interface PriorityBalanceBarProps {
   estimatedTimeMinutes: number | null;
   costFormatter: (amount: number) => string;
   accessibilityLabel?: string;
+  /**
+   * Which surface this bar sits on.
+   *
+   * 'light' is the default and is unchanged. 'dark' is for the forest panel on
+   * Trip, where the light track, grey end labels and white outcome cards would
+   * all disappear against the fill. Only colours change -- geometry, snapping
+   * and the accessibility wiring are identical in both tones.
+   */
+  tone?: 'light' | 'dark';
 }
 
 function clamp01(value: number): number {
@@ -55,7 +64,9 @@ export default function PriorityBalanceBar({
   estimatedTimeMinutes,
   costFormatter,
   accessibilityLabel = 'Balance between saving money and travel time',
+  tone = 'light',
 }: PriorityBalanceBarProps) {
+  const dark = tone === 'dark';
   const [trackWidth, setTrackWidth] = useState(0);
   const trackWidthRef = useRef(0);
   const trackPageXRef = useRef(0);
@@ -120,10 +131,22 @@ export default function PriorityBalanceBar({
         text: `${savingsPercent}% savings, ${timePercent}% travel time`,
       }}>
       <View style={styles.labelsRow}>
-        <Text style={[styles.endLabel, value <= 0.5 && styles.endLabelActive]}>
+        <Text
+          style={[
+            styles.endLabel,
+            dark && styles.endLabelDark,
+            value <= 0.5 && styles.endLabelActive,
+            dark && value <= 0.5 && styles.endLabelActiveDark,
+          ]}>
           Save money
         </Text>
-        <Text style={[styles.endLabel, value >= 0.5 && styles.endLabelActive]}>
+        <Text
+          style={[
+            styles.endLabel,
+            dark && styles.endLabelDark,
+            value >= 0.5 && styles.endLabelActive,
+            dark && value >= 0.5 && styles.endLabelActiveDark,
+          ]}>
           Faster trip
         </Text>
       </View>
@@ -133,8 +156,8 @@ export default function PriorityBalanceBar({
         onLayout={onTrackLayout}
         style={styles.trackHit}
         {...pan.panHandlers}>
-        <View style={styles.track}>
-          <View style={[styles.trackFill, { width: `${value * 100}%` }]} />
+        <View style={[styles.track, dark && styles.trackDark]}>
+          <View style={[styles.trackFill, dark && styles.trackFillDark, { width: `${value * 100}%` }]} />
         </View>
 
         {MARKS.map((mark) => (
@@ -164,8 +187,18 @@ export default function PriorityBalanceBar({
               accessibilityRole="button"
               accessibilityState={{ selected }}
               onPress={() => onChange(mark.position)}
-              style={styles.markPressable}>
-              <Text style={[styles.markLabel, selected && styles.markLabelSelected]}>
+              style={[
+                styles.markPressable,
+                dark && styles.markPressableDark,
+                dark && selected && styles.markPressableDarkSelected,
+              ]}>
+              <Text
+                style={[
+                  styles.markLabel,
+                  dark && styles.markLabelDark,
+                  selected && styles.markLabelSelected,
+                  dark && selected && styles.markLabelSelectedDark,
+                ]}>
                 {mark.label}
               </Text>
             </Pressable>
@@ -174,23 +207,27 @@ export default function PriorityBalanceBar({
       </View>
 
       <View style={styles.outcomeRow}>
-        <View style={styles.outcomeCard}>
-          <Text style={styles.outcomeLabel}>Estimated fuel cost</Text>
+        <View style={[styles.outcomeCard, dark && styles.outcomeCardDark]}>
+          <Text style={[styles.outcomeLabel, dark && styles.outcomeLabelDark]}>
+            Estimated fuel cost
+          </Text>
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.7}
-            style={styles.outcomeValue}>
+            style={[styles.outcomeValue, dark && styles.outcomeValueDark]}>
             {estimatedCost != null ? costFormatter(estimatedCost) : '—'}
           </Text>
         </View>
-        <View style={styles.outcomeCard}>
-          <Text style={styles.outcomeLabel}>Travel time</Text>
+        <View style={[styles.outcomeCard, dark && styles.outcomeCardDark]}>
+          <Text style={[styles.outcomeLabel, dark && styles.outcomeLabelDark]}>
+            Travel time
+          </Text>
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.7}
-            style={styles.outcomeValue}>
+            style={[styles.outcomeValue, dark && styles.outcomeValueDark]}>
             {estimatedTimeMinutes != null
               ? `${Math.round(estimatedTimeMinutes)} min`
               : '—'}
@@ -206,6 +243,49 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: spacing.sm,
+  },
+  /* ---- dark tone (forest panel) ----
+     Every colour is a translucent white over the forest fill, so the slider
+     keeps the same geometry and the same contrast logic in both tones. */
+  endLabelDark: {
+    color: 'rgba(255, 255, 255, 0.72)',
+  },
+  endLabelActiveDark: {
+    color: '#FFFFFF',
+  },
+  trackDark: {
+    backgroundColor: 'rgba(255, 255, 255, 0.20)',
+  },
+  markLabelDark: {
+    color: 'rgba(255, 255, 255, 0.62)',
+  },
+  markLabelSelectedDark: {
+    color: GasTaColors.creamLight,
+    fontWeight: '800',
+  },
+  outcomeCardDark: {
+    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+  },
+  outcomeLabelDark: {
+    color: 'rgba(255, 255, 255, 0.68)',
+  },
+  /*
+   * Dark-tone outcome value. `outcomeValue` is HomeColors.navy, which on the
+   * forest fill rendered as near-black on near-black and was the least legible
+   * number on the screen. Warm cream rather than pure white so the two cards
+   * stay softer than the pure-white thumb and the selected preset pill.
+   */
+  outcomeValueDark: {
+    color: GasTaColors.creamLight,
+  },
+  /*
+   * Dark-tone track fill. HomeColors.primary sat too close to the forest fill to
+   * read as "how far the slider is set", so the fill goes cream and the unfilled
+   * track stays translucent white.
+   */
+  trackFillDark: {
+    backgroundColor: GasTaColors.creamLight,
   },
   endLabel: {
     fontSize: 13,
@@ -264,6 +344,23 @@ const styles = StyleSheet.create({
   markPressable: {
     paddingVertical: 4,
     paddingHorizontal: 2,
+  },
+  /*
+   * Dark-tone marker chips. A slightly lighter forest surface with pale text,
+   * and a stronger fill for the selected one -- readable without the bright
+   * white pill row the light tone uses.
+   */
+  markPressableDark: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  markPressableDarkSelected: {
+    backgroundColor: 'rgba(255, 255, 255, 0.24)',
+    borderColor: 'rgba(255, 255, 255, 0.34)',
   },
   markLabel: {
     fontSize: 12,

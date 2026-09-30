@@ -1,18 +1,19 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Text } from '@/components/Themed';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import TripSectionHeader from '@/components/trip/TripSectionHeader';
-import ChipSelect from '@/components/ui/ChipSelect';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import ModeRankCard from '@/components/ui/ModeRankCard';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import PriorityBalanceBar from '@/components/ui/PriorityBalanceBar';
 import { DEFAULT_MCDA_WEIGHTS } from '@/constants/mcda';
+import { TRANSPORT_MODE_DEFAULTS } from '@/constants/tripDefaults';
+import type { TransportModeCode } from '@/constants/transportModes';
 import { HomeColors } from '@/constants/home';
 import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
@@ -21,6 +22,18 @@ import { formatPeso, transportModeLabel } from '@/lib/format';
 import { weightsSumToOne } from '@/lib/mcda';
 import { createSavedTrip } from '@/lib/services/savedTrips';
 import { logTripToHistory } from '@/lib/services/trips';
+import {
+  regionForTrip,
+  resolveTripFuelPrice,
+  type TripFuelPriceResult,
+} from '@/lib/services/tripFuelPrice';
+import {
+  matchBulletinArea,
+  regionFromCoordinates,
+  reverseGeocodeCityOnly,
+} from '@/lib/services/location';
+import { fetchBulletinAreas, fetchLatestBulletinForRegion } from '@/lib/services/fuelPrices';
+import type { DoeRegionCode } from '@/constants/regions';
 import { fetchVehicleCatalog, fetchVehicles } from '@/lib/services/vehicles';
 import { calculateTripRecommendation } from '@/lib/tripCalculator';
 import {
@@ -56,6 +69,14 @@ export default function TripOptimizerScreen() {
   );
   const [destination, setDestination] = useState('');
   const [destinationRouteValue, setDestinationRouteValue] = useState('');
+  /**
+   * Destination coordinates, kept alongside the Directions string so the trip
+   * can be mapped to a DOE pricing area. `destinationRouteValue` is a
+   * "lat,lng" payload consumed by Google Maps and is not meant to be parsed by
+   * feature code, so the point is retained directly from the picker instead.
+   * Stays null when the destination was typed as free text.
+   */
+  const [destinationPoint, setDestinationPoint] = useState<RouteLocation | null>(null);
   const [templateName, setTemplateName] = useState('');
   /**
    * Inline validation for the missing-template-name case. This replaces the
@@ -91,6 +112,7 @@ export default function TripOptimizerScreen() {
       setOriginLocation(selection.origin);
       setDestination(selection.destination.displayName);
       setDestinationRouteValue(selection.destination.directionsValue);
+      setDestinationPoint(selection.destination);
     }, [])
   );
 
@@ -214,36 +236,352 @@ export default function TripOptimizerScreen() {
     setCatalogSearchQuery('');
   }, []);
 
-  const lastRefillPrice = useMemo(() => {
-    if (!isManualVehicle && selectedVehicle) {
-      return selectedVehicle.last_refill_price ?? null;
-    }
-    const manual = parseFloat(manualLastRefillPrice);
-    return Number.isFinite(manual) && manual > 0 ? manual : null;
-  }, [isManualVehicle, selectedVehicle, manualLastRefillPrice]);
+  /*
+   * Trusted fuel price for this trip.
+   *
+   * Replaces `vehicle.last_refill_price` as the optimizer's price input. A
+   * refill figure is what the driver happened to pay at one past fill-up, which
+   * is a poor proxy for what fuel costs around the trip being planned. The
+   * resolver prefers a fresh VERIFIED community price for the trip's region and
+   * the vehicle's fuel type, then falls back to the official DOE bulletin.
+   * Pending / unverified community reports are never consulted.
+   *
+   * A manual trip still lets the user type a price, because that is an explicit
+   * input for this specific trip rather than a stored historical value.
+   */
+  const [tripFuelPrice, setTripFuelPrice] = useState<TripFuelPriceResult | null>(null);
+  const [tripFuelPriceLoading, setTripFuelPriceLoading] = useState(false);
+  /*
+   * Optional per-trip price override.
+   *
+   * Off by default, so the trusted automatic price (verified community > DOE) is
+   * what normally drives the cost. Toggled on only when the driver knows better
+   * than the bulletin -- e.g. they just paid, or saw a price at a station.
+   *
+   * Lifetime is intentionally one screen. It is never written back to the
+   * vehicle, never turned into a refill, and never submitted as a community
+   * report, so it cannot silently become a trusted price for anyone else.
+   */
+  const [useCustomFuelPrice, setUseCustomFuelPrice] = useState(false);
+  const [customFuelPriceInput, setCustomFuelPriceInput] = useState('');
+  const [customFuelPriceError, setCustomFuelPriceError] = useState<string | null>(null);
+  /**
+   * The comparison result is presented in a bottom sheet, which is the single
+   * canonical place it appears. The form underneath keeps its state, so
+   * dismissing the sheet never costs the user their inputs.
+   */
+  const [showResultSheet, setShowResultSheet] = useState(false);
 
-  const missingLastRefillPrice =
-    !isManualVehicle && selectedVehicle?.last_refill_price == null;
+  const manualPriceValue = useMemo(() => {
+    if (!isManualVehicle && !useCustomFuelPrice) return null;
+    const manual = parseFloat(customFuelPriceInput);
+    return Number.isFinite(manual) && manual > 0 ? manual : null;
+  }, [isManualVehicle, useCustomFuelPrice, customFuelPriceInput]);
+
+  /*
+   * Where the fuel for this trip would actually be bought.
+   *
+   * ORIGIN first, not destination. An own-vehicle trip normally fuels up near
+   * where it starts, so pricing the trip at the destination area was quietly
+   * wrong for any long cross-region route. The destination is still used, fully,
+   * for routing and the Directions call.
+   *
+   * Precedence:
+   *   1. explicit origin coordinates (picked on the map)
+   *   2. the device's current location, when there is no explicit origin
+   *   3. nearest-centroid region from those coordinates
+   *   4. the area a bulletin actually publishes for that region
+   *   5. nothing -> the screen says the price is unavailable
+   */
+  const [originPlace, setOriginPlace] = useState<{
+    regionCode: DoeRegionCode;
+    city: string | null;
+  } | null>(null);
+  const [originArea, setOriginArea] = useState<string | null>(null);
+
+  const tripRegion = useMemo(
+    () => originPlace?.regionCode ?? regionForTrip([originLocation]),
+    [originPlace, originLocation]
+  );
+
+  /*
+   * Only ever reached once a region is known, and it resolves the bulletin
+   * itself rather than depending on Prices state: Trip does not hold a
+   * bulletin. It asks the region for its real areas and returns a matching real
+   * area name, or null. It never invents one, so a failed match simply leaves
+   * Area unset and the price falls back to the region figure.
+   */
+  useEffect(() => {
+    if (!originPlace) {
+      setOriginArea(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const week = await fetchLatestBulletinForRegion(originPlace.regionCode);
+        if (cancelled || !week) {
+          setOriginArea(null);
+          return;
+        }
+        const areas = await fetchBulletinAreas(week.id, originPlace.regionCode);
+        if (!cancelled) setOriginArea(matchBulletinArea(originPlace.city, areas));
+      } catch {
+        if (!cancelled) setOriginArea(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [originPlace]);
+
+  /*
+   * Derive the origin's place from the origin the map picker returned.
+   *
+   * There is deliberately NO second location control on this screen: the picker
+   * already offers "Current location", and it is the single place location is
+   * chosen. What this screen needs is not a control but the resolved geography
+   * for whatever origin came back.
+   *
+   * The region is computed synchronously from the coordinates, so the price
+   * geography is correct immediately. The city is reverse-geocoded once per
+   * origin change (and the location service caches per session), purely to try
+   * to match a real bulletin area. A failed or absent city is harmless: the
+   * area simply stays unset and pricing falls back to the regional figure.
+   */
+  useEffect(() => {
+    if (!originLocation) {
+      setOriginPlace(null);
+      return;
+    }
+    const regionCode = regionFromCoordinates(originLocation.latitude, originLocation.longitude);
+    let cancelled = false;
+    void reverseGeocodeCityOnly(originLocation.latitude, originLocation.longitude).then(
+      (city) => {
+        if (cancelled) return;
+        setOriginPlace({ regionCode, city });
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [originLocation]);
+
+  /*
+   * The single number the existing MCDA consumes. `calculateTripRecommendation`
+   * takes a plain `fuelPricePerLiter: number` and that contract is preserved:
+   * only the *source* of the number changed. It stays null when no trusted
+   * price exists, so the optimizer refuses to score rather than invent a cost.
+   */
+  const effectiveFuelPrice = useMemo(() => {
+    // Precedence: manual > verified community > DOE > unavailable.
+    if (manualPriceValue != null) return manualPriceValue;
+    if (isManualVehicle) return null;
+    if (!tripFuelPrice || tripFuelPrice.status !== 'ok') return null;
+    return tripFuelPrice.price.pricePerLiter;
+  }, [manualPriceValue, isManualVehicle, tripFuelPrice]);
+
+  /**
+   * Own-vehicle cost breakdown, derived from the SAME numbers the calculator
+   * already used.
+   *
+   * `buildModeRawScores` computes `ownFuelCost` as exactly
+   * `(distanceKm / fuelEfficiencyKmPerLiter) * fuelPricePerLiter`, so the litres
+   * shown here are that same quotient and the total is the figure MCDA already
+   * produced. Nothing is recomputed with a second formula, and
+   * `tripCalculator.ts` is untouched -- `raw.fuelCost` is displayed as the total
+   * rather than being multiplied out again.
+   */
+  const ownVehicleBreakdown = useMemo(() => {
+    if (!result || result.recommended.modeCode !== 'OWN_VEHICLE') return null;
+    if (routeDistanceKm == null || effectiveFuelPrice == null) return null;
+    const efficiencyKmPerLiter = parseFloat(efficiency);
+    if (!Number.isFinite(efficiencyKmPerLiter) || efficiencyKmPerLiter <= 0) return null;
+
+    const litersNeeded = routeDistanceKm / efficiencyKmPerLiter;
+    return {
+      distanceKm: routeDistanceKm,
+      efficiencyKmPerLiter,
+      litersNeeded,
+      pricePerLiter: effectiveFuelPrice,
+      // The authoritative total: straight from the MCDA evaluation.
+      totalCost: result.recommended.raw.fuelCost,
+    };
+  }, [result, routeDistanceKm, effectiveFuelPrice, efficiency]);
+
+  /** Which source produced the number the MCDA used, for the result card. */
+  const fuelPriceProvenance = useMemo(() => {
+    if (manualPriceValue != null) {
+      return { label: 'Your price', detail: 'Entered for this trip only' };
+    }
+    if (tripFuelPrice?.status === 'ok') {
+      return { label: tripFuelPrice.price.sourceLabel, detail: tripFuelPrice.price.detail };
+    }
+    return null;
+  }, [manualPriceValue, tripFuelPrice]);
+
+  /**
+   * Per-mode confidence line, straight from the fare configuration.
+   *
+   * A mode with `fareSource` is a regulated figure and names the guide and its
+   * class. A mode without one is a local assumption, and says so. That
+   * distinction is the point: the optimizer may compare them, but it must not
+   * present all of them as equally authoritative.
+   *
+   * Declared after `fuelPriceProvenance` because it reads it.
+   */
+  const modeFareNote = useCallback(
+    (mode: TransportModeCode): string => {
+      if (mode === 'OWN_VEHICLE') {
+        return fuelPriceProvenance
+          ? `Estimated fuel cost · ${fuelPriceProvenance.label}`
+          : 'Estimated fuel cost';
+      }
+      if (mode === 'WALKING') return 'No fare';
+      const defaults =
+        TRANSPORT_MODE_DEFAULTS[mode as Exclude<TransportModeCode, 'OWN_VEHICLE'>];
+      if (!defaults) return '';
+      const modeName = transportModeLabel(mode).toLowerCase();
+      if (defaults.fareSource) {
+        return `Estimated ${modeName} fare · ${defaults.fareSource.authority}, ${defaults.fareSource.className}`;
+      }
+      if (mode === 'RIDE_HAILING') {
+        return `Estimated ${modeName} fare · actual booking fare may vary`;
+      }
+      if (mode === 'TRICYCLE') {
+        return `Estimated ${modeName} fare · local fares may vary`;
+      }
+      return `Estimated ${modeName} fare · based on configured fare rules`;
+    },
+    [fuelPriceProvenance]
+  );
+
+  /**
+   * What the recommended mode's cost number actually represents.
+   *
+   * For OWN_VEHICLE it really is a fuel cost: a trusted price multiplied by the
+   * litres the trip needs. For every other mode `raw.fuelCost` is a FARE taken
+   * from the configured constants, so calling it "fuel cost" was simply wrong.
+   * They are estimates from static configuration, not quotes, and the copy now
+   * says so rather than implying a live or exact fare.
+   */
+  const recommendedCost = useMemo(() => {
+    const mode = result?.recommended?.modeCode;
+    if (!mode) return null;
+    if (mode === 'OWN_VEHICLE') {
+      return {
+        label: 'Estimated fuel cost',
+        sourceNote: fuelPriceProvenance
+          ? `${fuelPriceProvenance.label} · ${fuelPriceProvenance.detail}`
+          : null,
+        disclaimer: null as string | null,
+      };
+    }
+    const modeName = transportModeLabel(mode).toLowerCase();
+    return {
+      label: `Estimated ${modeName} fare`,
+      sourceNote: 'Based on configured fare rules',
+      disclaimer:
+        mode === 'RIDE_HAILING' ? 'Actual app fare may vary with traffic and demand.' : null,
+    };
+  }, [result, fuelPriceProvenance]);
+
+  const missingFuelPrice =
+    !isManualVehicle && tripFuelPrice !== null && tripFuelPrice.status === 'unavailable';
+
+  /*
+   * Resolve the trusted price whenever the inputs that define it change.
+   *
+   * Keyed on the vehicle's fuel type and the trip's region, so switching
+   * vehicle, changing destination, or moving to a different DOE area recomputes
+   * the source and its date. A stale price from a previous selection cannot
+   * survive: the previous result is cleared before the new one is requested,
+   * and the fetch is guarded against out-of-order resolution.
+   */
+  useEffect(() => {
+    if (isManualVehicle) {
+      setTripFuelPrice(null);
+      setTripFuelPriceLoading(false);
+      return;
+    }
+    const fuelTypeId = selectedVehicle?.fuel_type_id ?? null;
+    if (!fuelTypeId || !tripRegion) {
+      setTripFuelPrice(null);
+      setTripFuelPriceLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setTripFuelPriceLoading(true);
+    setTripFuelPrice(null);
+    void resolveTripFuelPrice({ fuelTypeId, regionCode: tripRegion, areaName: originArea })
+      .then((result) => {
+        if (!cancelled) setTripFuelPrice(result);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTripFuelPrice({
+            status: 'unavailable',
+            reason: 'error',
+            message: 'Could not load current fuel prices.',
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTripFuelPriceLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isManualVehicle, selectedVehicle?.fuel_type_id, tripRegion, originArea]);
+
+  useEffect(() => {
+    if (!useCustomFuelPrice && !customFuelPriceError) return;
+    const raw = customFuelPriceInput.trim();
+    if (raw === '') {
+      setCustomFuelPriceError(null);
+      return;
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      setCustomFuelPriceError('Enter a number, for example 80.00');
+    } else if (value <= 0) {
+      setCustomFuelPriceError('Enter a price greater than zero.');
+    } else {
+      setCustomFuelPriceError(null);
+    }
+  }, [customFuelPriceInput, useCustomFuelPrice, customFuelPriceError]);
 
   const optimizeRequestId = useRef(0);
 
-  // Route/vehicle inputs are editable without recalculating. Changing them
-  // clears the previous route until Optimize is tapped again. Weight changes
-  // do NOT clear the route — they live-rescore the existing distance/time.
+  /*
+   * Inputs stay editable without recalculating. Changing them invalidates the
+   * COMPARISON, so the stale result and sheet are cleared here.
+   *
+   * It deliberately does NOT clear `routeDistanceKm` / `routeDurationMinutes`.
+   * It used to, and that was the source of a visible blink: every origin or
+   * destination keystroke wiped the distance, then the debounced preview
+   * restored it ~600ms later, so the row blinked out and back on each change.
+   * The route preview effect above now owns those two values and keeps the last
+   * good figure until its replacement genuinely arrives.
+   *
+   * Weight changes still do not clear the route -- they live-rescore the
+   * existing distance and time.
+   */
   useEffect(() => {
     optimizeRequestId.current += 1;
     setOptimizing(false);
     setResult(null);
     setRouteError(null);
-    setRouteDistanceKm(null);
-    setRouteDurationMinutes(null);
     setLastOptimizeElapsedMs(null);
+    setShowResultSheet(false);
   }, [
     destination,
     destinationRouteValue,
     efficiency,
     isManualVehicle,
-    lastRefillPrice,
+    effectiveFuelPrice,
     manualLastRefillPrice,
     origin,
     originLocation,
@@ -255,7 +593,7 @@ export default function TripOptimizerScreen() {
     if (routeDistanceKm == null || routeDurationMinutes == null) return;
 
     const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
-    const price = lastRefillPrice;
+    const price = effectiveFuelPrice;
     if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) return;
     if (price == null || price <= 0) return;
     if (!weightsSumToOne(weights)) return;
@@ -269,7 +607,83 @@ export default function TripOptimizerScreen() {
         ownVehicleTravelTimeMinutes: routeDurationMinutes,
       }),
     );
-  }, [weights, routeDistanceKm, routeDurationMinutes, efficiency, lastRefillPrice]);
+  }, [weights, routeDistanceKm, routeDurationMinutes, efficiency, effectiveFuelPrice]);
+
+  /*
+   * Resolve the driving route as soon as the endpoints are set.
+   *
+   * Distance used to appear only after "Compare trip costs", because the single
+   * Directions call lived inside the optimize handler. That made a user pick two
+   * endpoints and get nothing back until they had also committed to a
+   * comparison -- the number needed in order to judge the route was hidden behind
+   * the very action meant to use it.
+   *
+   * This resolves the route on its own, from route/directions state, so the
+   * Route card updates as soon as the endpoints settle. The optimize handler
+   * keeps its own call, because scoring needs a duration fetched at that moment.
+   *
+   * Debounced so it never fires per keystroke, and guarded so a stale response
+   * from a previous pair of endpoints cannot overwrite the current one. Clearing
+   * the endpoints clears the distance rather than leaving a stale figure.
+   */
+  /*
+   * Whether a replacement route is in flight.
+   *
+   * Kept SEPARATE from `routeDistanceKm` on purpose. A single piece of state
+   * forced a choice: either keep showing the old distance while the new one
+   * loads (then the number is briefly wrong), or clear it (then the row blinks
+   * out and back). Holding the last good value and flagging "loading"
+   * independently lets the row stay put and just read `Updating…`.
+   */
+  const [routePreviewLoading, setRoutePreviewLoading] = useState(false);
+
+  useEffect(() => {
+    const originText = origin.trim();
+    const destinationText = destination.trim();
+
+    // Only an ACTUALLY cleared endpoint removes the preview. Changing one keeps
+    // the last valid distance on screen until its replacement arrives.
+    if (!originText || !destinationText) {
+      setRoutePreviewLoading(false);
+      setRouteDistanceKm(null);
+      setRouteDurationMinutes(null);
+      return;
+    }
+
+    const originForDirections = originLocation
+      ? `${originLocation.latitude},${originLocation.longitude}`
+      : originText;
+    const destinationForDirections = destinationRouteValue || destinationText;
+
+    let cancelled = false;
+    setRoutePreviewLoading(true);
+
+    const timer = setTimeout(() => {
+      void getDrivingRoute(originForDirections, destinationForDirections)
+        .then((route) => {
+          if (cancelled) return;
+          // Both values land in the same commit, so the chip never shows a new
+          // distance beside a stale duration.
+          setRouteDistanceKm(route.distanceKm);
+          setRouteDurationMinutes(route.durationMinutes);
+          setRoutePreviewLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // A failed replacement does NOT erase a preview that was working. The
+          // value simply stays as it was, and the compare action reports the
+          // failure properly if the route truly cannot be resolved.
+          setRoutePreviewLoading(false);
+        });
+    }, ROUTE_PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      // Timer cleared here, so a superseded request never sets the flag off
+      // while the newer one is still in flight.
+      clearTimeout(timer);
+    };
+  }, [origin, destination, originLocation, destinationRouteValue]);
 
   const handleOptimize = useCallback(async () => {
     if (optimizing) return;
@@ -296,7 +710,7 @@ export default function TripOptimizerScreen() {
       const destinationForDirections = destinationRouteValue || destination;
 
       const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
-      const price = lastRefillPrice;
+      const price = effectiveFuelPrice;
       if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
         Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
         return;
@@ -310,11 +724,18 @@ export default function TripOptimizerScreen() {
         return;
       }
       if (price == null || price <= 0) {
+        // Refuse to score rather than inventing a cost. The MCDA still needs one
+        // numeric fuel price, so a route with no trusted price simply is not
+        // ranked until a current DOE, verified community, or user-entered price
+        // exists.
         Alert.alert(
-          'Fuel price required',
+          'Current fuel price unavailable',
           isManualVehicle
             ? 'Enter the fuel price (₱/L) for this trip before optimizing.'
-            : 'Add a last-refill price to this vehicle before optimizing.'
+            : customFuelPriceError ??
+              (tripFuelPrice?.status === 'unavailable'
+                ? tripFuelPrice.message
+                : 'No current DOE or verified community price is available for this fuel yet.')
         );
         return;
       }
@@ -333,6 +754,9 @@ export default function TripOptimizerScreen() {
           ownVehicleTravelTimeMinutes: routeResult.durationMinutes,
         })
       );
+      // The sheet is the canonical result presentation, so it opens as soon as
+      // a fresh comparison lands.
+      setShowResultSheet(true);
       outcome = 'success';
     } catch (error) {
       if (requestId !== optimizeRequestId.current) return;
@@ -362,7 +786,7 @@ export default function TripOptimizerScreen() {
     destinationRouteValue,
     efficiency,
     isManualVehicle,
-    lastRefillPrice,
+    effectiveFuelPrice,
     optimizing,
     origin,
     originLocation,
@@ -508,17 +932,6 @@ export default function TripOptimizerScreen() {
 
   if (loading) return <LoadingState message="Loading trip data…" />;
 
-  const vehicleOptions = [
-    ...vehicles.map((vehicle) => ({
-      value: vehicle.id,
-      label: vehicle.nickname ?? `${vehicle.brand} ${vehicle.model}`,
-    })),
-    { value: 'manual' as const, label: 'Other vehicle' },
-  ];
-
-  const chipValue =
-    selectedVehicleId === 'manual' ? 'manual' : (selectedVehicle?.id ?? null);
-
   return (
     <ScrollView
       onScroll={tabBarScrollHandler}
@@ -529,121 +942,314 @@ export default function TripOptimizerScreen() {
       keyboardDismissMode="on-drag">
       <TripSectionHeader active="new" />
 
-      {/* Step 1 — the primary task. Route leads the flow. */}
-      <View style={styles.stepSection}>
-        <View style={styles.stepHeadRow}>
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepBadgeText}>1</Text>
+      {/*
+        ROUTE. One warm-white surface holding the two endpoints, the map
+        picker and the live distance summary. The picker, its params and the
+        Google Directions call are all unchanged -- only the presentation moved
+        onto a card.
+      */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Route</Text>
+        <View style={styles.sectionCard}>
+          {/*
+            The two endpoints are the most important content in this card, so
+            they are the largest thing in it. The label sits INSIDE the field as
+            a small uppercase eyebrow rather than above it, which puts the
+            address on the first line the eye lands on and removes a row of
+            chrome from each field.
+
+            Both remain real `TextInput`s, so typing works exactly as before and
+            there is no duplicate route state: the same `origin` / `destination`
+            values and the same `setOriginLocation(null)` on edit are all that
+            drive selection, pricing and routing.
+          */}
+          <View style={styles.routeFields}>
+            <View style={styles.routeField}>
+              <Text style={styles.routeFieldLabel}>Origin</Text>
+              <TextInput
+                value={origin}
+                onChangeText={(value) => {
+                  setOrigin(value);
+                  setOriginLocation(null);
+                  // Clearing the coordinates retires the device fix, so pricing
+                  // follows the typed origin with no location badge left behind.
+                  setOriginPlace(null);
+                }}
+                placeholder="Add starting point"
+                placeholderTextColor={GasTaColors.textMuted}
+                style={styles.routeFieldInput}
+                multiline
+                numberOfLines={2}
+              />
+            </View>
+
+            {/* Lightweight relationship marker. Deliberately thin: it shows the
+                two fields are one route, and stays out of the way. */}
+            <View style={styles.routeConnector} />
+
+            <View style={styles.routeField}>
+              <Text style={styles.routeFieldLabel}>Destination</Text>
+              <TextInput
+                value={destination}
+                onChangeText={(value) => {
+                  setDestination(value);
+                  setDestinationRouteValue('');
+                }}
+                placeholder="Add destination"
+                placeholderTextColor={GasTaColors.textMuted}
+                style={styles.routeFieldInput}
+                multiline
+                numberOfLines={2}
+              />
+            </View>
           </View>
-          <View style={styles.stepHeadText}>
-            <Text style={styles.stepTitle}>Route</Text>
-            <Text style={styles.stepHint}>Where are you going?</Text>
-          </View>
+
+          {/* Real route values only -- never a placeholder. The last good figure
+              stays on screen while a replacement is in flight, so the row does
+              not blink; only the chip gains a quiet "updating" note. */}
+          {routeDistanceKm != null ? (
+            <View style={styles.routeStatRow}>
+              <Text style={styles.routeStatLabel}>Total distance</Text>
+              <View style={styles.routeStatChip}>
+                <Text style={styles.routeStatValue}>
+                  {routeDistanceKm.toFixed(1)} km
+                </Text>
+                {routeDurationMinutes != null ? (
+                  <Text style={styles.routeStatMeta}>
+                    {' '}
+                    · {Math.round(routeDurationMinutes)} min
+                  </Text>
+                ) : null}
+                {routePreviewLoading ? (
+                  <Text style={styles.routeStatMeta}> · updating…</Text>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          {/*
+            Secondary, not a competing CTA. A compact outlined pill under the
+            fields, so the addresses stay the focus and the card does not carry
+            a large full-width button block.
+          */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Choose origin and destination on a map"
+            hitSlop={8}
+            onPress={() =>
+              router.push({
+                pathname: '/(tabs)/trip/pick-map' as never,
+                params: {
+                  origin: origin.trim() || undefined,
+                  destination: destination.trim() || undefined,
+                },
+              })
+            }
+            style={({ pressed }) => [styles.pickMapPill, pressed && styles.pressed]}>
+            <Ionicons name="map-outline" size={14} color={GasTaColors.textOnForest} />
+            <Text style={styles.pickMapPillText}>Pick on map</Text>
+          </Pressable>
+
+          {routeError ? <Text style={styles.error}>{routeError}</Text> : null}
         </View>
-
-        <LabeledInput
-          label="From"
-          value={origin}
-          onChangeText={(value) => {
-            setOrigin(value);
-            setOriginLocation(null);
-          }}
-          placeholder="e.g. Quezon City Hall, Quezon City"
-        />
-
-        <LabeledInput
-          label="To"
-          value={destination}
-          onChangeText={(value) => {
-            setDestination(value);
-            setDestinationRouteValue('');
-          }}
-          placeholder="e.g. Makati Avenue, Makati"
-        />
-
-        <PrimaryButton
-          label="Pick on Map"
-          variant="secondary"
-          onPress={() =>
-            router.push({
-              pathname: '/(tabs)/trip/pick-map' as never,
-              params: {
-                origin: origin.trim() || undefined,
-                destination: destination.trim() || undefined,
-              },
-            })
-          }
-          style={styles.pickMapBtn}
-        />
-
-        {/* Compact: distance and duration are one line, never two big cards. */}
-        {routeDistanceKm != null && routeDurationMinutes != null ? (
-          <View style={styles.routeChip}>
-            <Ionicons name="navigate-outline" size={13} color={HomeColors.primary} />
-            <Text style={styles.routeChipText}>
-              {routeDistanceKm.toFixed(1)} km ·{' '}
-              {Math.round(routeDurationMinutes)} min
-            </Text>
-          </View>
-        ) : null}
-
-        {routeError ? <Text style={styles.error}>{routeError}</Text> : null}
-        {/*
-          The per-run timing text used to be rendered here. It is developer
-          telemetry, not user information, so it now only lives in the console
-          logging inside handleOptimize. The timing logic itself is unchanged.
-        */}
       </View>
 
-      {/* Step 2 — vehicle/fuel basis. */}
-      <View style={styles.stepSection}>
-        <View style={styles.stepHeadRow}>
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepBadgeText}>2</Text>
-          </View>
-          <View style={styles.stepHeadText}>
-            <Text style={styles.stepTitle}>Vehicle &amp; fuel</Text>
-            <Text style={styles.stepHint}>
-              Pick a saved vehicle, or another car for this trip.
-            </Text>
-          </View>
-        </View>
-
-        {hasRegisteredVehicles ? (
-          <ChipSelect
-            label="Your vehicle"
-            options={vehicleOptions}
-            value={chipValue}
-            onChange={handleVehicleChipChange}
-          />
-        ) : null}
-
-        {!isManualVehicle && selectedVehicle ? (
-          <>
-            <Text numberOfLines={1} ellipsizeMode="tail" style={styles.vehicleName}>
-              {selectedVehicle.nickname ??
-                `${selectedVehicle.brand} ${selectedVehicle.model}`}
-            </Text>
-            {selectedVehicle.nickname ? (
-              <Text numberOfLines={1} ellipsizeMode="tail" style={styles.vehicleMeta}>
-                {selectedVehicle.brand} {selectedVehicle.model}
-              </Text>
-            ) : null}
-
-            {missingLastRefillPrice ? (
-              <View style={styles.warnBox}>
-                <Text style={styles.warnTitle}>Fuel price needed</Text>
-                <Text style={styles.warnBody}>
-                  Add a refill price for this vehicle before optimizing.
-                </Text>
-                <PrimaryButton
-                  label="Go to My Vehicles"
-                  variant="secondary"
-                  size="sm"
-                  onPress={() => router.push('/(tabs)/vehicles')}
-                  style={styles.warnBtn}
-                />
+      {/*
+        VEHICLE. Owned vehicles are compact selectable tiles rather than a chip
+        row, because a chip row read as a filter and gave no room to show the
+        efficiency that actually drives the cost. Selection logic, the vehicle
+        query and `handleVehicleChipChange` are untouched -- only the control
+        changed, and it calls the same handler.
+      */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Vehicle</Text>
+        <View style={styles.sectionCard}>
+          {hasRegisteredVehicles ? (
+            <>
+              <View style={styles.vehicleGrid}>
+                {vehicles.map((vehicle) => {
+                  const selected = selectedVehicleId === vehicle.id;
+                  const name = vehicle.nickname ?? `${vehicle.brand} ${vehicle.model}`;
+                  return (
+                    <Pressable
+                      key={vehicle.id}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`${name}, ${vehicle.fuel_efficiency_km_per_liter} kilometers per liter`}
+                      onPress={() => handleVehicleChipChange(vehicle.id)}
+                      style={({ pressed }) => [
+                        styles.vehicleTile,
+                        selected && styles.vehicleTileSelected,
+                        pressed && !selected && styles.pressed,
+                      ]}>
+                      <View style={styles.vehicleTileTop}>
+                        <Ionicons
+                          name="car-outline"
+                          size={15}
+                          // Selected tile is solid forest, so the icon must be
+                          // light. Using `forest` here (as an earlier pass did)
+                          // painted the icon the same colour as its own
+                          // background and made it disappear.
+                          color={selected ? GasTaColors.textOnForest : GasTaColors.forestMuted}
+                        />
+                        <Text
+                          numberOfLines={1}
+                          style={[styles.vehicleTileName, selected && styles.vehicleTileSelectedText]}>
+                          {name}
+                        </Text>
+                        {selected ? (
+                          <View style={[styles.vehicleTileCheck, styles.vehicleTileCheckOnDark]}>
+                            <Ionicons
+                              name="checkmark"
+                              size={11}
+                              color={GasTaColors.textOnForest}
+                            />
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.vehicleTileMeta, selected && styles.vehicleTileSelectedMeta]}>
+                        {vehicle.brand} {vehicle.model} ·{' '}
+                        {vehicle.fuel_efficiency_km_per_liter} km/L
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: isManualVehicle }}
+                  accessibilityLabel="Other vehicle, enter details manually"
+                  onPress={() => handleVehicleChipChange('manual')}
+                  style={({ pressed }) => [
+                    styles.vehicleTile,
+                    isManualVehicle && styles.vehicleTileSelected,
+                    pressed && !isManualVehicle && styles.pressed,
+                  ]}>
+                  <View style={styles.vehicleTileTop}>
+                    <Ionicons
+                      name="add-circle-outline"
+                      size={15}
+                      color={
+                        isManualVehicle ? GasTaColors.textOnForest : GasTaColors.forestMuted
+                      }
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.vehicleTileName,
+                        isManualVehicle && styles.vehicleTileSelectedText,
+                      ]}>
+                      Other vehicle
+                    </Text>
+                    {isManualVehicle ? (
+                      <View style={[styles.vehicleTileCheck, styles.vehicleTileCheckOnDark]}>
+                        <Ionicons name="checkmark" size={11} color={GasTaColors.textOnForest} />
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.vehicleTileMeta,
+                      isManualVehicle && styles.vehicleTileSelectedMeta,
+                    ]}>
+                    Enter efficiency and price
+                  </Text>
+                </Pressable>
               </View>
+
+              {/*
+                The selected tile already shows efficiency in its meta line,
+                but a tile meta is meant to be scannable, not authoritative.
+                This strip is the primary reading of the value, so the number is
+                set larger here and the tile keeps its compact secondary role.
+              */}
+              {selectedVehicle ? (
+                <View style={styles.effRow}>
+                  <Ionicons
+                    name="speedometer-outline"
+                    size={14}
+                    color={GasTaColors.forestMuted}
+                  />
+                  <Text style={styles.effLabel}>Fuel efficiency</Text>
+                  <Text style={styles.effValue}>
+                    {selectedVehicle.fuel_efficiency_km_per_liter} km/L
+                  </Text>
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </View>
+      </View>
+
+      {/*
+        FUEL PRICE. Its own section rather than a detail buried under Vehicle,
+        because this single assumption is what the whole cost estimate rests
+        on, and the user should be able to see -- and challenge -- it before
+        comparing anything. Precedence is unchanged: manual > verified community
+        > DOE > unavailable.
+      */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Fuel price</Text>
+        <View style={styles.sectionCard}>
+          {!isManualVehicle && selectedVehicle ? (
+            <>
+              {/*
+                No origin is not the same problem as "no price available".
+
+                Without an origin the resolver has no geography to price against,
+                so it is never even called. Showing the generic unavailable copy
+                there would blame the price data when the real gap is a missing
+                trip start, and it would invite the user to go hunting for a
+                bulletin that is sitting there perfectly fine.
+
+                This is deliberately NOT a location prompt. The app never asks for
+                the device location on its own -- the user picks an origin, and
+                "Current location" is offered inside the map picker. The message
+                points at that existing path rather than introducing a second one.
+              */}
+              {!tripRegion ? (
+                <View style={styles.originNeededBox}>
+                  <Text style={styles.originNeededTitle}>
+                    Select an origin to load local fuel prices.
+                  </Text>
+                  <Text style={styles.originNeededBody}>
+                    Fuel pricing is based on where your trip starts. Choose a start
+                    point, or pick your current location on the map.
+                  </Text>
+                </View>
+              ) : missingFuelPrice || tripFuelPriceLoading ? (
+              <View style={styles.warnBox}>
+                <Text style={styles.warnTitle}>
+                  {tripFuelPriceLoading ? 'Loading fuel price…' : 'Current fuel price unavailable'}
+                </Text>
+                <Text style={styles.warnBody}>
+                  {tripFuelPriceLoading
+                    ? 'Checking the latest DOE bulletin and verified community prices.'
+                    : tripFuelPrice?.status === 'unavailable'
+                      ? tripFuelPrice.message
+                      : 'No current DOE or verified community price is available for this fuel yet.'}
+                </Text>
+                <Text style={styles.warnHint}>
+                  Costs are not estimated without a current, trusted price.
+                </Text>
+              </View>
+            ) : isManualVehicle ? (
+              <>
+                <View style={styles.statRow}>
+                  <Text style={styles.statLabel}>Fuel efficiency</Text>
+                  <Text style={styles.statValue}>{efficiency} km/L</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statRow}>
+                  <Text style={styles.statLabel}>Fuel price</Text>
+                  <Text style={styles.statValue}>
+                    {manualPriceValue != null ? `${formatPeso(manualPriceValue)}/L` : '—'}
+                  </Text>
+                </View>
+                <Text style={styles.priceSource}>Entered for this trip</Text>
+              </>
             ) : (
               <>
                 <View style={styles.statRow}>
@@ -652,11 +1258,65 @@ export default function TripOptimizerScreen() {
                 </View>
                 <View style={styles.statDivider} />
                 <View style={styles.statRow}>
-                  <Text style={styles.statLabel}>Latest fuel price</Text>
+                  <Text style={styles.statLabel}>Current fuel price</Text>
                   <Text style={styles.statValue}>
-                    {formatPeso(lastRefillPrice!)}/L
+                    {tripFuelPrice?.status === 'ok'
+                      ? `${formatPeso(tripFuelPrice.price.pricePerLiter)}/L`
+                      : '—'}
                   </Text>
                 </View>
+                {tripFuelPrice?.status === 'ok' ? (
+                  <Text style={styles.priceSource}>{tripFuelPrice.price.detail}</Text>
+                ) : null}
+
+                {/*
+                  Optional override. Off by default, so the trusted automatic
+                  price drives the cost unless the driver opts in. Toggling back
+                  re-runs the resolver immediately -- nothing is cleared or
+                  reopened.
+                */}
+                {useCustomFuelPrice ? (
+                  <View style={styles.overrideBlock}>
+                    <LabeledInput
+                      label="Price per liter"
+                      value={customFuelPriceInput}
+                      onChangeText={(text) => {
+                        setCustomFuelPriceInput(text);
+                        if (customFuelPriceError) setCustomFuelPriceError(null);
+                      }}
+                      keyboardType="decimal-pad"
+                      placeholder="e.g. 80.00"
+                      error={customFuelPriceError ?? undefined}
+                    />
+                    <Text style={styles.overrideAuto}>
+                      Use a price you recently saw or paid. It applies to this trip only.
+                    </Text>
+                    {tripFuelPrice?.status === 'ok' ? (
+                      <Text style={styles.overrideAuto}>
+                        Automatic price: {formatPeso(tripFuelPrice.price.pricePerLiter)}/L ·{' '}
+                        {tripFuelPrice.price.sourceLabel}
+                      </Text>
+                    ) : null}
+                    <PrimaryButton
+                      label="Use automatic price"
+                      variant="secondary"
+                      size="sm"
+                      onPress={() => {
+                        setUseCustomFuelPrice(false);
+                        setCustomFuelPriceInput('');
+                        setCustomFuelPriceError(null);
+                      }}
+                    />
+                  </View>
+                ) : (
+                  <PrimaryButton
+                    label="Use my own price"
+                    variant="secondary"
+                    size="sm"
+                    onPress={() => setUseCustomFuelPrice(true)}
+                    style={styles.overrideToggle}
+                  />
+                )}
               </>
             )}
           </>
@@ -741,6 +1401,47 @@ export default function TripOptimizerScreen() {
             />
           </>
         )}
+        </View>
+      </View>
+
+      {/*
+        COMPARE TRANSPORT. Its own surface, and the place where the difference
+        in cost confidence is stated up front rather than buried in a result.
+
+        The fuel figure is a real, source-backed price -- DOE bulletin, verified
+        community, or one the driver typed. Every other figure is arithmetic on
+        the configured fare constants, with no provider quote behind it. The
+        wording says exactly that, so a cheap jeepney estimate is never read as
+        a confirmed fare. The constants themselves are unchanged in this pass.
+      */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Compare transport</Text>
+        <View style={styles.sectionCard}>
+          <View style={[styles.modeRow, styles.modeRowOwn]}>
+            <Text style={styles.modeRowTitle}>Own vehicle</Text>
+            <Text style={styles.modeRowNote}>{modeFareNote('OWN_VEHICLE')}</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={[styles.modeRow, styles.modeRowJeepney]}>
+            <Text style={styles.modeRowTitle}>Jeepney</Text>
+            <Text style={styles.modeRowNote}>{modeFareNote('JEEPNEY')}</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={[styles.modeRow, styles.modeRowTricycle]}>
+            <Text style={styles.modeRowTitle}>Tricycle</Text>
+            <Text style={styles.modeRowNote}>{modeFareNote('TRICYCLE')}</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={[styles.modeRow, styles.modeRowRideHailing]}>
+            <Text style={styles.modeRowTitle}>Ride-hailing</Text>
+            <Text style={styles.modeRowNote}>{modeFareNote('RIDE_HAILING')}</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={[styles.modeRow, styles.modeRowWalking]}>
+            <Text style={styles.modeRowTitle}>Walking</Text>
+            <Text style={styles.modeRowNote}>No fare</Text>
+          </View>
+        </View>
       </View>
 
       {/*
@@ -750,10 +1451,10 @@ export default function TripOptimizerScreen() {
       */}
       <View style={styles.prefBlock}>
         <View style={styles.prefHeadRow}>
-          <Ionicons name="options-outline" size={15} color={HomeColors.muted} />
-          <Text style={styles.prefTitle}>What matters more?</Text>
+          <Ionicons name="options-outline" size={15} color="rgba(255, 255, 255, 0.8)" />
+          <Text style={[styles.prefTitle, styles.prefTitleOnDark]}>What matters more?</Text>
         </View>
-        <Text style={styles.prefHint}>
+        <Text style={[styles.prefHint, styles.prefHintOnDark]}>
           Drag to balance saving money and travel time. Outcomes update after you optimize.
         </Text>
 
@@ -763,10 +1464,11 @@ export default function TripOptimizerScreen() {
           estimatedCost={result?.recommended?.raw.fuelCost ?? null}
           estimatedTimeMinutes={result?.recommended?.raw.travelTime ?? null}
           costFormatter={formatPeso}
+          tone="dark"
         />
 
         {!weightsSumToOne(weights) ? (
-          <Text style={styles.tuneError}>Weights must sum to 1.0</Text>
+          <Text style={[styles.tuneError, styles.tuneErrorOnDark]}>Weights must sum to 1.0</Text>
         ) : null}
       </View>
 
@@ -775,7 +1477,8 @@ export default function TripOptimizerScreen() {
           untouched. */}
       <View style={styles.ctaBlock}>
         <PrimaryButton
-          label={optimizing ? 'Finding route…' : 'Optimize trip'}
+          label={optimizing ? 'Finding route…' : 'Compare trip costs'}
+          variant="secondary"
           onPress={handleOptimize}
           disabled={optimizing}
           style={styles.optimizeBtn}
@@ -787,68 +1490,186 @@ export default function TripOptimizerScreen() {
         ) : null}
       </View>
 
-      {result?.recommended ? (
-        <View style={styles.resultSection}>
-          <View style={styles.resultHeadRow}>
-            <Ionicons name="sparkles-outline" size={15} color={HomeColors.primary} />
-            <Text style={styles.resultHead}>Result</Text>
-          </View>
+      {/*
+        RESULT SHEET. The single canonical presentation of a comparison, shown
+        after "Compare trip costs" lands. Built on the plain RN Modal the app
+        already uses in four other screens rather than pulling in a bottom-sheet
+        library: it gives the rounded top corners, warm surface, drag handle,
+        safe-area padding and a scrollable body, which is all this needs.
 
-          {/*
-            Presentation only. Every value below is read directly from the
-            existing `result` / route state — no new calculation is introduced,
-            and nothing here writes to Budget.
-          */}
-          <View style={styles.hero}>
-            <Text style={styles.heroKicker}>Recommended</Text>
-            <Text numberOfLines={2} style={styles.heroMode}>
-              {transportModeLabel(result.recommended.modeCode)}
-            </Text>
-            <View style={styles.heroDivider} />
-            <Text style={styles.heroLabel}>Estimated trip fuel cost</Text>
-            <Text
-              adjustsFontSizeToFit
-              minimumFontScale={0.75}
-              numberOfLines={1}
-              style={styles.heroValue}>
-              {formatPeso(result.recommended.raw.fuelCost)}
-            </Text>
-            {routeDistanceKm != null && routeDurationMinutes != null ? (
-              <View style={styles.heroRouteRow}>
-                <Ionicons name="navigate-outline" size={12} color={HomeColors.muted} />
-                <Text style={styles.heroRoute}>
-                  {routeDistanceKm.toFixed(1)} km · {Math.round(routeDurationMinutes)} min
+        Dismissal only hides the sheet. The Trip form keeps every input, the
+        route and the result, so reopening shows the current comparison rather
+        than forcing a re-run.
+      */}
+      <Modal
+        visible={showResultSheet && result?.recommended != null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowResultSheet(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowResultSheet(false)}>
+          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.receiptHead}>
+              <Text style={styles.sheetKicker}>Trip summary</Text>
+              <Text style={styles.receiptRoute} numberOfLines={1}>
+                {origin.trim() || 'Origin'} → {destination.trim() || 'Destination'}
+              </Text>
+            </View>
+            <ScrollView
+              style={styles.sheetBody}
+              contentContainerStyle={styles.sheetBodyContent}
+              showsVerticalScrollIndicator={false}>
+              {/* RECEIPT: a header, the recommended total, a real arithmetic
+                  breakdown where one can be shown honestly, then other modes.
+                  Thin rules and spacing do the work -- no torn edges, no icon
+                  bubbles, no gradient. */}
+              <View style={styles.receiptTotal}>
+                <Text style={styles.receiptTotalLabel}>Recommended for this trip</Text>
+                <Text style={styles.receiptTotalMode}>
+                  {result ? transportModeLabel(result.recommended.modeCode) : ''}
                 </Text>
+                <Text
+                  style={styles.receiptTotalValue}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}>
+                  {result ? formatPeso(result.recommended.raw.fuelCost) : ''}
+                </Text>
+                {recommendedCost?.sourceNote ? (
+                  <Text style={styles.receiptNote}>{recommendedCost.sourceNote}</Text>
+                ) : null}
               </View>
-            ) : null}
-          </View>
 
-          {remainingEvaluations.length > 0 ? (
-            <>
-              <Text style={styles.subheading}>Other options</Text>
-              {/* Order and scores come straight from MCDA; the recommended
-                  mode is already shown above, so ranks continue from 2. */}
-              {remainingEvaluations.map((ev, index) => (
-                <ModeRankCard
-                  key={ev.modeCode}
-                  rank={index + 2}
-                  evaluation={ev}
-                  label={transportModeLabel(ev.modeCode)}
-                  maxScore={maxScore}
-                />
-              ))}
-            </>
-          ) : null}
-        </View>
+              {ownVehicleBreakdown ? (
+                <>
+                  <Text style={styles.receiptSectionLabel}>Breakdown</Text>
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptRowLabel}>Distance</Text>
+                    <Text style={styles.receiptRowValue}>
+                      {ownVehicleBreakdown.distanceKm.toFixed(1)} km
+                    </Text>
+                  </View>
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptRowLabel}>Fuel efficiency</Text>
+                    <Text style={styles.receiptRowValue}>
+                      {ownVehicleBreakdown.efficiencyKmPerLiter} km/L
+                    </Text>
+                  </View>
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptRowLabel}>Fuel needed</Text>
+                    <Text style={styles.receiptRowValue}>
+                      {ownVehicleBreakdown.litersNeeded.toFixed(2)} L
+                    </Text>
+                  </View>
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptRowLabel}>Fuel price</Text>
+                    <Text style={styles.receiptRowValue}>
+                      {formatPeso(ownVehicleBreakdown.pricePerLiter)}/L
+                    </Text>
+                  </View>
+                  {fuelPriceProvenance ? (
+                    <Text style={styles.receiptNote}>
+                      {fuelPriceProvenance.label} · {fuelPriceProvenance.detail}
+                    </Text>
+                  ) : null}
+                  <View style={styles.receiptDivider} />
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptRowLabelStrong}>Estimated total</Text>
+                    <Text style={styles.receiptRowValueStrong}>
+                      {formatPeso(ownVehicleBreakdown.totalCost)}
+                    </Text>
+                  </View>
+                  {selectedVehicle ? (
+                    <Text style={styles.receiptNote}>
+                      {selectedVehicle.nickname ??
+                        `${selectedVehicle.brand} ${selectedVehicle.model}`}{' '}
+                      · {ownVehicleBreakdown.efficiencyKmPerLiter} km/L
+                    </Text>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  {/* Not own vehicle: there is no litres-and-efficiency
+                      arithmetic to show, so only what the calculator produced. */}
+                  <Text style={styles.receiptSectionLabel}>Trip</Text>
+                  {routeDistanceKm != null ? (
+                    <View style={styles.receiptRow}>
+                      <Text style={styles.receiptRowLabel}>Distance</Text>
+                      <Text style={styles.receiptRowValue}>
+                        {routeDistanceKm.toFixed(1)} km
+                      </Text>
+                    </View>
+                  ) : null}
+                  {result ? (
+                    <View style={styles.receiptRow}>
+                      <Text style={styles.receiptRowLabel}>Travel time</Text>
+                      <Text style={styles.receiptRowValue}>
+                        {Math.round(result.recommended.raw.travelTime)} min
+                      </Text>
+                    </View>
+                  ) : null}
+                  {recommendedCost?.disclaimer ? (
+                    <Text style={styles.receiptNote}>{recommendedCost.disclaimer}</Text>
+                  ) : null}
+                  <View style={styles.receiptDivider} />
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptRowLabelStrong}>Estimated total</Text>
+                    <Text style={styles.receiptRowValueStrong}>
+                      {result ? formatPeso(result.recommended.raw.fuelCost) : ''}
+                    </Text>
+                  </View>
+                </>
+              )}
+
+              {remainingEvaluations.length > 0 ? (
+                <>
+                  <Text style={styles.receiptSectionLabel}>Other options</Text>
+                  {remainingEvaluations.map((ev) => (
+                    <View key={ev.modeCode} style={styles.receiptOptionBlock}>
+                      <View style={styles.receiptRow}>
+                        <Text style={styles.receiptRowLabel}>
+                          {transportModeLabel(ev.modeCode)}
+                        </Text>
+                        <Text style={styles.receiptRowValue}>
+                          {formatPeso(ev.raw.fuelCost)} ·{' '}
+                          {Math.round(ev.raw.travelTime)} min
+                        </Text>
+                      </View>
+                      <Text style={styles.receiptNote}>{modeFareNote(ev.modeCode)}</Text>
+                    </View>
+                  ))}
+                </>
+              ) : null}
+            </ScrollView>
+            <PrimaryButton label="Done" onPress={() => setShowResultSheet(false)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/*
+        The inline result card is gone: the bottom sheet below is now the only
+        place a comparison appears, so the same result is never rendered twice
+        on one screen. What stays here is a small reopen affordance, because
+        dismissing a sheet should not mean losing the answer.
+      */}
+      {result?.recommended ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Show last trip comparison"
+          onPress={() => setShowResultSheet(true)}
+          style={({ pressed }) => [styles.lastResultBtn, pressed && styles.pressed]}>
+          <Ionicons name="sparkles-outline" size={14} color={HomeColors.primary} />
+          <Text style={styles.lastResultText}>
+            Last result · {transportModeLabel(result.recommended.modeCode)} ·{' '}
+            {formatPeso(result.recommended.raw.fuelCost)}
+          </Text>
+        </Pressable>
       ) : null}
 
       {/* Save / log: a follow-up step, not a competing action. Both handlers
           and payloads are unchanged. */}
       <View style={styles.saveSection}>
-        <View style={styles.saveHeadRow}>
-          <Ionicons name="archive-outline" size={15} color={HomeColors.muted} />
-          <Text style={styles.saveHead}>Save this trip</Text>
-        </View>
+        <Text style={styles.sectionLabel}>Save this trip</Text>
 
         <View style={styles.saveCard}>
           <Text style={styles.saveActionTitle}>Save as template</Text>
@@ -910,6 +1731,15 @@ export default function TripOptimizerScreen() {
  * main action, the result, and finally the save/log follow-up. Spacing and type
  * scale — not decoration — create that order.
  */
+/**
+ * How long the endpoints must sit still before the route is previewed.
+ *
+ * Long enough that typing an address never triggers a Directions request per
+ * keystroke, short enough that the distance still feels immediate once the user
+ * has finished.
+ */
+const ROUTE_PREVIEW_DEBOUNCE_MS = 600;
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   padding: {
@@ -920,40 +1750,433 @@ const styles = StyleSheet.create({
   },
 
   // ------------------------------------------------ numbered step blocks
-  stepSection: {
-    marginBottom: spacing.xl,
-  },
-  stepHeadRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm + 2,
-  },
-  stepBadge: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: HomeColors.primarySoft,
+  /* ------------------------------------------------------------------
+   * Section surfaces.
+   *
+   * The screen used to be one long column of form fields with numbered
+   * headings and no surface behind any of them, so Route, Vehicle, Fuel and
+   * Compare all ran together and the page read as a single form. Each major
+   * step now sits on its own warm-white card, separated by generous vertical
+   * space, so the hierarchy is legible before any scrolling.
+   *
+   * Depth is deliberately restrained: a hairline border and a very light
+   * shadow. No gradients, no glass, and no card nested inside another card --
+   * inside a section the layout is rows, dividers and quiet inner surfaces.
+   * ------------------------------------------------------------------ */
+  /* Vertical rhythm between the Route / Vehicle / Fuel price / Compare /
+     Result surfaces. */
+  /* ---- origin-needed notice (not an error, not a permission prompt) ---- */
+  originNeededBox: {
+    padding: spacing.md,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: HomeColors.primaryBorder,
+    borderColor: GasTaColors.forestBorder,
+    borderStyle: 'dashed',
+    backgroundColor: GasTaColors.cream,
   },
-  stepBadgeText: {
+  originNeededTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  originNeededBody: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: GasTaColors.textSoft,
+    marginTop: 3,
+  },
+  /* ---- route fields (label inside, address is the hero) ---- */
+  routeFields: {
+    gap: spacing.xs,
+  },
+  routeField: {
+    backgroundColor: GasTaColors.cream,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestGlow,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  routeFieldLabel: {
+    ...typography.label,
+    fontSize: 10,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: GasTaColors.forestMuted,
+  },
+  routeFieldInput: {
+    // Largest text in the card: the address is the point of the Route section.
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+    padding: 0,
+    marginTop: 2,
+    // Long addresses wrap to at most two lines rather than growing the card.
+    minHeight: 44,
+    textAlignVertical: 'top',
+  },
+  /* Thin connector between the two fields. Narrow, so it marks the relationship
+     without competing with the addresses. */
+  routeConnector: {
+    width: 2,
+    height: 12,
+    alignSelf: 'flex-start',
+    marginLeft: spacing.lg,
+    borderRadius: 1,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  routeStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestGlow,
+  },
+  routeStatLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: GasTaColors.forestMuted,
+  },
+  routeStatChip: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: GasTaColors.cream,
+  },
+  routeStatValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  routeStatMeta: {
+    fontSize: 11,
+    color: GasTaColors.textSoft,
+  },
+  /* Secondary map action -- a small pill, not a full-width block. */
+  pickMapPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    // Centred in the card and only as wide as its own content. Filled forest so
+    // it has real presence, but still lighter than the outlined Compare trip
+    // costs button further down the page.
+    alignSelf: 'center',
+    gap: 5,
+    marginTop: spacing.md,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestDark,
+    backgroundColor: GasTaColors.forest,
+  },
+  pickMapPillText: {
     fontSize: 12,
     fontWeight: '800',
-    color: HomeColors.primaryDark,
+    color: GasTaColors.textOnForest,
   },
-  stepHeadText: { flex: 1 },
-  stepTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: HomeColors.navy,
+  /* ---- receipt sheet ---- */
+  receiptHead: {
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: GasTaColors.forestGlow,
   },
-  stepHint: {
+  receiptRoute: {
     fontSize: 13,
     lineHeight: 18,
-    color: HomeColors.muted,
+    fontWeight: '600',
+    color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  /* Slightly lifted summary block. One shadow, restrained, on the total only. */
+  receiptTotal: {
+    padding: spacing.md,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.cream,
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  receiptTotalLabel: {
+    ...typography.label,
+    fontSize: 10,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: GasTaColors.forestMuted,
+  },
+  receiptTotalMode: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+    marginTop: 2,
+  },
+  receiptTotalValue: {
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '800',
+    letterSpacing: -1,
+    color: GasTaColors.forestDark,
+    marginTop: 2,
+  },
+  receiptSectionLabel: {
+    ...typography.label,
+    fontSize: 10,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: GasTaColors.forestMuted,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+  },
+  receiptRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  receiptRowLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    color: GasTaColors.textSoft,
+  },
+  receiptRowValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+    flexShrink: 0,
+  },
+  receiptRowLabelStrong: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  receiptRowValueStrong: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+    flexShrink: 0,
+  },
+  receiptDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: GasTaColors.forestGlow,
+    marginVertical: spacing.sm,
+  },
+  receiptNote: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginTop: 3,
+  },
+  receiptOptionBlock: {
+    paddingVertical: 5,
+  },
+  section: {
+    marginBottom: spacing.xl,
+  },
+  sectionLabel: {
+    ...typography.label,
+    color: GasTaColors.forestMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 1.1,
+    marginBottom: spacing.sm,
+  },
+  sectionCard: {
+    backgroundColor: GasTaColors.creamLight,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    padding: spacing.lg,
+    shadowColor: GasTaColors.forest,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 1,
+  },
+  /* Inner fields sit on a warm-beige well so the card does not read as one
+     undifferentiated white block. */
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: GasTaColors.forestBorder,
+    marginVertical: spacing.md,
+  },
+  /* ---- vehicle tiles ---- */
+  vehicleGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  vehicleTile: {
+    // Two comfortable columns on a phone; the tile still shrinks rather than
+    // overflowing on very narrow screens.
+    flexGrow: 1,
+    flexBasis: '46%',
+    minWidth: 132,
+    padding: spacing.md,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  /*
+   * Selected reads as a solid forest tile with white text, not a pale tint: on
+   * a light cream page a filled tile is the only selection signal that stays
+   * obvious at a glance, and it matches the filled segmented tab in the header.
+   */
+  vehicleTileSelected: {
+    backgroundColor: GasTaColors.forest,
+    borderColor: GasTaColors.forest,
+  },
+  vehicleTileSelectedText: {
+    color: GasTaColors.textOnForest,
+  },
+  vehicleTileSelectedMeta: {
+    color: 'rgba(255, 255, 255, 0.74)',
+  },
+  vehicleTileTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  vehicleTileName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  /* Check sits top-right. On a selected (dark) tile the badge inverts to
+     white-on-transparent so it stays visible against the forest fill. */
+  vehicleTileCheck: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  vehicleTileCheckOnDark: {
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+  },
+  vehicleTileMeta: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  pressed: { opacity: 0.7 },
+  /* ---- fuel price headline ---- */
+  priceHeadline: {
+    fontSize: 30,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    color: GasTaColors.forestDark,
+  },
+  priceHeadlineMeta: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  /* ---- mode confidence rows ---- */
+  /* ---- fuel efficiency strip (inside the Vehicle card) ---- */
+  effRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 14,
+    backgroundColor: GasTaColors.cream,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestGlow,
+  },
+  effLabel: {
+    flex: 1,
+    minWidth: 0,
+    ...typography.label,
+    fontSize: 10,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: GasTaColors.forestMuted,
+  },
+  effValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  /* ---- compare transport rows ---- */
+  modeList: {
+    gap: spacing.xs,
+  },
+  /*
+   * Per-mode tint. All five are the SAME pale value -- the distinction is the
+   * 3px accent bar on the leading edge, which keeps the list reading as one
+   * block instead of a rainbow of cards. Backgrounds differ only in
+   * lightness, so nothing here competes with the dark panel below.
+   */
+  modeRowOwn: {
+    backgroundColor: '#F1F6F1',
+    borderLeftColor: GasTaColors.forest,
+  },
+  modeRowJeepney: {
+    backgroundColor: '#F6F7EC',
+    borderLeftColor: '#7C9A2E',
+  },
+  modeRowTricycle: {
+    backgroundColor: '#F0F4F7',
+    borderLeftColor: '#5C8299',
+  },
+  modeRowRideHailing: {
+    backgroundColor: '#FBF4EA',
+    borderLeftColor: '#B07C2A',
+  },
+  modeRowWalking: {
+    backgroundColor: '#F4F6F3',
+    borderLeftColor: '#8A9A8A',
+  },
+  modeRow: {
+    // Column, not row: the note wraps to a second line under the title, and a
+    // row layout would have squeezed both onto one line at 320px.
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 1,
+    paddingVertical: spacing.sm,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.md,
+    // The accent is painted as a left border rather than a child view, so it
+    // cannot affect the row's measured width or push the note out of the card.
+    // `borderWidth` first, then the one side that is actually drawn.
+    borderWidth: 0,
+    borderLeftWidth: 3,
+  },
+  modeRowBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  modeRowTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  modeRowNote: {
+    fontSize: 11,
+    lineHeight: 16,
+    // forestMuted rather than textSoft: on the palest tints the softer grey was
+    // washing out, and the Ride-hailing line in particular is the one that must
+    // stay readable because it carries the fare disclaimer.
+    color: GasTaColors.forestMuted,
     marginTop: 1,
   },
 
@@ -982,29 +2205,6 @@ const styles = StyleSheet.create({
   },
 
   // Route
-  pickMapBtn: {
-    marginTop: spacing.xs,
-    marginBottom: spacing.md,
-    borderColor: HomeColors.border,
-    backgroundColor: GasTaColors.white,
-  },
-  routeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: spacing.xs + 2,
-    paddingVertical: spacing.xs + 2,
-    paddingHorizontal: spacing.sm + 2,
-    borderRadius: radii.sm,
-    backgroundColor: HomeColors.primarySoft,
-    borderWidth: 1,
-    borderColor: HomeColors.primaryBorder,
-  },
-  routeChipText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: HomeColors.primaryDark,
-  },
 
   // Vehicle & fuel
   vehicleName: {
@@ -1079,12 +2279,15 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontSize: 14,
-    color: HomeColors.muted,
+    // forestMuted rather than HomeColors.muted: the label pairs with a bold
+    // value directly to its right, and the greyer tone lost the pairing on the
+    // white Fuel card. Still clearly lighter than the value it labels.
+    color: GasTaColors.forestMuted,
   },
   statValue: {
     fontSize: 15,
     fontWeight: '700',
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
   },
   statDivider: {
     height: 1,
@@ -1113,24 +2316,75 @@ const styles = StyleSheet.create({
     color: HomeColors.muted,
     marginBottom: spacing.md,
   },
-  warnBtn: {
-    borderColor: HomeColors.border,
+  /* Provenance line under the price: which bulletin, or which verified report. */
+  /*
+   * Provenance line under the price. `textSoft` was too pale on the white card
+   * and made the DOE/verified-community detail -- the part that tells the user
+   * whether to trust the number above it -- the hardest text in the card to
+   * read. forestMuted keeps it clearly subordinate to the value.
+   */
+  priceSource: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.forestMuted,
+    marginTop: 4,
+  },
+  overrideToggle: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+  },
+  overrideBlock: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestBorder,
+  },
+  overrideAuto: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginBottom: spacing.sm,
+  },
+  warnHint: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginTop: 6,
   },
 
   // ------------------ what matters more (presets + savings slider)
   // Deliberately the lightest block: tinted surface, muted copy, no step badge.
+  /*
+   * The lower half's strong dark card. Paired with the header panel it brackets
+   * the form: dark at the top, dark in the middle, light sections between. The
+   * shadow is deliberately minimal because the fill already carries the weight.
+   */
   prefBlock: {
-    padding: spacing.md,
-    borderRadius: radii.sm,
-    backgroundColor: HomeColors.navySoft,
+    padding: spacing.lg,
+    borderRadius: 20,
+    backgroundColor: GasTaColors.forest,
     borderWidth: 1,
-    borderColor: HomeColors.border,
+    borderColor: GasTaColors.forestDark,
     marginBottom: spacing.lg,
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    elevation: 3,
   },
   prefHeadRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  prefTitleOnDark: {
+    color: GasTaColors.textOnForest,
+  },
+  prefHintOnDark: {
+    color: 'rgba(255, 255, 255, 0.72)',
+  },
+  tuneErrorOnDark: {
+    color: 'rgba(255, 255, 255, 0.86)',
   },
   prefTitle: {
     fontSize: 14,
@@ -1157,7 +2411,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   optimizeBtn: {
-    borderRadius: radii.sm,
+    // Outlined rather than filled: it must stay the strongest action on the
+    // lower half while staying visually lighter than the dark priority panel
+    // directly above it. Sized, not giant.
+    borderRadius: 16,
+    borderWidth: 1.5,
+    paddingVertical: spacing.md,
   },
   ctaHint: {
     fontSize: 12,
@@ -1216,6 +2475,77 @@ const styles = StyleSheet.create({
     color: HomeColors.muted,
     marginBottom: 2,
   },
+  /* Provenance under the headline cost: which price source, or that a fare is
+     an estimate from configured rules. */
+  heroSource: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: HomeColors.muted,
+    marginTop: 4,
+  },
+  /* Compact detail rows under the headline cost. */
+  heroDetail: {
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: HomeColors.border,
+  },
+  /* ---- result bottom sheet ---- */
+  lastResultBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  lastResultText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 19, 9, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    maxHeight: '78%',
+    backgroundColor: GasTaColors.creamLight,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xxl,
+    borderTopWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+    elevation: 16,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: GasTaColors.forestGlow,
+    marginBottom: spacing.md,
+  },
+  sheetKicker: {
+    ...typography.label,
+    color: GasTaColors.forestMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 1.1,
+  },
+  sheetBody: { flexGrow: 0 },
+  sheetBodyContent: { paddingBottom: spacing.md },
   heroValue: {
     fontSize: 26,
     fontWeight: '800',
@@ -1238,28 +2568,22 @@ const styles = StyleSheet.create({
   saveSection: {
     marginBottom: spacing.xl,
   },
-  saveHeadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: spacing.md,
-  },
-  saveHead: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: HomeColors.muted,
-  },
   saveCard: {
-    padding: spacing.md,
-    borderRadius: radii.sm,
-    backgroundColor: GasTaColors.white,
+    padding: spacing.lg,
+    borderRadius: 20,
+    backgroundColor: GasTaColors.creamLight,
     borderWidth: 1,
-    borderColor: HomeColors.border,
+    borderColor: GasTaColors.forestBorder,
+    shadowColor: GasTaColors.forest,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 1,
   },
   saveActionTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: HomeColors.navy,
+    color: GasTaColors.forestDark,
     marginBottom: 2,
   },
   saveSecondaryBtn: {
