@@ -366,8 +366,15 @@ def cmd_retry_pending(args: argparse.Namespace) -> None:
         print(
             f"\nPending retry: recovered={recovered} still_pending={pending} errors={errors}"
         )
-    # Unexpected errors fail the job; still-403 is expected and stays green.
-    if errors:
+    # Idle = nothing to do (green). Recovered-only = green.
+    # Still-inaccessible PDFs and unexpected errors fail the Actions run so the
+    # red X shows the gap is still open.
+    if errors or pending:
+        if pending and not errors:
+            print(
+                f"FAIL: {pending} pending PDF(s) still inaccessible on DOE.",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
 

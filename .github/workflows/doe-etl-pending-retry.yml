@@ -1,5 +1,6 @@
 # Daily retry of DOE PDFs that weekly sync could not download (e.g. Bicol 403).
-# Idle when the pending queue is empty — no full sync-all.
+# Idle (green) when the pending queue is empty. Still-403 fails the run (red)
+# so the Actions UI shows the gap is still open; recovered clears the queue.
 # Manual run: GitHub → Actions → DOE Pending PDF Retry → Run workflow
 
 name: DOE Pending PDF Retry
