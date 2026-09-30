@@ -55,11 +55,11 @@ import {
 } from '@/lib/services/communityReports';
 import {
   bulletinAgeInDays,
+  estimatedDoePostedDate,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
-  fetchLatestDoeWebsiteFetchAt,
   fetchPriceTrend,
   STALE_AFTER_DAYS,
   type BulletinWeek,
@@ -409,7 +409,6 @@ export default function FuelPricesScreen() {
   }, [regionTouchedManually, applyPlace]);
   const [trendCompanySlug, setTrendCompanySlug] = useState('petron');
   const [bulletin, setBulletin] = useState<BulletinWeek | null>(null);
-  const [doeFetchAt, setDoeFetchAt] = useState<string | null>(null);
   const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
@@ -474,7 +473,7 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
-      const [latest, pending, regionStations, websiteFetchAt] = await Promise.all([
+      const [latest, pending, regionStations] = await Promise.all([
         fetchLatestBulletinForRegion(region),
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
@@ -484,14 +483,9 @@ export default function FuelPricesScreen() {
           console.warn('Fuel stations failed', e);
           return [];
         }),
-        fetchLatestDoeWebsiteFetchAt().catch((e) => {
-          console.warn('DOE fetch timestamp failed', e);
-          return null;
-        }),
       ]);
 
       setBulletin(latest);
-      setDoeFetchAt(websiteFetchAt);
       setPendingCommunity(pending);
       setStations(regionStations);
       historyLoadedFor.current = null;
@@ -797,18 +791,16 @@ export default function FuelPricesScreen() {
     return { ageDays, tone: 'aging' as const, label: `${ageDays} days old` };
   }, [bulletin]);
 
-  const latestFetchLabel = useMemo(() => {
-    const iso = doeFetchAt ?? bulletin?.last_loaded_at;
-    if (!iso) return null;
-    const loaded = new Date(iso);
-    if (Number.isNaN(loaded.getTime())) return null;
-    return loaded.toLocaleDateString('en-PH', {
+  const doePostedLabel = useMemo(() => {
+    if (!bulletin?.bulletin_date) return null;
+    const posted = estimatedDoePostedDate(bulletin.bulletin_date);
+    return posted.toLocaleDateString('en-PH', {
       weekday: 'short',
       year: 'numeric',
       month: 'short',
       day: 'numeric',
     });
-  }, [doeFetchAt, bulletin]);
+  }, [bulletin]);
 
   /*
    * Lowest available price, for the summary card.
@@ -988,17 +980,17 @@ export default function FuelPricesScreen() {
       }>
       {/*
         Compact header. The old PageHero restated "region · fuel · area", which
-        the filters directly below already show, and the DOE fetch timestamp is
-        source metadata rather than a headline -- so it moves to one quiet line
-        under the title instead of being the largest text on the screen.
+        the filters directly below already show. Under the title: estimated DOE
+        post day (week start + 7) and the bulletin week start — not the ETL
+        run timestamp, which confused "when we synced" with "when DOE posted".
       */}
       <View style={styles.headerRow}>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Fuel Prices</Text>
-          {latestFetchLabel || bulletin ? (
+          {doePostedLabel || bulletin ? (
             <Text numberOfLines={1} style={styles.headerMeta}>
               {[
-                latestFetchLabel ? `DOE fetched ${latestFetchLabel}` : null,
+                doePostedLabel ? `DOE posted ${doePostedLabel}` : null,
                 bulletin ? formatBulletinWeek(bulletin.bulletin_date) : null,
               ]
                 .filter(Boolean)
