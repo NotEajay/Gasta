@@ -2,11 +2,12 @@
 
 Python ETL that parses Philippine Department of Energy weekly fuel price bulletins (PDF) and loads structured rows into Supabase.
 
-Two jobs, both automated:
+Two jobs for the current week, plus history:
 
 | Job | Command | Purpose |
 |-----|---------|---------|
 | **Weekly sync** | `python run.py sync-all` | Load the current week so the app always shows the latest price |
+| **Pending PDF retry** | `python run.py retry-pending` | Re-try PDFs weekly sync skipped (403); **idle** if none queued |
 | **History backfill** | `python run.py backfill` | Load DOE's whole published archive so the app can show price history |
 
 ## Automation
@@ -64,6 +65,7 @@ python run.py discover-region --region visayas   # latest week only
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
 | `doe-etl-weekly.yml` | **Tuesday only** — several PH slots (06:00–23:00) | `sync-all` |
+| `doe-etl-pending-retry.yml` | **Daily** 06:00 PH (and manual) | `retry-pending` — only PDFs weekly sync could not download; **idle** when the queue is empty |
 | `doe-etl-backfill.yml` | Manual only | `backfill` with region / since / dry-run inputs |
 | `etl-tests.yml` | Push or PR touching `etl/` | `pytest` |
 

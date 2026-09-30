@@ -137,17 +137,33 @@ def download_ncr_bulletin(week_start: date, dest_dir: str | Path) -> Path:
     return download_pdf(ncr_pdf_url(week_start), dest)
 
 
+@dataclass(frozen=True)
+class SkippedDownload:
+    """One PDF the CDN refused; kept so weekly sync can queue a daily retry."""
+
+    slug: str
+    url: str
+    error: str
+
+    def note(self) -> str:
+        return f"{self.slug} ({self.error})"
+
+
 @dataclass
 class RegionDownloadResult:
     """Paths that downloaded, aligned source URLs, and per-slug skip notes."""
 
     paths: list[Path] = field(default_factory=list)
     urls: list[str] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)
+    skipped: list[SkippedDownload] = field(default_factory=list)
 
     def __iter__(self):
         # Back-compat for callers that still unpack `for path in download_region_bulletins(...)`.
         return iter(self.paths)
+
+    @property
+    def skip_notes(self) -> list[str]:
+        return [item.note() for item in self.skipped]
 
 
 def download_region_bulletins(
@@ -175,14 +191,16 @@ def download_region_bulletins(
             path = download_slug(region_code, slug, dest_dir, url)
         except (urllib.error.HTTPError, RuntimeError) as exc:
             if _is_inaccessible(exc) and len(slugs) > 1:
-                result.skipped.append(f"{slug} ({exc})")
+                result.skipped.append(
+                    SkippedDownload(slug=slug, url=resolved, error=str(exc))
+                )
                 continue
             raise
         result.paths.append(path)
         result.urls.append(resolved)
 
     if not result.paths:
-        detail = "; ".join(result.skipped) if result.skipped else "no slugs"
+        detail = "; ".join(result.skip_notes) if result.skipped else "no slugs"
         raise RuntimeError(
             f"Failed to download any bulletin PDF for {region_code}: {detail}"
         )

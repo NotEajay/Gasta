@@ -27,6 +27,7 @@ from src.export_sql import export_bulletin_sql
 from src.freshness import MAX_BULLETIN_AGE_DAYS, describe_freshness
 from src.load_supabase import load_bulletin
 from src.parse_bulletin import parse_bulletin_pdf, parse_region_pdfs
+from src.pending_retry import retry_pending_downloads
 
 
 def cmd_parse(args: argparse.Namespace) -> None:
@@ -240,8 +241,8 @@ def cmd_download_region(args: argparse.Namespace) -> None:
     )
     for path in downloaded.paths:
         print(f"Downloaded {path}")
-    for note in downloaded.skipped:
-        print(f"Skipped {note}")
+    for skip in downloaded.skipped:
+        print(f"Skipped {skip.note()}")
 
 
 def _week_bounds(args: argparse.Namespace) -> tuple[date | None, date | None]:
@@ -336,6 +337,40 @@ def cmd_list_weeks(args: argparse.Namespace) -> None:
     print(f"\n{len(bulletins)} datable bulletin weeks discovered for {args.region}")
 
 
+def cmd_retry_pending(args: argparse.Namespace) -> None:
+    """Daily probe of PDFs skipped by weekly sync (403/missing). Idle if none."""
+    results = retry_pending_downloads(dest_dir=args.out_dir, dry_run=args.dry_run)
+    print(
+        json.dumps(
+            [
+                {
+                    "region_code": r.region_code,
+                    "week_start": r.week_start,
+                    "slug": r.slug,
+                    "status": r.status,
+                    "message": r.message,
+                    "price_rows": r.price_rows,
+                }
+                for r in results
+            ],
+            indent=2,
+        )
+    )
+    recovered = sum(1 for r in results if r.status == "recovered")
+    pending = sum(1 for r in results if r.status == "still_pending")
+    errors = sum(1 for r in results if r.status == "error")
+    idle = any(r.status == "idle" for r in results)
+    if idle:
+        print("\nPending retry: IDLE (nothing queued)")
+    else:
+        print(
+            f"\nPending retry: recovered={recovered} still_pending={pending} errors={errors}"
+        )
+    # Unexpected errors fail the job; still-403 is expected and stays green.
+    if errors:
+        sys.exit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GasTa DOE PDF ETL")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -403,6 +438,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync_all.add_argument("--dry-run", action="store_true")
     p_sync_all.add_argument("--force", action="store_true")
     p_sync_all.set_defaults(func=cmd_sync_all)
+
+    p_pending = sub.add_parser(
+        "retry-pending",
+        help=(
+            "Daily: retry DOE PDFs that weekly sync could not download. "
+            "Idle (no work) when the queue is empty."
+        ),
+    )
+    p_pending.add_argument("--out-dir", default="data/bulletins")
+    p_pending.add_argument("--dry-run", action="store_true")
+    p_pending.set_defaults(func=cmd_retry_pending)
 
     p_backfill = sub.add_parser(
         "backfill",
