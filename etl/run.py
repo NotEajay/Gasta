@@ -232,13 +232,16 @@ def cmd_download_ncr(args: argparse.Namespace) -> None:
 
 def cmd_download_region(args: argparse.Namespace) -> None:
     discovered = discover_latest_region(args.region)
-    paths = download_region_bulletins(
+    downloaded = download_region_bulletins(
         args.region,
         discovered.slugs,
         args.out_dir,
+        discovered.urls,
     )
-    for path in paths:
+    for path in downloaded.paths:
         print(f"Downloaded {path}")
+    for note in downloaded.skipped:
+        print(f"Skipped {note}")
 
 
 def _week_bounds(args: argparse.Namespace) -> tuple[date | None, date | None]:

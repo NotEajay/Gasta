@@ -14,11 +14,7 @@ on:
     - cron: "0 11 * * 2" # Tuesday 19:00 PH
     - cron: "0 15 * * 2" # Tuesday 23:00 PH
     # TEMP test slots — 30 Sep 2026 only (16:05–16:20 PH = 08:05–08:20 UTC).
-    # Remove after the discovery test run.
-    - cron: "5 8 30 9 *" # 16:05 PH
-    - cron: "10 8 30 9 *" # 16:10 PH
-    - cron: "15 8 30 9 *" # 16:15 PH
-    - cron: "20 8 30 9 *" # 16:20 PH
+
   workflow_dispatch:
     inputs:
       force:

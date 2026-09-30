@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -17,9 +18,21 @@ from .constants import (
     REGION_CODES,
 )
 
+# CloudFront / Payload media GETs are rejected more often without a site Referer.
+# Accept mirrors a browser PDF navigation; neither alone unlocks every object, but
+# both are required for some CDN edge rules.
+_HTTP_HEADERS = {
+    "User-Agent": HTTP_USER_AGENT,
+    "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+    "Referer": "https://doe.gov.ph/",
+}
+
+# Permanent / access failures: retrying wastes the weekly job budget.
+_NON_RETRYABLE_HTTP = frozenset({403, 404, 410})
+
 
 def _request(url: str) -> urllib.request.Request:
-    return urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
+    return urllib.request.Request(url, headers=dict(_HTTP_HEADERS))
 
 
 def read_url_bytes(url: str, *, retries: int = HTTP_MAX_RETRIES) -> bytes:
@@ -30,7 +43,7 @@ def read_url_bytes(url: str, *, retries: int = HTTP_MAX_RETRIES) -> bytes:
             with urllib.request.urlopen(_request(url), timeout=HTTP_TIMEOUT_SECONDS) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
-            if exc.code in (404, 410):
+            if exc.code in _NON_RETRYABLE_HTTP:
                 raise
             last_error = exc
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -38,6 +51,16 @@ def read_url_bytes(url: str, *, retries: int = HTTP_MAX_RETRIES) -> bytes:
         if attempt < retries - 1:
             time.sleep(2 * (attempt + 1))
     raise RuntimeError(f"Failed to fetch {url} after {retries} attempts: {last_error}")
+
+
+def _is_inaccessible(exc: BaseException) -> bool:
+    """True when DOE refused or removed a single PDF (skip siblings; do not abort)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in _NON_RETRYABLE_HTTP
+    if isinstance(exc, RuntimeError):
+        text = str(exc)
+        return any(token in text for token in ("403", "404", "410", "Forbidden", "Not Found"))
+    return False
 
 
 def read_url_text(url: str) -> str:
@@ -114,22 +137,56 @@ def download_ncr_bulletin(week_start: date, dest_dir: str | Path) -> Path:
     return download_pdf(ncr_pdf_url(week_start), dest)
 
 
+@dataclass
+class RegionDownloadResult:
+    """Paths that downloaded, aligned source URLs, and per-slug skip notes."""
+
+    paths: list[Path] = field(default_factory=list)
+    urls: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+
+    def __iter__(self):
+        # Back-compat for callers that still unpack `for path in download_region_bulletins(...)`.
+        return iter(self.paths)
+
+
 def download_region_bulletins(
     region_key: str,
     slugs: tuple[str, ...],
     dest_dir: str | Path,
     urls: tuple[str | None, ...] = (),
-) -> list[Path]:
+) -> RegionDownloadResult:
     """Download every bulletin PDF that makes up one macro-region week.
 
     `urls` is parallel to `slugs`; a None entry falls back to the legacy CMS guest
     URL built from that slug.
+
+    South Luzon publishes three undated sub-region media files under one week
+    heading. DOE sometimes leaves one object (e.g. Region V Bicol.pdf) on a
+    403 while the siblings are public. Skipping the blocked file still loads
+    Calabarzon/Mimaropa instead of failing the whole macro-region.
     """
     region_code = normalize_region(region_key)
-    return [
-        download_slug(region_code, slug, dest_dir, urls[index] if index < len(urls) else None)
-        for index, slug in enumerate(slugs)
-    ]
+    result = RegionDownloadResult()
+    for index, slug in enumerate(slugs):
+        url = urls[index] if index < len(urls) else None
+        resolved = url or slug_to_url(slug)
+        try:
+            path = download_slug(region_code, slug, dest_dir, url)
+        except (urllib.error.HTTPError, RuntimeError) as exc:
+            if _is_inaccessible(exc) and len(slugs) > 1:
+                result.skipped.append(f"{slug} ({exc})")
+                continue
+            raise
+        result.paths.append(path)
+        result.urls.append(resolved)
+
+    if not result.paths:
+        detail = "; ".join(result.skipped) if result.skipped else "no slugs"
+        raise RuntimeError(
+            f"Failed to download any bulletin PDF for {region_code}: {detail}"
+        )
+    return result
 
 
 def normalize_region(region: str) -> str:
