@@ -66,8 +66,6 @@ python run.py discover-region --region visayas   # latest week only
 |----------|---------|--------------|
 | `doe-etl-weekly.yml` | **Tuesday only** — several PH slots (06:00–23:00) | `sync-all` |
 | `doe-etl-pending-retry.yml` | **Daily** 06:00 PH (and manual) | `retry-pending` — only PDFs weekly sync could not download; **idle/green** when empty; **fails/red** while a queued PDF is still 403 |
-| `doe-etl-backfill.yml` | Manual only | `backfill` with region / since / dry-run inputs |
-| `etl-tests.yml` | Push or PR touching `etl/` | `pytest` |
 
 DOE bulletin weeks start Tuesday and files can appear at different times that day, so the weekly workflow tries multiple Tuesday slots. Runs after the first successful one are no-ops because each region's week is already stored. Use **Run workflow** manually if DOE publishes after Tuesday.
 
@@ -81,7 +79,7 @@ DOE bulletin weeks start Tuesday and files can appear at different times that da
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | service_role key from Supabase dashboard |
 
-3. Run **Actions → DOE ETL Backfill → Run workflow** once with region `all` to load the history.
+3. Load history locally once if needed: `python run.py backfill` (from `etl/`).
 
 After that the weekly workflow keeps the current week up to date on its own. Manual trigger: **Actions → DOE Weekly ETL → Run workflow**.
 
