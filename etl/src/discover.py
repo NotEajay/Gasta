@@ -35,6 +35,7 @@ from .download import download_pdf, ncr_pdf_url, pdf_exists, read_url_text, slug
 from .parse_bulletin import read_bulletin_week
 from .slug_dates import (
     MONTH_ALTERNATION,
+    MONTHS,
     normalize_bulletin_week_start,
     normalize_slug,
     parse_week_start_from_slug,
@@ -174,13 +175,8 @@ class UpstreamUnavailableError(RuntimeError):
     """
 
 
-def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
-    """Every bulletin link on a region's archive page, in page order.
-
-    DOE sometimes answers with its "Page Not Found" body for a page that is really
-    available (observed repeatedly for Visayas on 2026-09-28, alternating one request
-    in two). The page is therefore retried before being declared unavailable, so a
-    transient 404 is never mistaken for a regional outage.
+def fetch_region_page_html(region_code: str) -> tuple[str, str]:
+    """Fetch a region's archive page. Returns (page_url, html).
 
     Raises `UpstreamUnavailableError` when every attempt returned DOE's 404 body.
     """
@@ -198,8 +194,11 @@ def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
             f"{DOE_PAGE_UNAVAILABLE_ATTEMPTS} consecutive attempts. "
             "This region is not currently published upstream."
         )
+    return page_url, html_text
 
-    # slug -> url, where None means "resolve from the slug via the legacy CMS base".
+
+def extract_page_links(html_text: str, page_url: str) -> list[tuple[str, str | None]]:
+    """Every PDF link on archive HTML, in page order as (slug, url|None)."""
     found: dict[str, str | None] = {}
     order: list[str] = []
 
@@ -208,7 +207,6 @@ def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
             found[slug] = None
             order.append(slug)
         if url is not None:
-            # A media link always supersedes a legacy-derived entry for that slug.
             found[slug] = url
 
     for match in GUEST_SLUG_RE.finditer(html_text):
@@ -223,6 +221,127 @@ def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
             remember(slug, url)
 
     return [(slug, found[slug]) for slug in order]
+
+
+def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
+    """Every bulletin link on a region's archive page, in page order.
+
+    DOE sometimes answers with its "Page Not Found" body for a page that is really
+    available (observed repeatedly for Visayas on 2026-09-28, alternating one request
+    in two). The page is therefore retried before being declared unavailable, so a
+    transient 404 is never mistaken for a regional outage.
+
+    Raises `UpstreamUnavailableError` when every attempt returned DOE's 404 body.
+    """
+    page_url, html_text = fetch_region_page_html(region_code)
+    return extract_page_links(html_text, page_url)
+
+
+# South Luzon (and similar) nest undated sub-region PDFs under a week heading
+# ("September 22 to 28"). The heading is the only date; filenames may be just
+# "Region IV-A CALABARZON.pdf".
+_WEEK_HEADING_BLOCK_RE = re.compile(
+    rf"<li>\s*"
+    rf"((?:{MONTH_ALTERNATION})\s+\d{{1,2}}\s+to\s+"
+    rf"(?:(?:{MONTH_ALTERNATION})\s+)?\d{{1,2}})\s*"
+    rf"</li>\s*<li>\s*<ul>(.*?)</ul>",
+    re.I | re.S,
+)
+_YEAR_LI_RE = re.compile(r"<li>\s*(20\d{2})\s*</li>", re.I)
+_WEEK_LABEL_START_RE = re.compile(
+    rf"^({MONTH_ALTERNATION})\s+(\d{{1,2}})\s+to\s+",
+    re.I,
+)
+
+
+def parse_week_label(label: str, year: int) -> date | None:
+    """Parse 'September 22 to 28' / 'July 28 to August 3' into a week-start Tuesday."""
+    text = re.sub(r"\s+", " ", label.strip())
+    match = _WEEK_LABEL_START_RE.match(text)
+    if not match:
+        return None
+    month = MONTHS[match.group(1).lower()]
+    day = int(match.group(2))
+    try:
+        raw = date(year, month, day)
+    except ValueError:
+        return None
+    return normalize_bulletin_week_start(raw)
+
+
+def _year_before(html_text: str, position: int) -> int:
+    chunk = html_text[max(0, position - 4000) : position]
+    years = [int(y) for y in _YEAR_LI_RE.findall(chunk)]
+    if years:
+        return years[-1]
+    # Also accept a bold year used in some DOE tables.
+    bold = re.findall(r"<strong>\s*(20\d{2})\s*</strong>", chunk, flags=re.I)
+    if bold:
+        return int(bold[-1])
+    return date.today().year
+
+
+def discover_weeks_from_page_headings(
+    html_text: str,
+    page_url: str,
+    region_code: str,
+    *,
+    today: date | None = None,
+) -> list[DiscoveredBulletin]:
+    """Bulletin weeks inferred from page headings + nested PDF links.
+
+    This is how South Luzon's Sep 22–28 week is published: the heading carries the
+    dates, while the three nested PDFs are undated region filenames.
+
+    DOE's HTML is duplicated in a hydration payload, so the same week heading can
+    match hundreds of times. The first page-order hit for each week wins. Weeks more
+    than a few days in the future are dropped (bad year context on old archive rows).
+    """
+    today = today or date.today()
+    # A week starting after today cannot be the published "latest" bulletin.
+    max_future = today
+    weeks: dict[date, dict[str, str | None]] = {}
+    seen_week: set[date] = set()
+
+    for match in _WEEK_HEADING_BLOCK_RE.finditer(html_text):
+        label = re.sub(r"\s+", " ", match.group(1)).strip()
+        inner = match.group(2)
+        year = _year_before(html_text, match.start())
+        week_start = parse_week_label(label, year)
+        if week_start is None or week_start > max_future:
+            continue
+        # First page-order occurrence of this week keeps the newest series links.
+        if week_start in seen_week:
+            continue
+        seen_week.add(week_start)
+
+        for slug, url in extract_page_links(inner, page_url):
+            if is_rejected_slug(slug):
+                continue
+            if not (
+                is_bulletin_slug(region_code, slug) or is_loose_price_pdf_slug(slug)
+            ):
+                continue
+            weeks.setdefault(week_start, {})
+            if slug not in weeks[week_start] or url is not None:
+                weeks[week_start][slug] = url
+
+    bulletins: list[DiscoveredBulletin] = []
+    for week_start, slug_urls in sorted(weeks.items(), reverse=True):
+        if not slug_urls:
+            continue
+        slugs = tuple(slug_urls.keys())
+        urls = tuple(slug_urls[slug] for slug in slugs)
+        bulletins.append(
+            DiscoveredBulletin(
+                region_code=region_code,
+                week_start=week_start,
+                slugs=slugs,
+                urls=urls,
+                source="doe-region-page-week-heading",
+            )
+        )
+    return bulletins
 
 
 def fetch_region_page_slugs(region_code: str) -> list[str]:
@@ -322,22 +441,23 @@ def sequence_for_slug(slug: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def discover_region_documents(region_code: str) -> list[BulletinDocument]:
-    """All bulletin PDFs DOE currently publishes for a macro-region.
-
-    Prefer strict region bulletin patterns. Also keep the first few non-logo PDFs
-    from the page (DOE lists the current series first) so a rename cannot blank
-    discovery while Sep 22–28 files are still linked on the site.
-    """
+def documents_from_page_links(
+    region_code: str, links: list[tuple[str, str | None]]
+) -> list[BulletinDocument]:
+    """Build BulletinDocuments from ordered (slug, url) page links."""
     documents: list[BulletinDocument] = []
     seen: set[str] = set()
     loose_kept = 0
 
-    for slug, url in fetch_region_page_links(region_code):
+    for slug, url in links:
         if slug in seen or is_rejected_slug(slug):
             continue
         strict = is_bulletin_slug(region_code, slug)
-        loose = (not strict) and is_loose_price_pdf_slug(slug) and loose_kept < PAGE_HEAD_CANDIDATE_LIMIT
+        loose = (
+            (not strict)
+            and is_loose_price_pdf_slug(slug)
+            and loose_kept < PAGE_HEAD_CANDIDATE_LIMIT
+        )
         if not strict and not loose:
             continue
         if loose:
@@ -355,6 +475,16 @@ def discover_region_documents(region_code: str) -> list[BulletinDocument]:
             )
         )
     return documents
+
+
+def discover_region_documents(region_code: str) -> list[BulletinDocument]:
+    """All bulletin PDFs DOE currently publishes for a macro-region.
+
+    Prefer strict region bulletin patterns. Also keep the first few non-logo PDFs
+    from the page (DOE lists the current series first) so a rename cannot blank
+    discovery while Sep 22–28 files are still linked on the site.
+    """
+    return documents_from_page_links(region_code, fetch_region_page_links(region_code))
 
 
 def group_documents_by_week(
@@ -557,22 +687,31 @@ def discover_latest_weeks(
     already published on the CMS. Regions whose newest filenames carry no date need
     their PDFs opened to find their week, which is what `probe_dir` caches.
 
-    Ordering prefers a dated week from the archive/CMS when available, then undated
-    page-head PDFs (opened for their header date), so a live Sep 22–28 file on the
-    site wins even when the calendar already expects the next Tuesday.
+    South Luzon nests undated Calabarzon/Mimaropa/Bicol PDFs under a week heading
+    ("September 22 to 28"). Those headings are parsed first so undated filenames still
+    resolve to the correct week.
     """
     region_code = resolve_region_code(region_key)
-    documents = discover_region_documents(region_code)
+    page_url, html_text = fetch_region_page_html(region_code)
+    links = extract_page_links(html_text, page_url)
+    documents = documents_from_page_links(region_code, links)
     bulletins, undated = group_documents_by_week(documents)
 
     candidates: list[DiscoveredBulletin] = []
 
-    newest_listed = bulletins[0].week_start if bulletins else None
+    # Page week headings beat filename dates for nested South Luzon layouts.
+    heading_weeks = discover_weeks_from_page_headings(html_text, page_url, region_code)
+    candidates.extend(heading_weeks)
+
+    newest_listed = None
+    if heading_weeks:
+        newest_listed = heading_weeks[0].week_start
+    elif bulletins:
+        newest_listed = bulletins[0].week_start
     candidates.extend(discover_cms_weeks(region_code, documents, newer_than=newest_listed))
 
     # DOE stopped dating some regions' filenames, so an undated PDF can be newer than
     # every dated one. Its week is only known once the PDF header is read.
-    # Also used when the page lists renamed files that our strict patterns used to miss.
     if undated:
         latest_undated = _latest_undated_group(region_code, undated, probe_dir=probe_dir)
         if latest_undated:
@@ -589,7 +728,13 @@ def discover_latest_weeks(
 
     ordered: list[DiscoveredBulletin] = []
     seen: set[date] = set()
-    for candidate in sorted(candidates, key=lambda c: c.week_start, reverse=True):
+    # Prefer weeks that carry real media URLs over legacy CMS-only guesses, then
+    # newest date. Stops a mis-yeared old guest block from outranking Sep 22 media.
+    for candidate in sorted(
+        candidates,
+        key=lambda c: (any(url for url in c.urls), c.week_start),
+        reverse=True,
+    ):
         if candidate.week_start not in seen:
             seen.add(candidate.week_start)
             ordered.append(candidate)
@@ -643,9 +788,8 @@ def _latest_undated_group(
     for subregion, documents in by_subregion.items():
         for document in sorted(documents, key=_undated_rank)[:UNDATED_PROBE_LIMIT]:
             try:
-                path = download_pdf(
-                    slug_to_url(document.slug), dest / f"{document.slug}.pdf"
-                )
+                download_url = document.url or slug_to_url(document.slug)
+                path = download_pdf(download_url, dest / f"{document.slug}.pdf")
                 week_start = read_bulletin_week(path)
             except Exception:  # noqa: BLE001 — a bad candidate must not end the probe
                 continue
