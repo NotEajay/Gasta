@@ -11,8 +11,10 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
+from .area_names import normalize_area_name
+
 if TYPE_CHECKING:
-    from .parse_bulletin import ParsedBulletin, ParsedPrice
+    from .parse_bulletin import ParsedBulletin
 
 
 def _client():
@@ -100,8 +102,12 @@ def fetch_region_prices_for_week(region_code: str, week_start: date) -> list[Any
 
 
 def areas_present(prices: list[Any]) -> set[str]:
-    """Non-empty city/area labels covered by a price list."""
-    return {p.area_name for p in prices if p.area_name}
+    """Non-empty city/area labels covered by a price list (normalized)."""
+    return {
+        normalize_area_name(p.area_name) or p.area_name
+        for p in prices
+        if p.area_name
+    }
 
 
 def carry_forward_missing_areas(parsed: ParsedBulletin) -> list[str]:
@@ -123,17 +129,21 @@ def carry_forward_missing_areas(parsed: ParsedBulletin) -> list[str]:
     current_areas = areas_present(parsed.prices)
     carried_areas: set[str] = set()
     for price in prior_prices:
-        if not price.area_name or price.area_name in current_areas:
+        if not price.area_name:
+            continue
+        area = normalize_area_name(price.area_name) or price.area_name
+        if not area or area in current_areas:
             continue
         parsed.prices.append(
             _parsed_price(
                 price.company,
                 price.fuel_type_code,
                 price.price_per_liter,
-                price.area_name,
+                area,
             )
         )
-        carried_areas.add(price.area_name)
+        carried_areas.add(area)
+        current_areas.add(area)
 
     if carried_areas:
         names = ", ".join(sorted(carried_areas)[:8])

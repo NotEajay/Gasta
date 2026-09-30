@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pdfplumber
 
+from .area_names import normalize_area_name
 from .constants import (
     COMPANY_HEADER_ALIASES,
     COMPANY_NAMES,
@@ -389,26 +390,8 @@ def _table_left_edge(anchors: list[ColumnAnchor]) -> float | None:
 
 
 def _normalize_area_name(raw: str) -> str:
-    """Clean DOE area labels; drop OCR garbage that does not look like a city."""
-    text = re.sub(r"\s+", " ", raw.strip())
-    text = re.sub(r"\bCty\b", "City", text, flags=re.IGNORECASE)
-    text = text.replace("Para�aque", "Paranaque").replace("PARA�AQUE", "PARANAQUE")
-    text = re.sub(r"Paraaque|ParaÃ±aque|ParaÑaque", "Paranaque", text, flags=re.IGNORECASE)
-    if not text:
-        return ""
-    # Reject labels that are mostly non-letters (OCR smash-ups).
-    letters = sum(1 for ch in text if ch.isalpha())
-    if letters < 4 or letters / max(len(text), 1) < 0.55:
-        return ""
-    # Known OCR mash of Mandaluyong / overlapping city headers
-    if "mcu" in text.lower() or "tioncluapna" in text.lower():
-        return "Mandaluyong City"
-    cleaned = text.title()
-    cleaned = cleaned.replace("Paranaque", "Paranaque").replace("Paranáque", "Paranaque")
-    if not cleaned.lower().endswith("city") and "city" not in cleaned.lower():
-        # Keep province/area labels that are not cities (rare outside NCR).
-        pass
-    return cleaned
+    """Module-local alias for area label cleanup."""
+    return normalize_area_name(raw)
 
 
 def _row_fuel_label(
@@ -493,7 +476,8 @@ def _propagate_block_areas(
     for block in blocks:
         block_area = next((area for area, _, _ in block if area), "")
         for area_name, fuel_label, by_company in block:
-            filled.append((block_area or area_name, fuel_label, by_company))
+            # Prefer the row's own city when present; only fill blanks from the block.
+            filled.append((area_name or block_area, fuel_label, by_company))
     return filled
 
 
