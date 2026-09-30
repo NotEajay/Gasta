@@ -138,17 +138,26 @@ REGION_SLUG_PATTERNS: dict[str, tuple[str, ...]] = {
         # Current media series is titled "List of NCR Pump Prices for <range>.pdf",
         # which carries neither of the historical markers above.
         r"ncr-pump-prices",
+        r"list[-_]of[-_]ncr[-_]pump[-_]prices",
+        r"ncr[-_].*pump[-_]prices",
     ),
     "NORTH_LUZON": (
         r"price-monitoring",
         r"^nluz[-_]",
         r"^[a-z]+-\d{1,2}-\d{1,2}-\d{4}$",  # april-21-27-2026
+        r"northern[-_]luzon",
+        r"north[-_]luzon",
+        r"liquid[-_]fuel",
     ),
     "SOUTH_LUZON": (
         r"^region-iv-a-calabarzon",
         r"^region-iv-b-mimaropa",
         r"^region-v-bicol",
         r"^petro[-_]sluz",
+        r"calabarzon",
+        r"mimaropa",
+        r"bicol",
+        r"south[-_]luzon",
     ),
     "VISAYAS": (
         r"^vfo[-_].*price-monitoring",
@@ -160,10 +169,15 @@ REGION_SLUG_PATTERNS: dict[str, tuple[str, ...]] = {
         # marker so unrelated attachments stay rejected.
         r"^new[-_]vfo[-_].*price-monitoring",
         r"visayas[-_]pump[-_]prices",
+        r"list[-_]of[-_]visayas[-_]pump[-_]prices",
+        r"^vfo[-_]",
     ),
     "MINDANAO": (
         r"lfro-price-monitoring",
         r"^petro[-_]min",
+        r"mfo[-_]lfro",
+        r"mindanao.*price",
+        r"list[-_]of[-_]mindanao",
     ),
 }
 
