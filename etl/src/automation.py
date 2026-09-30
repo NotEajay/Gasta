@@ -212,21 +212,28 @@ def _sync_discovered(
     )
     stale = is_bulletin_stale(judged_week, today)
 
-    pdf_paths = download_region_bulletins(
+    downloaded = download_region_bulletins(
         region_key, discovered.slugs, dest_dir, discovered.urls
     )
+    pdf_paths = downloaded.paths
     parsed = parse_region_pdfs(
         pdf_paths,
         region_code,
         fallback_week_start=discovered.week_start,
-        source_urls=list(discovered.download_urls()),
+        source_urls=list(downloaded.urls),
     )
 
     freshness_note = describe_freshness(judged_week, today)
     parsed_missing = tuple(missing_core_fuels(parsed.prices))
     coverage_note = ""
+    if downloaded.skipped:
+        coverage_note += (
+            f" Skipped {len(downloaded.skipped)} inaccessible PDF(s): "
+            + "; ".join(downloaded.skipped[:3])
+            + "."
+        )
     if parsed_missing:
-        coverage_note = (
+        coverage_note += (
             f" Missing core fuels after parse: {', '.join(parsed_missing)}."
         )
     if parsed.warnings:
