@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 
 from .constants import ALL_REGION_KEYS, CORE_FUEL_CODES, REGION_KEY_BY_CODE
+from .carry_forward import carry_forward_missing_areas, db_missing_areas_vs_prior
 from .discover import DiscoveredBulletin, UpstreamUnavailableError, discover_latest_weeks
 from .download import download_region_bulletins, normalize_region
 from .freshness import describe_freshness, is_bulletin_stale
@@ -222,6 +223,9 @@ def _sync_discovered(
         fallback_week_start=discovered.week_start,
         source_urls=list(downloaded.urls),
     )
+    # When a sub-region PDF is 403/missing, keep showing those cities using the
+    # previous week's rows for any area_name the new parse does not cover.
+    carried_areas = carry_forward_missing_areas(parsed)
 
     freshness_note = describe_freshness(judged_week, today)
     parsed_missing = tuple(missing_core_fuels(parsed.prices))
@@ -231,6 +235,10 @@ def _sync_discovered(
             f" Skipped {len(downloaded.skipped)} inaccessible PDF(s): "
             + "; ".join(downloaded.skipped[:3])
             + "."
+        )
+    if carried_areas:
+        coverage_note += (
+            f" Carried forward {len(carried_areas)} area(s) from the prior week."
         )
     if parsed_missing:
         coverage_note += (
@@ -261,7 +269,8 @@ def _sync_discovered(
     )
     if already:
         db_missing = _missing_core_fuels_in_db(parsed.bulletin_date, region_code)
-        if not db_missing:
+        gaps = db_missing_areas_vs_prior(parsed) if not dry_run else []
+        if not db_missing and not gaps and not carried_areas:
             touch_bulletin_fetched_at(parsed.bulletin_date)
             return SyncResult(
                 region_code=region_code,
@@ -277,10 +286,15 @@ def _sync_discovered(
                 stale=stale,
             )
         # Week was stored without RON 91 / Diesel Plus — reload on every ETL trigger.
-        coverage_note = (
-            f" Reloading: stored week is missing {', '.join(db_missing)}."
-            + coverage_note
-        )
+        # Also reload when prior-week cities (e.g. Bicol) were never written.
+        extra = []
+        if db_missing:
+            extra.append(f"missing {', '.join(db_missing)}")
+        if gaps or carried_areas:
+            extra.append(
+                f"filling {len(gaps or carried_areas)} area(s) from prior week"
+            )
+        coverage_note = f" Reloading: {'; '.join(extra)}." + coverage_note
 
     pdf_path_display = "; ".join(str(p) for p in pdf_paths)
 

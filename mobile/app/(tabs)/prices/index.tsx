@@ -762,28 +762,35 @@ export default function FuelPricesScreen() {
    * the ETL later loads a newer week the label updates on the next fetch with
    * no code change.
    *
-   * `bulletinAgeInDays` does date-only arithmetic -- it splits the YYYY-MM-DD
-   * string and compares local midnights -- so there is no timezone drift that
-   * could show a bulletin as a day older or younger than it is.
+   * Age is days since the estimated DOE post date (bulletin week start + 7),
+   * not since the Tuesday the price week began — so a Sep 22 week posted on
+   * Sep 29 is "1 day old" on Sep 30.
    *
-   * The threshold is the app's shared STALE_AFTER_DAYS, deliberately aligned
-   * with the ETL's bulletin freshness rule so the two never disagree about the
-   * same week. At 10 days the app used to call a 13-day-old bulletin stale while
-   * the ETL still treated it as current; the shared constant is now 14, so only
-   * a genuinely missed week turns red.
+   * `bulletinAgeInDays` does date-only arithmetic so there is no timezone drift.
+   * STALE_AFTER_DAYS matches the ETL (7 days since post ≡ old 14 from week start).
    */
   const priceFreshness = useMemo(() => {
     if (!bulletin) return null;
     const ageDays = bulletinAgeInDays(bulletin.bulletin_date);
 
-    // A bulletin dated in the future means bad seed or a bad parse upstream.
-    if (ageDays < 0) {
+    // Week start in the future = bad seed / bad parse upstream.
+    const [y, m, d] = bulletin.bulletin_date.split('-').map(Number);
+    const weekStart = new Date(y, (m || 1) - 1, d || 1);
+    const today = new Date();
+    const midnightToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const weekAge = Math.round(
+      (midnightToday.getTime() - weekStart.getTime()) / 86_400_000
+    );
+    if (weekAge < 0) {
       return { ageDays, tone: 'stale' as const, label: 'Date out of range' };
+    }
+    // Before typical post day: still the current bulletin week.
+    if (ageDays < 0) {
+      return { ageDays: 0, tone: 'fresh' as const, label: 'Updated recently' };
     }
     if (ageDays === 0) return { ageDays, tone: 'fresh' as const, label: 'Updated today' };
     if (ageDays === 1) return { ageDays, tone: 'fresh' as const, label: 'Updated yesterday' };
     if (ageDays <= 7) return { ageDays, tone: 'fresh' as const, label: 'Updated recently' };
-    // 8..STALE_AFTER_DAYS: still current to the ETL, but worth flagging. Amber.
     if (ageDays > STALE_AFTER_DAYS) {
       return { ageDays, tone: 'stale' as const, label: `Stale · ${ageDays} days old` };
     }
