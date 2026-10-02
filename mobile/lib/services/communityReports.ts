@@ -54,6 +54,9 @@ export interface VerifiedCommunityPrice {
   station_name: string;
   oil_company_id: string;
   region_id: string;
+  /** Station coordinates from `fresh_verified_community_prices` (migration view). */
+  latitude: number | null;
+  longitude: number | null;
   address: string | null;
   confirmation_count: number;
   fuel_type?: { code: string; name: string };
@@ -242,7 +245,15 @@ export async function fetchFreshVerifiedPrices(
   const { data, error } = await query.order('verified_at', { ascending: false });
   if (error) throw error;
 
-  let rows = (data ?? []) as VerifiedCommunityPrice[];
+  let rows = ((data ?? []) as VerifiedCommunityPrice[]).map((row) => {
+    const latitude = row.latitude == null ? NaN : Number(row.latitude);
+    const longitude = row.longitude == null ? NaN : Number(row.longitude);
+    return {
+      ...row,
+      latitude: Number.isFinite(latitude) ? latitude : null,
+      longitude: Number.isFinite(longitude) ? longitude : null,
+    };
+  });
 
   if (fuelTypeCode) {
     const { data: fuelType, error: fuelError } = await supabase

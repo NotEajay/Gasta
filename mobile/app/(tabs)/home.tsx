@@ -133,6 +133,13 @@ function fuelDisplayName(code: DoeFuelTypeCode): string {
   return DOE_FUEL_TYPES.find((fuel) => fuel.code === code)?.name ?? code;
 }
 
+/** Compact distance for the fuel card source line (e.g. "850 m", "1.2 km"). */
+function formatDistanceKm(km: number): string {
+  if (!Number.isFinite(km) || km < 0) return '';
+  if (km < 1) return `${Math.max(1, Math.round(km * 1000))} m`;
+  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
+}
+
 /**
  * "Sunday, September 28" — local device date, no network, no stored state. */
 function getTodayLabel(now = new Date()): string {
@@ -337,7 +344,10 @@ export default function HomeScreen() {
       effectiveRegion,
       effectiveFuel,
       place?.regionCode != null,
-      resolvedFuel != null
+      resolvedFuel != null,
+      place
+        ? { latitude: place.latitude, longitude: place.longitude }
+        : null
     ).catch(() => null);
 
     setPrice(nextPrice);
@@ -498,21 +508,31 @@ export default function HomeScreen() {
   // quote, and saying only "DOE bulletin" let it read like the latter. The
   // "<Region> reference" suffix is dropped entirely when the region came from the
   // user and the fuel came from their vehicle.
+  //
+  // Nearby recommendations may also show distance — only when the pick was
+  // actually ranked inside the search radius, never on a regional fallback.
   const priceSource = price
     ? price.source === 'community'
-      ? 'Community verified'
+      ? price.isNearbyRecommended
+        ? 'Cheapest nearby · community verified'
+        : 'Community verified'
       : price.isRegionFallback
         ? `DOE bulletin · ${regionDisplayName(price.regionCode ?? DASHBOARD_REGION)} reference`
         : 'DOE bulletin · regional reference'
     : null;
 
   /**
-   * Section heading. Never "Nearby": Home resolves a MACRO-REGION from
-   * coordinates, never a station or a city, so any "nearby" wording would
-   * overclaim. When location is unknown the heading drops the region entirely
-   * rather than naming the fallback.
+   * Section heading.
+   *
+   * "Recommended" is reserved for a station that was ranked by distance + price
+   * against the user's coordinates. Region-only / DOE figures keep the older
+   * "Fuel price · {Region}" wording so Home never overclaims proximity.
    */
-  const fuelSectionTitle = regionCode ? `Fuel price · ${regionDisplayName(regionCode)}` : 'Fuel price';
+  const fuelSectionTitle = price?.isNearbyRecommended
+    ? 'Recommended near you'
+    : regionCode
+      ? `Fuel price · ${regionDisplayName(regionCode)}`
+      : 'Fuel price';
 
   /**
    * A quiet qualifier under the price when the fuel is NOT the vehicle's own --
@@ -800,7 +820,9 @@ export default function HomeScreen() {
                     {price.stationName}
                   </Text>
                   <Text numberOfLines={1} style={styles.fuelMeta}>
-                    {price.location}
+                    {price.isNearbyRecommended && price.distanceKm != null
+                      ? `${formatDistanceKm(price.distanceKm)} · ${price.location}`
+                      : price.location}
                   </Text>
                 </View>
                 <View style={styles.fuelRight}>

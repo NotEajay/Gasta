@@ -1,3 +1,4 @@
+import { NEARBY_STATION_RADIUS_KM } from '@/constants/communityReports';
 import type { DoeFuelTypeCode } from '@/constants/fuelTypes';
 import type { DoeRegionCode } from '@/constants/regions';
 import {
@@ -11,6 +12,7 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import { fetchLowestPrice, type FuelPriceRow } from '@/lib/services/fuelPrices';
+import { haversineKm } from '@/lib/services/location';
 import { fetchMyPendingAllocations } from '@/lib/services/refillAllocations';
 import { supabase } from '@/lib/supabase';
 
@@ -91,6 +93,20 @@ export interface DashboardPriceSummary {
   isFuelFallback: boolean;
   /** The DOE fuel code actually queried, e.g. 'DIESEL'. */
   fuelCode: DoeFuelTypeCode;
+  /**
+   * True when this station was chosen as cheapest within
+   * `NEARBY_STATION_RADIUS_KM` of the user's coordinates. Never true for DOE
+   * reference rows or region-wide community fallbacks.
+   */
+  isNearbyRecommended: boolean;
+  /** Straight-line km to the recommended station, when distance was computed. */
+  distanceKm: number | null;
+}
+
+/** Optional GPS fix used to prefer the cheapest nearby verified station. */
+export interface DashboardUserCoords {
+  latitude: number;
+  longitude: number;
 }
 
 export interface DashboardBudgetSummary {
@@ -137,22 +153,74 @@ type PriceQueryContext = Pick<
   'regionCode' | 'isRegionFallback' | 'isFuelFallback' | 'fuelCode'
 >;
 
+type RankedCommunityPrice = {
+  row: VerifiedCommunityPrice;
+  distanceKm: number | null;
+  nearby: boolean;
+};
+
+/**
+ * Prefer the cheapest verified station within the nearby radius; on a price tie,
+ * prefer the nearer one. Without coords (or with no station inside the radius),
+ * fall back to the cheapest verified price in the region — never inventing a
+ * "nearby" claim for that fallback.
+ */
+function pickRecommendedCommunityPrice(
+  rows: VerifiedCommunityPrice[],
+  userCoords: DashboardUserCoords | null
+): RankedCommunityPrice | null {
+  const priced = rows.filter(
+    (item) => Number.isFinite(item.reported_price) && item.reported_price > 0
+  );
+  if (priced.length === 0) return null;
+
+  if (userCoords) {
+    const nearby = priced
+      .map((row) => {
+        const distanceKm =
+          row.latitude != null && row.longitude != null
+            ? haversineKm(
+                userCoords.latitude,
+                userCoords.longitude,
+                Number(row.latitude),
+                Number(row.longitude)
+              )
+            : null;
+        return { row, distanceKm, nearby: distanceKm != null && distanceKm <= NEARBY_STATION_RADIUS_KM };
+      })
+      .filter((item) => item.nearby);
+
+    if (nearby.length > 0) {
+      nearby.sort((a, b) => {
+        const priceDelta = a.row.reported_price - b.row.reported_price;
+        if (priceDelta !== 0) return priceDelta;
+        return (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY);
+      });
+      return nearby[0];
+    }
+  }
+
+  const cheapest = [...priced].sort((a, b) => a.reported_price - b.reported_price)[0];
+  return { row: cheapest, distanceKm: null, nearby: false };
+}
+
 function communityPriceSummary(
   rows: VerifiedCommunityPrice[],
-  context: PriceQueryContext
+  context: PriceQueryContext,
+  userCoords: DashboardUserCoords | null
 ): DashboardPriceSummary | null {
-  const row = rows
-    .filter((item) => Number.isFinite(item.reported_price) && item.reported_price > 0)
-    .sort((a, b) => a.reported_price - b.reported_price)[0];
+  const pick = pickRecommendedCommunityPrice(rows, userCoords);
+  if (!pick) return null;
 
-  if (!row) return null;
-
+  const { row, distanceKm, nearby } = pick;
   return {
     price: row.reported_price,
     stationName: row.station_name || 'Station',
     // No invented region: an absent address reads as unknown, not as NCR.
     location: row.address || 'Address unavailable',
     source: 'community',
+    isNearbyRecommended: nearby,
+    distanceKm: nearby ? distanceKm : null,
     ...context,
   };
 }
@@ -169,13 +237,20 @@ function doePriceSummary(
     stationName: row.oil_company?.name || 'DOE price',
     location: row.area_name || row.region?.name || 'Region-wide reference',
     source: 'doe',
+    isNearbyRecommended: false,
+    distanceKm: null,
     ...context,
   };
 }
 
 /**
- * Read-only dashboard price summary. Community prices are preferred because they
- * identify a station; the existing DOE lowest-price service is the fallback.
+ * Read-only dashboard price summary.
+ *
+ * Preference order matches the product spec:
+ * 1. Cheapest fresh verified community price within `NEARBY_STATION_RADIUS_KM`
+ *    of the user's coordinates (when available).
+ * 2. Cheapest fresh verified community price in the macro-region.
+ * 3. DOE lowest company/area bulletin price for the region.
  *
  * Region and fuel type are supplied explicitly by the caller. The parameter
  * defaults remain for any other caller, but Home always passes resolved values
@@ -185,7 +260,8 @@ export async function fetchDashboardPriceSummary(
   regionCode: DoeRegionCode = DASHBOARD_REGION,
   fuelTypeCode: DoeFuelTypeCode = DASHBOARD_FUEL_TYPE,
   resolvedRegion: boolean = true,
-  resolvedFuel: boolean = true
+  resolvedFuel: boolean = true,
+  userCoords: DashboardUserCoords | null = null
 ): Promise<DashboardPriceSummary | null> {
   const context: PriceQueryContext = {
     regionCode: resolvedRegion ? regionCode : null,
@@ -199,7 +275,10 @@ export async function fetchDashboardPriceSummary(
     fetchLowestPrice(regionCode, fuelTypeCode).catch(() => null),
   ]);
 
-  return communityPriceSummary(communityRows, context) ?? doePriceSummary(doeRow, context);
+  return (
+    communityPriceSummary(communityRows, context, userCoords) ??
+    doePriceSummary(doeRow, context)
+  );
 }
 
 /**

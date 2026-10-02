@@ -58,6 +58,34 @@ function mapPermission(status: Location.PermissionStatus): LocationPermissionSta
 }
 
 /**
+ * Great-circle distance in kilometres (Haversine).
+ *
+ * Used by Home to rank verified stations within `NEARBY_STATION_RADIUS_KM`.
+ * Returns null when either coordinate pair is incomplete or non-finite, so
+ * callers can skip distance ranking without inventing a zero.
+ */
+export function haversineKm(
+  fromLat: number,
+  fromLng: number,
+  toLat: number,
+  toLng: number
+): number | null {
+  if (
+    ![fromLat, fromLng, toLat, toLng].every((value) => Number.isFinite(value))
+  ) {
+    return null;
+  }
+
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(toLat - fromLat);
+  const dLng = toRad(toLng - fromLng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(fromLat)) * Math.cos(toRad(toLat)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
  * Nearest DOE pricing area from coordinates.
  *
  * Reuses the same REGION_CENTROIDS the rest of the app already trusts, so no
