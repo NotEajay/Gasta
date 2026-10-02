@@ -44,11 +44,37 @@ import {
 import { isSupabaseConfigured } from '@/lib/supabase';
 import {
   consumeRouteSelection,
+  type PickedRoutePoint,
   type RouteLocation,
 } from '@/lib/services/routeSelection';
+import {
+  PlacesAutocompleteError,
+  resolvePlaceSuggestion,
+  searchPlaceSuggestions,
+  type PlaceSuggestion,
+} from '@/lib/services/googlePlacesAutocomplete';
+import { getReadableAddress } from '@/lib/services/googleGeocoding';
 import { useTheme } from '@/lib/useTheme';
 import type { MCDAWeights, ModeEvaluation } from '@/types/mcda';
 import type { Vehicle, VehicleCatalogEntry } from '@/types';
+
+type RouteField = 'origin' | 'destination';
+
+type PlaceSearchState = {
+  field: RouteField | null;
+  query: string;
+  loading: boolean;
+  suggestions: PlaceSuggestion[];
+  error: string | null;
+};
+
+const EMPTY_PLACE_SEARCH: PlaceSearchState = {
+  field: null,
+  query: '',
+  loading: false,
+  suggestions: [],
+  error: null,
+};
 
 const COMPARE_TRANSPORT_ROWS: {
   code: TransportModeCode;
@@ -108,8 +134,13 @@ export default function TripOptimizerScreen() {
   const [weights, setWeights] = useState<MCDAWeights>(DEFAULT_MCDA_WEIGHTS);
   const [loading, setLoading] = useState(true);
   const [savingTemplate, setSavingTemplate] = useState(false);
-  const [loggingHistory, setLoggingHistory] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
+  const [placeSearch, setPlaceSearch] = useState<PlaceSearchState>(EMPTY_PLACE_SEARCH);
+  const [resolvingPlaceId, setResolvingPlaceId] = useState<string | null>(null);
+  const placeSearchRequestId = useRef(0);
+  const placeResolveRequestId = useRef(0);
+  const placeSearchAbort = useRef<AbortController | null>(null);
+  const placeSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState<number | null>(null);
@@ -697,6 +728,200 @@ export default function TripOptimizerScreen() {
     };
   }, [origin, destination, originLocation, destinationRouteValue]);
 
+  /**
+   * Every successful "Compare trip costs" writes Trip History automatically.
+   * Failures are quiet so a history write never blocks the cost popup.
+   */
+  const autoLogTripHistory = useCallback(
+    async (
+      scored: NonNullable<ReturnType<typeof calculateTripRecommendation>>,
+      distanceKm: number,
+    ) => {
+      if (!user || !scored.recommended) return;
+      try {
+        await logTripToHistory({
+          userId: user.id,
+          vehicleId: selectedVehicleId === 'manual' ? null : selectedVehicleId,
+          distanceKm,
+          originLabel: origin.trim() || undefined,
+          destinationLabel: destination.trim() || undefined,
+          weights,
+          evaluations: scored.evaluations,
+          recommendedModeCode: scored.recommended.modeCode,
+        });
+      } catch (error) {
+        console.warn('[Trip Optimizer] Auto-log to history failed', error);
+      }
+    },
+    [destination, origin, selectedVehicleId, user, weights],
+  );
+
+  const handleRouteQueryChange = useCallback(
+    (field: RouteField, value: string) => {
+      if (field === 'origin') {
+        setOrigin(value);
+        setOriginLocation(null);
+        setOriginPlace(null);
+      } else {
+        setDestination(value);
+        setDestinationRouteValue('');
+        setDestinationPoint(null);
+      }
+
+      placeSearchRequestId.current += 1;
+      placeSearchAbort.current?.abort();
+      placeSearchAbort.current = null;
+      if (placeSearchTimer.current) {
+        clearTimeout(placeSearchTimer.current);
+        placeSearchTimer.current = null;
+      }
+
+      const trimmed = value.trim();
+      if (trimmed.length < 2) {
+        setPlaceSearch(EMPTY_PLACE_SEARCH);
+        setResolvingPlaceId(null);
+        return;
+      }
+
+      const requestId = ++placeSearchRequestId.current;
+      const abortController = new AbortController();
+      placeSearchAbort.current = abortController;
+      const biasPoint =
+        field === 'destination'
+          ? originLocation
+          : destinationPoint
+            ? {
+                latitude: destinationPoint.latitude,
+                longitude: destinationPoint.longitude,
+              }
+            : null;
+
+      placeSearchTimer.current = setTimeout(() => {
+        setPlaceSearch({
+          field,
+          query: trimmed,
+          loading: true,
+          suggestions: [],
+          error: null,
+        });
+        void searchPlaceSuggestions(
+          trimmed,
+          biasPoint
+            ? { latitude: biasPoint.latitude, longitude: biasPoint.longitude }
+            : undefined,
+          abortController.signal,
+        )
+          .then((suggestions) => {
+            if (requestId !== placeSearchRequestId.current) return;
+            setPlaceSearch({
+              field,
+              query: trimmed,
+              loading: false,
+              suggestions,
+              error: null,
+            });
+          })
+          .catch((error) => {
+            if (
+              requestId !== placeSearchRequestId.current ||
+              abortController.signal.aborted
+            ) {
+              return;
+            }
+            setPlaceSearch({
+              field,
+              query: trimmed,
+              loading: false,
+              suggestions: [],
+              error:
+                error instanceof PlacesAutocompleteError
+                  ? error.userMessage
+                  : 'Could not search for that location.',
+            });
+          })
+          .finally(() => {
+            if (placeSearchAbort.current === abortController) {
+              placeSearchAbort.current = null;
+            }
+          });
+      }, 300);
+    },
+    [destinationPoint, originLocation],
+  );
+
+  const handlePlaceSuggestionPress = useCallback(
+    async (field: RouteField, suggestion: PlaceSuggestion) => {
+      const requestId = ++placeResolveRequestId.current;
+      setResolvingPlaceId(suggestion.placeId);
+      setPlaceSearch({
+        field,
+        query: suggestion.description,
+        loading: false,
+        suggestions: [],
+        error: null,
+      });
+
+      if (field === 'origin') {
+        setOrigin(suggestion.description);
+        setOriginLocation(null);
+        setOriginPlace(null);
+      } else {
+        setDestination(suggestion.description);
+        setDestinationRouteValue('');
+        setDestinationPoint(null);
+      }
+
+      try {
+        const place = await resolvePlaceSuggestion(suggestion.placeId);
+        if (requestId !== placeResolveRequestId.current) return;
+
+        const point: PickedRoutePoint = {
+          displayName:
+            field === 'origin'
+              ? getReadableAddress(place.description)
+              : place.description,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          directionsValue: `${place.latitude},${place.longitude}`,
+        };
+
+        if (field === 'origin') {
+          setOrigin(point.displayName);
+          setOriginLocation(point);
+        } else {
+          setDestination(point.displayName);
+          setDestinationRouteValue(point.directionsValue);
+          setDestinationPoint(point);
+        }
+        setPlaceSearch(EMPTY_PLACE_SEARCH);
+        setResolvingPlaceId(null);
+      } catch (error) {
+        if (requestId !== placeResolveRequestId.current) return;
+        setResolvingPlaceId(null);
+        setPlaceSearch({
+          field,
+          query: suggestion.description,
+          loading: false,
+          suggestions: [],
+          error:
+            error instanceof PlacesAutocompleteError
+              ? error.userMessage
+              : "Could not load that place's exact location.",
+        });
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      placeSearchRequestId.current += 1;
+      placeResolveRequestId.current += 1;
+      placeSearchAbort.current?.abort();
+      if (placeSearchTimer.current) clearTimeout(placeSearchTimer.current);
+    };
+  }, []);
+
   const handleOptimize = useCallback(async () => {
     if (optimizing) return;
 
@@ -759,6 +984,7 @@ export default function TripOptimizerScreen() {
       if (!result?.recommended) setResult(next);
       setShowResultSheet(true);
       setRouteError(null);
+      void autoLogTripHistory(next, routeDistanceKm);
       return;
     }
 
@@ -779,10 +1005,12 @@ export default function TripOptimizerScreen() {
       routeResult = await getDrivingRoute(originForDirections, destinationForDirections);
       if (requestId !== optimizeRequestId.current) return;
 
+      const scored = scoreTrip(routeResult.distanceKm, routeResult.durationMinutes);
       setRouteDistanceKm(routeResult.distanceKm);
       setRouteDurationMinutes(routeResult.durationMinutes);
-      setResult(scoreTrip(routeResult.distanceKm, routeResult.durationMinutes));
+      setResult(scored);
       setShowResultSheet(true);
+      void autoLogTripHistory(scored, routeResult.distanceKm);
       outcome = 'success';
     } catch (error) {
       if (requestId !== optimizeRequestId.current) return;
@@ -808,6 +1036,7 @@ export default function TripOptimizerScreen() {
       }
     }
   }, [
+    autoLogTripHistory,
     customFuelPriceError,
     destination,
     destinationRouteValue,
@@ -938,39 +1167,6 @@ export default function TripOptimizerScreen() {
     weights,
   ]);
 
-  const handleLogHistory = useCallback(async () => {
-    if (!user && !requireAuth()) return;
-    if (!user || !result?.recommended || routeDistanceKm == null) return;
-
-    setLoggingHistory(true);
-    try {
-      await logTripToHistory({
-        userId: user.id,
-        vehicleId: selectedVehicleId === 'manual' ? null : selectedVehicleId,
-        distanceKm: routeDistanceKm ?? 0,
-        originLabel: origin.trim() || undefined,
-        destinationLabel: destination.trim() || undefined,
-        weights,
-        evaluations: result.evaluations,
-        recommendedModeCode: result.recommended.modeCode,
-      });
-      Alert.alert('Logged', 'This calculation was added to Trip History.');
-    } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to log trip');
-    } finally {
-      setLoggingHistory(false);
-    }
-  }, [
-    user,
-    requireAuth,
-    result,
-    selectedVehicleId,
-    routeDistanceKm,
-    origin,
-    destination,
-    weights,
-  ]);
-
   if (!isSupabaseConfigured) {
     return (
       <View style={styles.flex}>
@@ -1018,20 +1214,53 @@ export default function TripOptimizerScreen() {
               <Text style={styles.routeFieldLabel}>Origin</Text>
               <TextInput
                 value={origin}
-                onChangeText={(value) => {
-                  setOrigin(value);
-                  setOriginLocation(null);
-                  // Clearing the coordinates retires the device fix, so pricing
-                  // follows the typed origin with no location badge left behind.
-                  setOriginPlace(null);
+                onChangeText={(value) => handleRouteQueryChange('origin', value)}
+                onFocus={() => {
+                  if (origin.trim().length >= 2 && placeSearch.field !== 'origin') {
+                    handleRouteQueryChange('origin', origin);
+                  }
                 }}
-                placeholder="Add starting point"
+                placeholder="Search starting point"
                 placeholderTextColor={GasTaColors.textMuted}
                 style={styles.routeFieldInput}
-                multiline
-                numberOfLines={2}
+                autoCorrect={false}
+                returnKeyType="search"
               />
             </View>
+            {placeSearch.field === 'origin' ? (
+              <View style={styles.suggestionList}>
+                {placeSearch.loading || resolvingPlaceId ? (
+                  <Text style={styles.suggestionStatus}>Searching places…</Text>
+                ) : null}
+                {placeSearch.error ? (
+                  <Text style={styles.suggestionError}>{placeSearch.error}</Text>
+                ) : null}
+                {!placeSearch.loading &&
+                !resolvingPlaceId &&
+                !placeSearch.error &&
+                placeSearch.suggestions.length === 0 &&
+                placeSearch.query.length >= 2 ? (
+                  <Text style={styles.suggestionStatus}>No matching places</Text>
+                ) : null}
+                {placeSearch.suggestions.map((suggestion, index) => (
+                  <Pressable
+                    key={suggestion.placeId}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Use ${suggestion.description}`}
+                    onPress={() => void handlePlaceSuggestionPress('origin', suggestion)}
+                    style={({ pressed }) => [
+                      styles.suggestionRow,
+                      index > 0 && styles.suggestionRowDivider,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Ionicons name="location-outline" size={16} color={GasTaColors.forest} />
+                    <Text style={styles.suggestionText} numberOfLines={2}>
+                      {suggestion.description}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
 
             {/* Lightweight relationship marker. Deliberately thin: it shows the
                 two fields are one route, and stays out of the way. */}
@@ -1041,17 +1270,58 @@ export default function TripOptimizerScreen() {
               <Text style={styles.routeFieldLabel}>Destination</Text>
               <TextInput
                 value={destination}
-                onChangeText={(value) => {
-                  setDestination(value);
-                  setDestinationRouteValue('');
+                onChangeText={(value) => handleRouteQueryChange('destination', value)}
+                onFocus={() => {
+                  if (
+                    destination.trim().length >= 2 &&
+                    placeSearch.field !== 'destination'
+                  ) {
+                    handleRouteQueryChange('destination', destination);
+                  }
                 }}
-                placeholder="Add destination"
+                placeholder="Search destination"
                 placeholderTextColor={GasTaColors.textMuted}
                 style={styles.routeFieldInput}
-                multiline
-                numberOfLines={2}
+                autoCorrect={false}
+                returnKeyType="search"
               />
             </View>
+            {placeSearch.field === 'destination' ? (
+              <View style={styles.suggestionList}>
+                {placeSearch.loading || resolvingPlaceId ? (
+                  <Text style={styles.suggestionStatus}>Searching places…</Text>
+                ) : null}
+                {placeSearch.error ? (
+                  <Text style={styles.suggestionError}>{placeSearch.error}</Text>
+                ) : null}
+                {!placeSearch.loading &&
+                !resolvingPlaceId &&
+                !placeSearch.error &&
+                placeSearch.suggestions.length === 0 &&
+                placeSearch.query.length >= 2 ? (
+                  <Text style={styles.suggestionStatus}>No matching places</Text>
+                ) : null}
+                {placeSearch.suggestions.map((suggestion, index) => (
+                  <Pressable
+                    key={suggestion.placeId}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Use ${suggestion.description}`}
+                    onPress={() =>
+                      void handlePlaceSuggestionPress('destination', suggestion)
+                    }
+                    style={({ pressed }) => [
+                      styles.suggestionRow,
+                      index > 0 && styles.suggestionRowDivider,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Ionicons name="location-outline" size={16} color={GasTaColors.forest} />
+                    <Text style={styles.suggestionText} numberOfLines={2}>
+                      {suggestion.description}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
           </View>
 
           {/* Real route values only -- never a placeholder. The last good figure
@@ -1769,17 +2039,9 @@ export default function TripOptimizerScreen() {
                   disabled={savingTemplate}
                   style={styles.saveSecondaryBtn}
                 />
-
-                <View style={styles.saveDivider} />
-
-                <Text style={styles.saveActionTitle}>Log to history</Text>
-                <Text style={styles.hint}>Records this trip in your trip history.</Text>
-                <PrimaryButton
-                  label={loggingHistory ? 'Logging…' : 'Log to history'}
-                  onPress={handleLogHistory}
-                  disabled={loggingHistory}
-                  style={styles.logBtn}
-                />
+                <Text style={styles.sheetHistoryNote}>
+                  This comparison is saved to Trip History automatically.
+                </Text>
               </View>
             </ScrollView>
             <PrimaryButton label="Done" onPress={() => setShowResultSheet(false)} />
@@ -1859,6 +2121,47 @@ const styles = StyleSheet.create({
   /* ---- route fields (label inside, address is the hero) ---- */
   routeFields: {
     gap: spacing.xs,
+  },
+  suggestionList: {
+    marginTop: 2,
+    marginBottom: spacing.xs,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.white,
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+  },
+  suggestionRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestBorder,
+  },
+  suggestionText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+  },
+  suggestionStatus: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 12,
+    color: GasTaColors.forestMuted,
+  },
+  suggestionError: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 12,
+    lineHeight: 17,
+    color: palette.danger,
   },
   routeField: {
     backgroundColor: GasTaColors.cream,
@@ -2696,10 +2999,11 @@ const styles = StyleSheet.create({
   saveSecondaryBtn: {
     borderColor: HomeColors.border,
   },
-  saveDivider: {
-    height: 1,
-    backgroundColor: HomeColors.border,
-    marginVertical: spacing.md,
+  sheetHistoryNote: {
+    marginTop: spacing.sm,
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.forestMuted,
   },
   // Inline field validation (template name). Small red helper text, no card.
   fieldError: {
@@ -2708,9 +3012,6 @@ const styles = StyleSheet.create({
     color: palette.danger,
     marginTop: -spacing.sm,
     marginBottom: spacing.md,
-  },
-  logBtn: {
-    borderRadius: radii.sm,
   },
 
   error: { color: palette.danger, fontSize: 13, fontWeight: '600' },
