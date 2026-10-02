@@ -18,10 +18,16 @@ import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { useResponsive } from '@/hooks/useResponsive';
-import { formatCurrency, formatDate, formatPeso, transportModeLabel } from '@/lib/format';
+import {
+  formatCurrency,
+  formatDate,
+  formatPeso,
+  transportModeLabel,
+} from '@/lib/format';
 import {
   DASHBOARD_FUEL_TYPE,
   DASHBOARD_REGION,
+  DASHBOARD_RECO_FILL_LITERS,
   fetchDashboardBudgetSummary,
   fetchDashboardPendingSummary,
   fetchDashboardPriceSummary,
@@ -270,22 +276,6 @@ export default function HomeScreen() {
    */
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [pending, setPending] = useState<DashboardPendingSummary | null>(null);
-  /**
-   * Macro-region resolved from the user's own coordinates.
-   *
-   * Null when location was never granted, was denied, or could not be mapped.
-   * It is resolved WITHOUT prompting: `requestIfNeeded: false` means Home reads
-   * an existing grant and never raises an OS dialog on its own, so focusing Home
-   * repeatedly cannot nag. Prices owns the explicit user-facing request.
-   */
-  const [regionCode, setRegionCode] = useState<DoeRegionCode | null>(null);
-  /**
-   * Fuel type taken from the primary vehicle's own `fuel_type_id`.
-   *
-   * Null when there is no vehicle, or the vehicle's fuel type is not one the DOE
-   * price services understand. Never guessed from the vehicle model.
-   */
-  const [vehicleFuelCode, setVehicleFuelCode] = useState<DoeFuelTypeCode | null>(null);
   const [loading, setLoading] = useState(true);
   /** Local-only expansion of the already-loaded activity list. No query. */
   const [showAllRecent, setShowAllRecent] = useState(false);
@@ -329,13 +319,11 @@ export default function HomeScreen() {
     setReports(nextReports);
     setVehicles(nextVehicles);
     setPending(nextPending);
-    setRegionCode(place?.regionCode ?? null);
 
     // The primary vehicle's own fuel type, resolved id -> DOE code. A failure
     // resolves to null, which falls back to the labelled reference fuel.
     const primaryVehicleFuel = nextVehicles[0]?.fuel_type_id ?? null;
     const resolvedFuel = await resolveVehicleFuelCode(primaryVehicleFuel);
-    setVehicleFuelCode(resolvedFuel);
 
     const effectiveRegion = place?.regionCode ?? DASHBOARD_REGION;
     const effectiveFuel = resolvedFuel ?? DASHBOARD_FUEL_TYPE;
@@ -502,37 +490,36 @@ export default function HomeScreen() {
       ? `${Math.round(budget.progress * 100)}%`
       : null;
 
-  // Attribution, made honest about SCOPE rather than just source.
-  //
-  // A DOE row priced for a whole region is a reference figure, not a station
-  // quote, and saying only "DOE bulletin" let it read like the latter. The
-  // "<Region> reference" suffix is dropped entirely when the region came from the
-  // user and the fuel came from their vehicle.
-  //
-  // Nearby recommendations may also show distance — only when the pick was
-  // actually ranked inside the search radius, never on a regional fallback.
-  const priceSource = price
+  // Recommendation card copy — DOE-first "best this week" layout.
+  const recoRegionLabel = price
+    ? regionDisplayName(price.regionCode ?? regionCode ?? DASHBOARD_REGION)
+    : null;
+  const recoEyebrow = price
     ? price.source === 'community'
       ? price.isNearbyRecommended
-        ? 'Cheapest nearby · community verified'
-        : 'Community verified'
-      : price.isRegionFallback
-        ? `DOE bulletin · ${regionDisplayName(price.regionCode ?? DASHBOARD_REGION)} reference`
-        : 'DOE bulletin · regional reference'
+        ? `Cheapest nearby · ${fuelDisplayName(price.fuelCode)}`
+        : `Community pick · ${fuelDisplayName(price.fuelCode)}`
+      : `Cheapest ${fuelDisplayName(price.fuelCode)} · ${recoRegionLabel}`
     : null;
 
-  /**
-   * Section heading.
-   *
-   * "Recommended" is reserved for a station that was ranked by distance + price
-   * against the user's coordinates. Region-only / DOE figures keep the older
-   * "Fuel price · {Region}" wording so Home never overclaims proximity.
-   */
-  const fuelSectionTitle = price?.isNearbyRecommended
-    ? 'Recommended near you'
-    : regionCode
-      ? `Fuel price · ${regionDisplayName(regionCode)}`
-      : 'Fuel price';
+  const recoUpdatedLabel =
+    price?.bulletinAgeDays == null
+      ? null
+      : price.bulletinAgeDays <= 0
+        ? 'Updated today'
+        : price.bulletinAgeDays === 1
+          ? 'Updated yesterday'
+          : `Updated ${price.bulletinAgeDays} days ago`;
+
+  const recoDelta =
+    price?.vsLastBulletin != null && Number.isFinite(price.vsLastBulletin)
+      ? price.vsLastBulletin
+      : null;
+
+  const recoSavingsLabel =
+    price?.savingsOnFill != null && price.savingsOnFill > 0
+      ? `Save about ${formatPeso(Math.round(price.savingsOnFill))} on a ${DASHBOARD_RECO_FILL_LITERS} L fill-up vs average`
+      : null;
 
   /**
    * A quiet qualifier under the price when the fuel is NOT the vehicle's own --
@@ -733,6 +720,102 @@ export default function HomeScreen() {
           </View>
 
           {/*
+            DOE recommendation panel (proposed layout): cheapest brand this week,
+            week-over-week delta, fill-up savings vs average, runners-up, and
+            dual CTAs. Uses forestDark + cream tokens so it sits in the GasTa
+            system next to This month — not a one-off mock palette.
+          */}
+          <View style={styles.block}>
+            {price ? (
+              <View style={styles.recoCard}>
+                <View style={styles.recoTop}>
+                  {recoEyebrow ? (
+                    <Text numberOfLines={2} style={styles.recoEyebrow}>
+                      {recoEyebrow}
+                    </Text>
+                  ) : null}
+                  {recoUpdatedLabel ? (
+                    <View style={styles.recoAgePill}>
+                      <Text style={styles.recoAgePillText}>{recoUpdatedLabel}</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.recoPriceRow}>
+                  <Text
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.55}
+                    numberOfLines={1}
+                    style={styles.recoPrice}>
+                    {formatCurrency(price.price)}
+                    <Text style={styles.recoUnit}>/L</Text>
+                  </Text>
+                  {recoDelta != null ? (
+                    <Text
+                      numberOfLines={2}
+                      style={[
+                        styles.recoDelta,
+                        recoDelta > 0 ? styles.recoDeltaUp : null,
+                      ]}>
+                      {recoDelta === 0
+                        ? 'No change vs last bulletin'
+                        : `${recoDelta < 0 ? '↘' : '↗'} ${formatCurrency(Math.abs(recoDelta))} vs last bulletin`}
+                    </Text>
+                  ) : null}
+                </View>
+
+                <Text numberOfLines={1} style={styles.recoBrand}>
+                  {price.stationName}
+                </Text>
+                {recoSavingsLabel ? (
+                  <Text style={styles.recoSavings}>{recoSavingsLabel}</Text>
+                ) : price.isNearbyRecommended && price.distanceKm != null ? (
+                  <Text style={styles.recoSavings}>
+                    {formatDistanceKm(price.distanceKm)} away · community verified
+                  </Text>
+                ) : null}
+
+                {price.runnersUp.length > 0 ? (
+                  <View style={styles.recoList}>
+                    {price.runnersUp.map((row) => (
+                      <View key={`${row.rank}-${row.name}`} style={styles.recoListRow}>
+                        <Text numberOfLines={1} style={styles.recoListName}>
+                          {row.rank} · {row.name}
+                        </Text>
+                        <Text style={styles.recoListPrice}>{formatCurrency(row.price)}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
+                <View style={styles.recoActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Log refill at this price"
+                    onPress={goToVehicles}
+                    style={({ pressed }) => [styles.recoPrimaryBtn, pressed && styles.pressed]}>
+                    <Ionicons name="add" size={15} color={GasTaColors.forestDark} />
+                    <Text style={styles.recoPrimaryBtnText}>Log refill at this price</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="link"
+                    accessibilityLabel="See all fuel prices"
+                    onPress={goToPrices}
+                    style={({ pressed }) => [styles.recoSecondaryBtn, pressed && styles.pressed]}>
+                    <Text style={styles.recoSecondaryBtnText}>See all</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <Text style={styles.emptyLine}>No price recommendation yet</Text>
+            )}
+
+            {fuelFallbackNote ? (
+              <Text style={styles.fuelNote}>{fuelFallbackNote}</Text>
+            ) : null}
+          </View>
+
+          {/*
             AT A GLANCE. One call to fetchVehicles, no per-vehicle refill lookup.
             The last-refill figures come from the vehicle row's own cached
             columns, so nothing here is a second round trip. With no owned
@@ -802,57 +885,6 @@ export default function HomeScreen() {
                 <Ionicons name="chevron-forward" size={14} color={GasTaColors.forest} />
               </Pressable>
             )}
-          </View>
-
-          <View style={styles.block}>
-            <Text style={styles.sectionLabel}>{fuelSectionTitle}</Text>
-            {price ? (
-              <Pressable
-                accessibilityRole="link"
-                accessibilityLabel="View fuel prices"
-                onPress={goToPrices}
-                style={({ pressed }) => [styles.fuelCard, pressed && styles.pressed]}>
-                <View style={styles.fuelIcon}>
-                  <Ionicons name="pricetag" size={15} color={GasTaColors.forest} />
-                </View>
-                <View style={styles.fuelInfo}>
-                  <Text numberOfLines={1} style={styles.fuelStation}>
-                    {price.stationName}
-                  </Text>
-                  <Text numberOfLines={1} style={styles.fuelMeta}>
-                    {price.isNearbyRecommended && price.distanceKm != null
-                      ? `${formatDistanceKm(price.distanceKm)} · ${price.location}`
-                      : price.location}
-                  </Text>
-                </View>
-                <View style={styles.fuelRight}>
-                  <Text
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.7}
-                    numberOfLines={1}
-                    style={styles.fuelPrice}>
-                    {formatCurrency(price.price)}
-                    <Text style={styles.fuelUnit}>/L</Text>
-                  </Text>
-                  {priceSource ? (
-                    <Text numberOfLines={1} style={styles.fuelSource}>
-                      {priceSource}
-                    </Text>
-                  ) : null}
-                </View>
-              </Pressable>
-            ) : (
-              <Text style={styles.emptyLine}>No price data yet</Text>
-            )}
-
-            {/*
-              Only rendered when the queried fuel is NOT the vehicle's own. Sits
-              under the card rather than inside it so the price row keeps its
-              existing height.
-            */}
-            {fuelFallbackNote ? (
-              <Text style={styles.fuelNote}>{fuelFallbackNote}</Text>
-            ) : null}
           </View>
 
           {/*
@@ -1188,37 +1220,149 @@ const styles = StyleSheet.create({
   },
   addVehicleText: { flex: 1, color: GasTaColors.forestDark, fontSize: 14, fontWeight: '700' },
 
-  /* ---- nearby fuel ------------------------------------------------------- */
-  fuelCard: {
+  /* ---- DOE recommendation (proposed layout, GasTa forest tokens) --------- */
+  recoCard: {
+    backgroundColor: GasTaColors.forestDark,
+    borderRadius: 20,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.lg,
+  },
+  recoTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  recoEyebrow: {
+    flex: 1,
+    minWidth: 0,
+    color: ON_FOREST.fill,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  recoAgePill: {
+    flexShrink: 0,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(248, 240, 229, 0.14)',
+  },
+  recoAgePillText: {
+    color: ON_FOREST.body,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  recoPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.sm + 2,
+  },
+  recoPrice: {
+    color: GasTaColors.white,
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '800',
+    letterSpacing: -1,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  recoUnit: { fontSize: 15, fontWeight: '600', color: ON_FOREST.sub },
+  recoDelta: {
+    flexShrink: 1,
+    maxWidth: 132,
+    color: ON_FOREST.fill,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+    paddingBottom: 4,
+  },
+  recoDeltaUp: { color: ON_FOREST.over },
+  recoBrand: {
+    color: GasTaColors.cream,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '800',
+    marginTop: spacing.sm,
+  },
+  recoSavings: {
+    color: ON_FOREST.body,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  recoList: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(248, 240, 229, 0.18)',
+    paddingTop: spacing.sm + 2,
+  },
+  recoListRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm + 2,
-    backgroundColor: GasTaColors.white,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.glassBorderSubtle,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  fuelIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  recoListName: {
+    flex: 1,
+    minWidth: 0,
+    color: ON_FOREST.sub,
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '600',
+  },
+  recoListPrice: {
+    color: ON_FOREST.body,
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  recoActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md + 2,
+  },
+  recoPrimaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: GasTaColors.forestGlow,
+    gap: 4,
+    minWidth: 0,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.sm + 2,
+    borderRadius: radii.pill,
+    backgroundColor: GasTaColors.cream,
   },
-  fuelInfo: { flex: 1, minWidth: 0 },
-  fuelStation: { color: GasTaColors.forestDark, fontSize: 13, lineHeight: 17, fontWeight: '700' },
-  fuelMeta: { color: GasTaColors.textSoft, fontSize: 11, lineHeight: 15, marginTop: 1 },
-  fuelRight: { alignItems: 'flex-end', flexShrink: 0, maxWidth: 128 },
-  fuelPrice: { color: GasTaColors.forestDark, fontSize: 16, lineHeight: 20, fontWeight: '800' },
-  fuelUnit: { fontSize: 11, fontWeight: '600', color: GasTaColors.textMuted },
-  fuelSource: { color: GasTaColors.textSoft, fontSize: 10, lineHeight: 14, marginTop: 2 },
+  recoPrimaryBtnText: {
+    color: GasTaColors.forestDark,
+    fontSize: 12,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  recoSecondaryBtn: {
+    flexShrink: 0,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(248, 240, 229, 0.35)',
+  },
+  recoSecondaryBtnText: {
+    color: GasTaColors.cream,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   /**
-   * Qualifier under the price card, shown only when the fuel is not the
-   * vehicle's own. Muted so it reads as a footnote on the figure above rather
-   * than a second headline.
+   * Qualifier under the recommendation card, shown only when the fuel is not
+   * the vehicle's own. Muted so it reads as a footnote on the figure above.
    */
   fuelNote: {
     color: GasTaColors.forestMuted,

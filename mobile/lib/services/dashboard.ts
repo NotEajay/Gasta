@@ -11,10 +11,18 @@ import {
   fetchFreshVerifiedPrices,
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
-import { fetchLowestPrice, type FuelPriceRow } from '@/lib/services/fuelPrices';
+import {
+  bulletinAgeInDays,
+  fetchBulletinWeeksForRegion,
+  fetchFuelPricesForBulletin,
+  type FuelPriceRow,
+} from '@/lib/services/fuelPrices';
 import { haversineKm } from '@/lib/services/location';
 import { fetchMyPendingAllocations } from '@/lib/services/refillAllocations';
 import { supabase } from '@/lib/supabase';
+
+/** Assumed tank fill used only for the Home savings line (₱ saved vs regional average). */
+export const DASHBOARD_RECO_FILL_LITERS = 40;
 
 /**
  * Fallbacks for when the user has told us nothing.
@@ -74,6 +82,12 @@ export async function resolveVehicleFuelCode(
 
 export type DashboardPriceSource = 'community' | 'doe';
 
+export interface DashboardRecoRunnerUp {
+  rank: number;
+  name: string;
+  price: number;
+}
+
 export interface DashboardPriceSummary {
   price: number;
   stationName: string;
@@ -101,6 +115,26 @@ export interface DashboardPriceSummary {
   isNearbyRecommended: boolean;
   /** Straight-line km to the recommended station, when distance was computed. */
   distanceKm: number | null;
+  /**
+   * DOE bulletin week-start date (YYYY-MM-DD) when `source === 'doe'`.
+   * Null for community picks.
+   */
+  bulletinDate: string | null;
+  /** Days since estimated DOE post date; null when unknown. */
+  bulletinAgeDays: number | null;
+  /**
+   * Change vs the same brand on the previous bulletin week
+   * (`current - previous`). Negative = cheaper than last week.
+   */
+  vsLastBulletin: number | null;
+  /**
+   * Estimated ₱ saved on a `DASHBOARD_RECO_FILL_LITERS` fill vs the regional
+   * average of this week's company prices. Null when average is unavailable or
+   * the pick is not below average.
+   */
+  savingsOnFill: number | null;
+  /** Next-cheapest companies this week (ranks 2–3), for the comparison list. */
+  runnersUp: DashboardRecoRunnerUp[];
 }
 
 /** Optional GPS fix used to prefer the cheapest nearby verified station. */
@@ -221,40 +255,103 @@ function communityPriceSummary(
     source: 'community',
     isNearbyRecommended: nearby,
     distanceKm: nearby ? distanceKm : null,
+    bulletinDate: null,
+    bulletinAgeDays: null,
+    vsLastBulletin: null,
+    savingsOnFill: null,
+    runnersUp: [],
     ...context,
   };
 }
 
-function doePriceSummary(
-  row: FuelPriceRow | null,
+/** One cheapest row per oil company, already sorted ascending by price. */
+function uniqueCompaniesByPrice(rows: FuelPriceRow[]): FuelPriceRow[] {
+  const seen = new Set<string>();
+  const out: FuelPriceRow[] = [];
+  for (const row of rows) {
+    if (!Number.isFinite(row.price_per_liter) || row.price_per_liter <= 0) continue;
+    const key = row.oil_company?.id || row.oil_company?.name || row.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function savingsVsAverage(cheapest: number, prices: number[]): number | null {
+  if (prices.length < 2) return null;
+  const average = prices.reduce((sum, value) => sum + value, 0) / prices.length;
+  const saved = (average - cheapest) * DASHBOARD_RECO_FILL_LITERS;
+  return saved > 0.5 ? saved : null;
+}
+
+async function doeRecommendationSummary(
+  regionCode: DoeRegionCode,
+  fuelTypeCode: DoeFuelTypeCode,
   context: PriceQueryContext
-): DashboardPriceSummary | null {
-  if (!row) return null;
+): Promise<DashboardPriceSummary | null> {
+  const weeks = await fetchBulletinWeeksForRegion(regionCode, 2).catch(() => []);
+  const currentWeek = weeks[0];
+  if (!currentWeek) return null;
+
+  const currentRows = await fetchFuelPricesForBulletin(
+    currentWeek.id,
+    regionCode,
+    fuelTypeCode
+  ).catch(() => [] as FuelPriceRow[]);
+  const ranked = uniqueCompaniesByPrice(currentRows);
+  const winner = ranked[0];
+  if (!winner) return null;
+
+  let vsLastBulletin: number | null = null;
+  const previousWeek = weeks[1];
+  if (previousWeek && winner.oil_company?.id) {
+    const previousRows = await fetchFuelPricesForBulletin(
+      previousWeek.id,
+      regionCode,
+      fuelTypeCode
+    ).catch(() => [] as FuelPriceRow[]);
+    const prev = previousRows.find(
+      (row) => row.oil_company?.id === winner.oil_company.id
+    );
+    if (prev && Number.isFinite(prev.price_per_liter)) {
+      vsLastBulletin = winner.price_per_liter - prev.price_per_liter;
+    }
+  }
+
+  const prices = ranked.map((row) => row.price_per_liter);
+  const runnersUp: DashboardRecoRunnerUp[] = ranked.slice(1, 3).map((row, index) => ({
+    rank: index + 2,
+    name: row.oil_company?.name || 'Brand',
+    price: row.price_per_liter,
+  }));
 
   return {
-    price: row.price_per_liter,
-    // DOE prices are company/area reference figures, not a named station.
-    stationName: row.oil_company?.name || 'DOE price',
-    location: row.area_name || row.region?.name || 'Region-wide reference',
+    price: winner.price_per_liter,
+    stationName: winner.oil_company?.name || 'DOE price',
+    location: winner.area_name || winner.region?.name || 'Region-wide reference',
     source: 'doe',
     isNearbyRecommended: false,
     distanceKm: null,
+    bulletinDate: winner.bulletin?.bulletin_date ?? currentWeek.bulletin_date,
+    bulletinAgeDays: bulletinAgeInDays(
+      winner.bulletin?.bulletin_date ?? currentWeek.bulletin_date
+    ),
+    vsLastBulletin,
+    savingsOnFill: savingsVsAverage(winner.price_per_liter, prices),
+    runnersUp,
     ...context,
   };
 }
 
 /**
- * Read-only dashboard price summary.
+ * Read-only dashboard price recommendation for Home.
  *
- * Preference order matches the product spec:
- * 1. Cheapest fresh verified community price within `NEARBY_STATION_RADIUS_KM`
- *    of the user's coordinates (when available).
- * 2. Cheapest fresh verified community price in the macro-region.
- * 3. DOE lowest company/area bulletin price for the region.
- *
- * Region and fuel type are supplied explicitly by the caller. The parameter
- * defaults remain for any other caller, but Home always passes resolved values
- * so a fixed default can never silently masquerade as the user's own location.
+ * Preference order (Home surfaces "lowest this week"):
+ * 1. Lowest DOE company price from the latest bulletin for the region, with
+ *    runners-up, week-over-week delta, and fill-up savings vs average.
+ * 2. Cheapest fresh verified community price within `NEARBY_STATION_RADIUS_KM`
+ *    (when coords are available), else cheapest verified in the region.
  */
 export async function fetchDashboardPriceSummary(
   regionCode: DoeRegionCode = DASHBOARD_REGION,
@@ -270,15 +367,12 @@ export async function fetchDashboardPriceSummary(
     fuelCode: fuelTypeCode,
   };
 
-  const [communityRows, doeRow] = await Promise.all([
+  const [doeSummary, communityRows] = await Promise.all([
+    doeRecommendationSummary(regionCode, fuelTypeCode, context).catch(() => null),
     fetchFreshVerifiedPrices(regionCode, fuelTypeCode).catch(() => [] as VerifiedCommunityPrice[]),
-    fetchLowestPrice(regionCode, fuelTypeCode).catch(() => null),
   ]);
 
-  return (
-    communityPriceSummary(communityRows, context, userCoords) ??
-    doePriceSummary(doeRow, context)
-  );
+  return doeSummary ?? communityPriceSummary(communityRows, context, userCoords);
 }
 
 /**
