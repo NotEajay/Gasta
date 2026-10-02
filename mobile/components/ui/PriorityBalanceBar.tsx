@@ -28,10 +28,17 @@ interface PriorityBalanceBarProps {
    */
   value: number;
   onChange: (value: number) => void;
-  /** Live recommended-mode fuel/fare cost, or null before optimize. */
+  /** Live recommended-mode fuel/fare cost, or null before a route preview exists. */
   estimatedCost: number | null;
-  /** Live recommended-mode travel time in minutes, or null before optimize. */
+  /** Live recommended-mode travel time in minutes, or null before a route preview exists. */
   estimatedTimeMinutes: number | null;
+  /**
+   * Label for the cost card. Own-vehicle previews say "Estimated fuel cost";
+   * other modes say e.g. "Estimated jeepney fare".
+   */
+  costLabel?: string;
+  /** Optional mode name under the cost label, e.g. "Own vehicle". */
+  recommendedModeLabel?: string | null;
   costFormatter: (amount: number) => string;
   accessibilityLabel?: string;
   /**
@@ -62,6 +69,8 @@ export default function PriorityBalanceBar({
   onChange,
   estimatedCost,
   estimatedTimeMinutes,
+  costLabel = 'Estimated cost',
+  recommendedModeLabel = null,
   costFormatter,
   accessibilityLabel = 'Balance between saving money and travel time',
   tone = 'light',
@@ -208,9 +217,18 @@ export default function PriorityBalanceBar({
 
       <View style={styles.outcomeRow}>
         <View style={[styles.outcomeCard, dark && styles.outcomeCardDark]}>
-          <Text style={[styles.outcomeLabel, dark && styles.outcomeLabelDark]}>
-            Estimated fuel cost
+          <Text
+            numberOfLines={1}
+            style={[styles.outcomeLabel, dark && styles.outcomeLabelDark]}>
+            {costLabel}
           </Text>
+          {recommendedModeLabel ? (
+            <Text
+              numberOfLines={1}
+              style={[styles.outcomeMode, dark && styles.outcomeModeDark]}>
+              {recommendedModeLabel}
+            </Text>
+          ) : null}
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit
@@ -377,7 +395,8 @@ const styles = StyleSheet.create({
   },
   outcomeCard: {
     flex: 1,
-    paddingVertical: spacing.md,
+    minWidth: 0,
+    paddingVertical: spacing.sm + 2,
     paddingHorizontal: spacing.md,
     borderRadius: radii.sm,
     backgroundColor: GasTaColors.white,
@@ -385,15 +404,25 @@ const styles = StyleSheet.create({
     borderColor: HomeColors.border,
   },
   outcomeLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: HomeColors.muted,
-    marginBottom: 6,
+    marginBottom: 2,
+  },
+  outcomeMode: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: HomeColors.primaryDark,
+    marginBottom: 4,
+  },
+  outcomeModeDark: {
+    color: 'rgba(255, 255, 255, 0.82)',
   },
   outcomeValue: {
     fontSize: 22,
     fontWeight: '800',
     color: HomeColors.navy,
     letterSpacing: -0.4,
+    marginTop: 2,
   },
 });

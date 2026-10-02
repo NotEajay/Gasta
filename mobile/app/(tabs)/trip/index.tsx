@@ -47,8 +47,20 @@ import {
   type RouteLocation,
 } from '@/lib/services/routeSelection';
 import { useTheme } from '@/lib/useTheme';
-import type { MCDAWeights } from '@/types/mcda';
+import type { MCDAWeights, ModeEvaluation } from '@/types/mcda';
 import type { Vehicle, VehicleCatalogEntry } from '@/types';
+
+const COMPARE_TRANSPORT_ROWS: {
+  code: TransportModeCode;
+  title: string;
+  tint: 'own' | 'jeepney' | 'tricycle' | 'rideHailing' | 'walking';
+}[] = [
+  { code: 'OWN_VEHICLE', title: 'Own vehicle', tint: 'own' },
+  { code: 'JEEPNEY', title: 'Jeepney', tint: 'jeepney' },
+  { code: 'TRICYCLE', title: 'Tricycle', tint: 'tricycle' },
+  { code: 'RIDE_HAILING', title: 'Ride-hailing', tint: 'rideHailing' },
+  { code: 'WALKING', title: 'Walking', tint: 'walking' },
+];
 
 export default function TripOptimizerScreen() {
   const router = useRouter();
@@ -695,9 +707,11 @@ export default function TripOptimizerScreen() {
 
     setOptimizing(true);
     setRouteError(null);
-    setResult(null);
-    setRouteDistanceKm(null);
-    setRouteDurationMinutes(null);
+    // Keep the last route preview and scores on screen while this run works.
+    // Clearing them here used to wipe a good preview on any early validation
+    // failure, and the route-preview effect would not re-fetch because the
+    // endpoints had not changed — leaving Compare Transport and the outcome
+    // cards blank until the user edited the route again.
 
     try {
       if (!origin.trim() || !destination.trim()) {
@@ -808,6 +822,24 @@ export default function TripOptimizerScreen() {
         : [],
     [result]
   );
+
+  /** Fast lookup for the Compare Transport preview column. */
+  const evaluationByMode = useMemo(() => {
+    const map = new Map<TransportModeCode, ModeEvaluation>();
+    if (!result) return map;
+    for (const evaluation of result.evaluations) {
+      map.set(evaluation.modeCode, evaluation);
+    }
+    return map;
+  }, [result]);
+
+  const modeRowTintStyle = {
+    own: styles.modeRowOwn,
+    jeepney: styles.modeRowJeepney,
+    tricycle: styles.modeRowTricycle,
+    rideHailing: styles.modeRowRideHailing,
+    walking: styles.modeRowWalking,
+  } as const;
 
   /**
    * User-facing presets for the same two MCDA weights.
@@ -1244,11 +1276,13 @@ export default function TripOptimizerScreen() {
                 <View style={styles.statDivider} />
                 <View style={styles.statRow}>
                   <Text style={styles.statLabel}>Fuel price</Text>
-                  <Text style={styles.statValue}>
-                    {manualPriceValue != null ? `${formatPeso(manualPriceValue)}/L` : '—'}
-                  </Text>
+                  <View style={styles.statValueBlock}>
+                    <Text style={styles.statValue}>
+                      {manualPriceValue != null ? `${formatPeso(manualPriceValue)}/L` : '—'}
+                    </Text>
+                    <Text style={styles.priceSource}>Entered for this trip</Text>
+                  </View>
                 </View>
-                <Text style={styles.priceSource}>Entered for this trip</Text>
               </>
             ) : (
               <>
@@ -1259,15 +1293,19 @@ export default function TripOptimizerScreen() {
                 <View style={styles.statDivider} />
                 <View style={styles.statRow}>
                   <Text style={styles.statLabel}>Current fuel price</Text>
-                  <Text style={styles.statValue}>
-                    {tripFuelPrice?.status === 'ok'
-                      ? `${formatPeso(tripFuelPrice.price.pricePerLiter)}/L`
-                      : '—'}
-                  </Text>
+                  <View style={styles.statValueBlock}>
+                    <Text style={styles.statValue}>
+                      {tripFuelPrice?.status === 'ok'
+                        ? `${formatPeso(tripFuelPrice.price.pricePerLiter)}/L`
+                        : '—'}
+                    </Text>
+                    {tripFuelPrice?.status === 'ok' ? (
+                      <Text style={styles.priceSource} numberOfLines={2}>
+                        {tripFuelPrice.price.detail}
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
-                {tripFuelPrice?.status === 'ok' ? (
-                  <Text style={styles.priceSource}>{tripFuelPrice.price.detail}</Text>
-                ) : null}
 
                 {/*
                   Optional override. Off by default, so the trusted automatic
@@ -1405,42 +1443,68 @@ export default function TripOptimizerScreen() {
       </View>
 
       {/*
-        COMPARE TRANSPORT. Its own surface, and the place where the difference
-        in cost confidence is stated up front rather than buried in a result.
-
-        The fuel figure is a real, source-backed price -- DOE bulletin, verified
-        community, or one the driver typed. Every other figure is arithmetic on
-        the configured fare constants, with no provider quote behind it. The
-        wording says exactly that, so a cheap jeepney estimate is never read as
-        a confirmed fare. The constants themselves are unchanged in this pass.
+        COMPARE TRANSPORT. Live preview costs fill in once a route + fuel price
+        exist (same SAW numbers the result sheet uses). Source notes stay so a
+        jeepney estimate is never read as a confirmed booking fare.
       */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Compare transport</Text>
-        <View style={styles.sectionCard}>
-          <View style={[styles.modeRow, styles.modeRowOwn]}>
-            <Text style={styles.modeRowTitle}>Own vehicle</Text>
-            <Text style={styles.modeRowNote}>{modeFareNote('OWN_VEHICLE')}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={[styles.modeRow, styles.modeRowJeepney]}>
-            <Text style={styles.modeRowTitle}>Jeepney</Text>
-            <Text style={styles.modeRowNote}>{modeFareNote('JEEPNEY')}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={[styles.modeRow, styles.modeRowTricycle]}>
-            <Text style={styles.modeRowTitle}>Tricycle</Text>
-            <Text style={styles.modeRowNote}>{modeFareNote('TRICYCLE')}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={[styles.modeRow, styles.modeRowRideHailing]}>
-            <Text style={styles.modeRowTitle}>Ride-hailing</Text>
-            <Text style={styles.modeRowNote}>{modeFareNote('RIDE_HAILING')}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={[styles.modeRow, styles.modeRowWalking]}>
-            <Text style={styles.modeRowTitle}>Walking</Text>
-            <Text style={styles.modeRowNote}>No fare</Text>
-          </View>
+        <View style={[styles.sectionCard, styles.modeList]}>
+          {COMPARE_TRANSPORT_ROWS.map((row) => {
+            const evaluation = evaluationByMode.get(row.code);
+            const isRecommended = result?.recommended?.modeCode === row.code;
+            const ineligible =
+              result != null &&
+              evaluation == null &&
+              row.code !== 'OWN_VEHICLE';
+            const previewHint =
+              routeDistanceKm == null
+                ? 'Set a route'
+                : effectiveFuelPrice == null
+                  ? 'Need fuel price'
+                  : 'Updating…';
+            return (
+              <View
+                key={row.code}
+                style={[
+                  styles.modeRow,
+                  modeRowTintStyle[row.tint],
+                  isRecommended && styles.modeRowRecommended,
+                ]}>
+                <View style={styles.modeRowBody}>
+                  <View style={styles.modeRowTitleRow}>
+                    <Text style={styles.modeRowTitle}>{row.title}</Text>
+                    {isRecommended ? (
+                      <Text style={styles.modeRowBadge}>Best match</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.modeRowNote}>
+                    {row.code === 'WALKING' ? 'No fare' : modeFareNote(row.code)}
+                  </Text>
+                </View>
+                <View style={styles.modeRowMetrics}>
+                  <Text
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                    style={styles.modeRowCost}>
+                    {evaluation
+                      ? formatPeso(evaluation.raw.fuelCost)
+                      : ineligible
+                        ? 'N/A'
+                        : '—'}
+                  </Text>
+                  <Text style={styles.modeRowTime}>
+                    {evaluation
+                      ? `${Math.round(evaluation.raw.travelTime)} min`
+                      : ineligible
+                        ? 'Too far'
+                        : previewHint}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
         </View>
       </View>
 
@@ -1455,7 +1519,8 @@ export default function TripOptimizerScreen() {
           <Text style={[styles.prefTitle, styles.prefTitleOnDark]}>What matters more?</Text>
         </View>
         <Text style={[styles.prefHint, styles.prefHintOnDark]}>
-          Drag to balance saving money and travel time. Outcomes update after you optimize.
+          Drag to balance saving money and travel time. Preview updates when a
+          route and fuel price are ready.
         </Text>
 
         <PriorityBalanceBar
@@ -1463,6 +1528,12 @@ export default function TripOptimizerScreen() {
           onChange={handlePriorityChange}
           estimatedCost={result?.recommended?.raw.fuelCost ?? null}
           estimatedTimeMinutes={result?.recommended?.raw.travelTime ?? null}
+          costLabel={recommendedCost?.label ?? 'Estimated cost'}
+          recommendedModeLabel={
+            result?.recommended
+              ? transportModeLabel(result.recommended.modeCode)
+              : null
+          }
           costFormatter={formatPeso}
           tone="dark"
         />
@@ -2147,37 +2218,71 @@ const styles = StyleSheet.create({
     borderLeftColor: '#8A9A8A',
   },
   modeRow: {
-    // Column, not row: the note wraps to a second line under the title, and a
-    // row layout would have squeezed both onto one line at 320px.
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: 1,
-    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm + 2,
     paddingLeft: spacing.md,
     paddingRight: spacing.md,
+    borderRadius: 12,
+    overflow: 'hidden',
     // The accent is painted as a left border rather than a child view, so it
     // cannot affect the row's measured width or push the note out of the card.
-    // `borderWidth` first, then the one side that is actually drawn.
     borderWidth: 0,
     borderLeftWidth: 3,
+  },
+  modeRowRecommended: {
+    borderWidth: 1,
+    borderLeftWidth: 3,
+    borderColor: GasTaColors.forest,
   },
   modeRowBody: {
     flex: 1,
     minWidth: 0,
+  },
+  modeRowTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
   },
   modeRowTitle: {
     fontSize: 14,
     fontWeight: '700',
     color: GasTaColors.forestDark,
   },
+  modeRowBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    color: GasTaColors.forest,
+  },
   modeRowNote: {
     fontSize: 11,
-    lineHeight: 16,
+    lineHeight: 15,
     // forestMuted rather than textSoft: on the palest tints the softer grey was
     // washing out, and the Ride-hailing line in particular is the one that must
     // stay readable because it carries the fare disclaimer.
     color: GasTaColors.forestMuted,
-    marginTop: 1,
+    marginTop: 2,
+  },
+  modeRowMetrics: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    minWidth: 72,
+  },
+  modeRowCost: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+    letterSpacing: -0.2,
+  },
+  modeRowTime: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: GasTaColors.forestMuted,
+    marginTop: 2,
   },
 
   subheading: {
@@ -2289,6 +2394,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: GasTaColors.forestDark,
   },
+  statValueBlock: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'flex-end',
+    paddingLeft: spacing.md,
+  },
   statDivider: {
     height: 1,
     backgroundColor: HomeColors.border,
@@ -2327,7 +2438,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
     color: GasTaColors.forestMuted,
-    marginTop: 4,
+    marginTop: 2,
+    textAlign: 'right',
   },
   overrideToggle: {
     alignSelf: 'flex-start',
