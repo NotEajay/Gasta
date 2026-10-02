@@ -700,6 +700,68 @@ export default function TripOptimizerScreen() {
   const handleOptimize = useCallback(async () => {
     if (optimizing) return;
 
+    if (!origin.trim() || !destination.trim()) {
+      setRouteError('Enter both an origin and a destination before optimizing.');
+      return;
+    }
+
+    const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
+    const price = effectiveFuelPrice;
+    if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
+      Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
+      return;
+    }
+    if (!weightsSumToOne(weights)) {
+      Alert.alert('Invalid weights', 'Criterion weights must sum to 1.0.');
+      return;
+    }
+    if (!isManualVehicle && !selectedVehicle) {
+      Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
+      return;
+    }
+    if (price == null || price <= 0) {
+      // Refuse to score rather than inventing a cost. The MCDA still needs one
+      // numeric fuel price, so a route with no trusted price simply is not
+      // ranked until a current DOE, verified community, or user-entered price
+      // exists.
+      Alert.alert(
+        'Current fuel price unavailable',
+        isManualVehicle
+          ? 'Enter the fuel price (₱/L) for this trip before optimizing.'
+          : customFuelPriceError ??
+            (tripFuelPrice?.status === 'unavailable'
+              ? tripFuelPrice.message
+              : 'No current DOE or verified community price is available for this fuel yet.')
+      );
+      return;
+    }
+
+    const scoreTrip = (distanceKm: number, durationMinutes: number) =>
+      calculateTripRecommendation({
+        distanceKm,
+        fuelPricePerLiter: price,
+        fuelEfficiencyKmPerLiter,
+        weights,
+        ownVehicleTravelTimeMinutes: durationMinutes,
+      });
+
+    /*
+     * Fast path: the live route preview already produced distance, duration,
+     * and (usually) a scored result. Opening the sheet immediately is what
+     * "Compare trip costs" should feel like — a second Directions round-trip
+     * is unnecessary and was easy to cancel via optimizeRequestId races.
+     */
+    if (routeDistanceKm != null && routeDurationMinutes != null) {
+      const next =
+        result?.recommended != null
+          ? result
+          : scoreTrip(routeDistanceKm, routeDurationMinutes);
+      if (!result?.recommended) setResult(next);
+      setShowResultSheet(true);
+      setRouteError(null);
+      return;
+    }
+
     const requestId = ++optimizeRequestId.current;
     const startedAt = Date.now();
     let outcome: 'success' | 'error' = 'error';
@@ -707,69 +769,19 @@ export default function TripOptimizerScreen() {
 
     setOptimizing(true);
     setRouteError(null);
-    // Keep the last route preview and scores on screen while this run works.
-    // Clearing them here used to wipe a good preview on any early validation
-    // failure, and the route-preview effect would not re-fetch because the
-    // endpoints had not changed — leaving Compare Transport and the outcome
-    // cards blank until the user edited the route again.
 
     try {
-      if (!origin.trim() || !destination.trim()) {
-        setRouteError('Enter both an origin and a destination before optimizing.');
-        return;
-      }
       const originForDirections = originLocation
         ? `${originLocation.latitude},${originLocation.longitude}`
         : origin;
       const destinationForDirections = destinationRouteValue || destination;
-
-      const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
-      const price = effectiveFuelPrice;
-      if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
-        Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
-        return;
-      }
-      if (!weightsSumToOne(weights)) {
-        Alert.alert('Invalid weights', 'Criterion weights must sum to 1.0.');
-        return;
-      }
-      if (!isManualVehicle && !selectedVehicle) {
-        Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
-        return;
-      }
-      if (price == null || price <= 0) {
-        // Refuse to score rather than inventing a cost. The MCDA still needs one
-        // numeric fuel price, so a route with no trusted price simply is not
-        // ranked until a current DOE, verified community, or user-entered price
-        // exists.
-        Alert.alert(
-          'Current fuel price unavailable',
-          isManualVehicle
-            ? 'Enter the fuel price (₱/L) for this trip before optimizing.'
-            : customFuelPriceError ??
-              (tripFuelPrice?.status === 'unavailable'
-                ? tripFuelPrice.message
-                : 'No current DOE or verified community price is available for this fuel yet.')
-        );
-        return;
-      }
 
       routeResult = await getDrivingRoute(originForDirections, destinationForDirections);
       if (requestId !== optimizeRequestId.current) return;
 
       setRouteDistanceKm(routeResult.distanceKm);
       setRouteDurationMinutes(routeResult.durationMinutes);
-      setResult(
-        calculateTripRecommendation({
-          distanceKm: routeResult.distanceKm,
-          fuelPricePerLiter: price,
-          fuelEfficiencyKmPerLiter,
-          weights,
-          ownVehicleTravelTimeMinutes: routeResult.durationMinutes,
-        })
-      );
-      // The sheet is the canonical result presentation, so it opens as soon as
-      // a fresh comparison lands.
+      setResult(scoreTrip(routeResult.distanceKm, routeResult.durationMinutes));
       setShowResultSheet(true);
       outcome = 'success';
     } catch (error) {
@@ -796,6 +808,7 @@ export default function TripOptimizerScreen() {
       }
     }
   }, [
+    customFuelPriceError,
     destination,
     destinationRouteValue,
     efficiency,
@@ -804,7 +817,11 @@ export default function TripOptimizerScreen() {
     optimizing,
     origin,
     originLocation,
+    result,
+    routeDistanceKm,
+    routeDurationMinutes,
     selectedVehicle,
+    tripFuelPrice,
     weights,
   ]);
 
@@ -965,6 +982,7 @@ export default function TripOptimizerScreen() {
   if (loading) return <LoadingState message="Loading trip data…" />;
 
   return (
+    <View style={styles.flex}>
     <ScrollView
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
@@ -1554,31 +1572,51 @@ export default function TripOptimizerScreen() {
           disabled={optimizing}
           style={styles.optimizeBtn}
         />
+        {routeError ? <Text style={styles.error}>{routeError}</Text> : null}
         {!result ? (
           <Text style={styles.ctaHint}>
-            Choose a route and vehicle, then optimize to compare travel options.
+            Choose a route and vehicle, then compare to open the trip cost summary.
           </Text>
         ) : null}
       </View>
 
       {/*
-        RESULT SHEET. The single canonical presentation of a comparison, shown
-        after "Compare trip costs" lands. Built on the plain RN Modal the app
-        already uses in four other screens rather than pulling in a bottom-sheet
-        library: it gives the rounded top corners, warm surface, drag handle,
-        safe-area padding and a scrollable body, which is all this needs.
+        Reopen affordance after dismissing the comparison sheet. Save / log live
+        inside the sheet now, so this row only brings the result back.
+      */}
+      {result?.recommended ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Show last trip comparison"
+          onPress={() => setShowResultSheet(true)}
+          style={({ pressed }) => [styles.lastResultBtn, pressed && styles.pressed]}>
+          <Ionicons name="sparkles-outline" size={14} color={HomeColors.primary} />
+          <Text style={styles.lastResultText}>
+            Last result · {transportModeLabel(result.recommended.modeCode)} ·{' '}
+            {formatPeso(result.recommended.raw.fuelCost)}
+          </Text>
+        </Pressable>
+      ) : null}
+    </ScrollView>
 
-        Dismissal only hides the sheet. The Trip form keeps every input, the
-        route and the result, so reopening shows the current comparison rather
-        than forcing a re-run.
+      {/*
+        RESULT SHEET. Rendered as a sibling of the form ScrollView (not inside
+        it) so the Modal is not clipped / blocked by scroll parents. Dismissal
+        only hides the sheet; inputs and the scored result stay on the form.
       */}
       <Modal
         visible={showResultSheet && result?.recommended != null}
         transparent
         animationType="slide"
         onRequestClose={() => setShowResultSheet(false)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setShowResultSheet(false)}>
-          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+        <View style={styles.sheetBackdrop}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss trip comparison"
+            style={styles.sheetBackdropDismiss}
+            onPress={() => setShowResultSheet(false)}
+          />
+          <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
             <View style={styles.receiptHead}>
               <Text style={styles.sheetKicker}>Trip summary</Text>
@@ -1589,11 +1627,8 @@ export default function TripOptimizerScreen() {
             <ScrollView
               style={styles.sheetBody}
               contentContainerStyle={styles.sheetBodyContent}
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}>
-              {/* RECEIPT: a header, the recommended total, a real arithmetic
-                  breakdown where one can be shown honestly, then other modes.
-                  Thin rules and spacing do the work -- no torn edges, no icon
-                  bubbles, no gradient. */}
               <View style={styles.receiptTotal}>
                 <Text style={styles.receiptTotalLabel}>Recommended for this trip</Text>
                 <Text style={styles.receiptTotalMode}>
@@ -1660,8 +1695,6 @@ export default function TripOptimizerScreen() {
                 </>
               ) : (
                 <>
-                  {/* Not own vehicle: there is no litres-and-efficiency
-                      arithmetic to show, so only what the calculator produced. */}
                   <Text style={styles.receiptSectionLabel}>Trip</Text>
                   {routeDistanceKm != null ? (
                     <View style={styles.receiptRow}>
@@ -1711,82 +1744,49 @@ export default function TripOptimizerScreen() {
                   ))}
                 </>
               ) : null}
+
+              {/* Save moved out of the form page into this sheet. */}
+              <View style={styles.sheetSaveBlock}>
+                <Text style={styles.saveActionTitle}>Save as template</Text>
+                <Text style={styles.hint}>Reusable route setup you can run again later.</Text>
+                <LabeledInput
+                  label="Template name"
+                  value={templateName}
+                  onChangeText={(value) => {
+                    setTemplateName(value);
+                    if (value.trim() && templateNameError) setTemplateNameError(null);
+                  }}
+                  placeholder="e.g. Work commute"
+                  style={templateNameError ? { borderColor: palette.danger } : undefined}
+                />
+                {templateNameError ? (
+                  <Text style={styles.fieldError}>{templateNameError}</Text>
+                ) : null}
+                <PrimaryButton
+                  label={savingTemplate ? 'Saving…' : 'Save as template'}
+                  variant="secondary"
+                  onPress={handleSaveTemplate}
+                  disabled={savingTemplate}
+                  style={styles.saveSecondaryBtn}
+                />
+
+                <View style={styles.saveDivider} />
+
+                <Text style={styles.saveActionTitle}>Log to history</Text>
+                <Text style={styles.hint}>Records this trip in your trip history.</Text>
+                <PrimaryButton
+                  label={loggingHistory ? 'Logging…' : 'Log to history'}
+                  onPress={handleLogHistory}
+                  disabled={loggingHistory}
+                  style={styles.logBtn}
+                />
+              </View>
             </ScrollView>
             <PrimaryButton label="Done" onPress={() => setShowResultSheet(false)} />
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/*
-        The inline result card is gone: the bottom sheet below is now the only
-        place a comparison appears, so the same result is never rendered twice
-        on one screen. What stays here is a small reopen affordance, because
-        dismissing a sheet should not mean losing the answer.
-      */}
-      {result?.recommended ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Show last trip comparison"
-          onPress={() => setShowResultSheet(true)}
-          style={({ pressed }) => [styles.lastResultBtn, pressed && styles.pressed]}>
-          <Ionicons name="sparkles-outline" size={14} color={HomeColors.primary} />
-          <Text style={styles.lastResultText}>
-            Last result · {transportModeLabel(result.recommended.modeCode)} ·{' '}
-            {formatPeso(result.recommended.raw.fuelCost)}
-          </Text>
-        </Pressable>
-      ) : null}
-
-      {/* Save / log: a follow-up step, not a competing action. Both handlers
-          and payloads are unchanged. */}
-      <View style={styles.saveSection}>
-        <Text style={styles.sectionLabel}>Save this trip</Text>
-
-        <View style={styles.saveCard}>
-          <Text style={styles.saveActionTitle}>Save as template</Text>
-          <Text style={styles.hint}>Reusable route setup you can run again later.</Text>
-          <LabeledInput
-            label="Template name"
-            value={templateName}
-            onChangeText={(value) => {
-              setTemplateName(value);
-              // Clear the inline error as soon as the field holds a value —
-              // do not wait for another save attempt.
-              if (value.trim() && templateNameError) setTemplateNameError(null);
-            }}
-            placeholder="e.g. Work commute"
-            style={templateNameError ? { borderColor: palette.danger } : undefined}
-          />
-          {templateNameError ? (
-            <Text style={styles.fieldError}>{templateNameError}</Text>
-          ) : null}
-          <PrimaryButton
-            label={savingTemplate ? 'Saving…' : 'Save as template'}
-            variant="secondary"
-            onPress={handleSaveTemplate}
-            disabled={savingTemplate}
-            style={styles.saveSecondaryBtn}
-          />
-
-          <View style={styles.saveDivider} />
-
-          <Text style={styles.saveActionTitle}>Log to history</Text>
-          <Text style={styles.hint}>Records this trip in your trip history.</Text>
-          {result?.recommended ? (
-            <PrimaryButton
-              label={loggingHistory ? 'Logging…' : 'Log to history'}
-              onPress={handleLogHistory}
-              disabled={loggingHistory}
-              style={styles.logBtn}
-            />
-          ) : (
-            <Text style={styles.saveDisabledNote}>
-              Optimize a trip first to log it.
-            </Text>
-          )}
+          </View>
         </View>
-      </View>
-    </ScrollView>
+      </Modal>
+    </View>
   );
 }
 
@@ -2626,8 +2626,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(1, 19, 9, 0.45)',
     justifyContent: 'flex-end',
   },
+  /** Tappable dimmed area above the sheet; keeps the sheet itself a plain View. */
+  sheetBackdropDismiss: {
+    flex: 1,
+  },
   sheet: {
-    maxHeight: '78%',
+    maxHeight: '88%',
     backgroundColor: GasTaColors.creamLight,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
@@ -2641,6 +2645,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 20,
     elevation: 16,
+  },
+  sheetSaveBlock: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestBorder,
   },
   sheetHandle: {
     alignSelf: 'center',
@@ -2676,22 +2686,7 @@ const styles = StyleSheet.create({
     color: HomeColors.muted,
   },
 
-  // -------------------------------------- save / log (follow-up step)
-  saveSection: {
-    marginBottom: spacing.xl,
-  },
-  saveCard: {
-    padding: spacing.lg,
-    borderRadius: 20,
-    backgroundColor: GasTaColors.creamLight,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    shadowColor: GasTaColors.forest,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 1,
-  },
+  // -------------------------------------- save / log (inside result sheet)
   saveActionTitle: {
     fontSize: 15,
     fontWeight: '700',
@@ -2705,11 +2700,6 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: HomeColors.border,
     marginVertical: spacing.md,
-  },
-  saveDisabledNote: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: HomeColors.muted,
   },
   // Inline field validation (template name). Small red helper text, no card.
   fieldError: {
