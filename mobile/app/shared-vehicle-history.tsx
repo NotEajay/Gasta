@@ -1,11 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
-import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
@@ -180,12 +179,9 @@ export default function SharedVehicleHistoryScreen() {
   }
 
   if (!user) {
-    return (
-      <AuthPrompt
-        message="Sign in to view shared vehicle trip history."
-        onSignIn={() => router.push('/login')}
-      />
-    );
+    // Session was lost or revoked while the screen was mounted.
+    // Hard-redirect to auth — never expose protected content.
+    return <Redirect href="/(auth)" />;
   }
 
   return (
