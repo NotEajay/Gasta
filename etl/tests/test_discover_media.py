@@ -175,3 +175,18 @@ def test_end_to_end_discovery_against_fixture(monkeypatch: pytest.MonkeyPatch) -
     assert newest.url.endswith(".pdf?prefix=dev%2Fmedia")
     assert newest.download_url() == newest.url
     assert "prod-cms.doe.gov.ph" not in newest.download_url()
+
+
+def test_mixed_ncr_media_filename_dates_and_preserves_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    url = (
+        f"{MEDIA_BASE}NCR%20Liquid%20Fuel%20Price%20Monitoring%2029%20Sep%20to"
+        "%205%20Oct%202026.pdf?prefix=dev%2Fmedia"
+    )
+    html = f'<a href="{url}">September 29 to October 5</a>'
+    monkeypatch.setattr("src.discover.read_url_text", lambda _url: html)
+    documents = discover_region_documents("NCR")
+    assert documents[0].week_start == date(2026, 9, 29)
+    assert documents[0].url == url
+    assert documents[0].download_url() == url

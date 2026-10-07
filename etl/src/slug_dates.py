@@ -69,6 +69,11 @@ _DAY_RANGE_THEN_MONTH_RE = re.compile(
     rf"(?<!\d)(\d{{1,2}}){_RANGE_SEP}\d{{1,2}}{_RANGE_SEP}"
     rf"({MONTH_ALTERNATION}){_RANGE_SEP}(20\d{{2}})(?!\d)"
 )
+_DAY_MONTH_TO_DAY_MONTH_RE = re.compile(
+    rf"(?<!\d)(\d{{1,2}}){_RANGE_SEP}({MONTH_ALTERNATION})"
+    rf"{_RANGE_SEP}(\d{{1,2}}){_RANGE_SEP}({MONTH_ALTERNATION})"
+    rf"{_RANGE_SEP}(20\d{{2}})(?!\d)"
+)
 
 _YMD_RE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
 _MDY8_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)")
@@ -170,6 +175,15 @@ def parse_week_start_from_slug(slug: str) -> date | None:
     for match in _DAY_RANGE_THEN_MONTH_RE.finditer(text):
         parsed = _safe_date(
             int(match.group(3)), MONTHS[match.group(2)], int(match.group(1))
+        )
+        if parsed:
+            candidates.append((match.start(), parsed))
+        break
+
+    # 29-sep-to-5-oct-2026 / 29 Sep to 5 Oct 2026
+    for match in _DAY_MONTH_TO_DAY_MONTH_RE.finditer(text):
+        parsed = _safe_date(
+            int(match.group(5)), MONTHS[match.group(2)], int(match.group(1))
         )
         if parsed:
             candidates.append((match.start(), parsed))

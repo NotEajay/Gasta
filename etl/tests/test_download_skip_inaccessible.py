@@ -56,3 +56,22 @@ def test_download_region_skips_403_sibling(tmp_path: Path) -> None:
     assert len(result.skipped) == 1
     assert result.skipped[0].slug == "region-v-bicol"
     assert "Bicol.pdf" in result.urls[0] or "CALABARZON" in result.urls[0]
+
+
+def test_download_region_queues_inaccessible_single_pdf(tmp_path: Path) -> None:
+    def unavailable(_region: str, slug: str, _dest_dir: str | Path, url=None) -> Path:
+        raise urllib.error.HTTPError(
+            url or slug, 403, "Forbidden", hdrs=None, fp=None
+        )
+
+    with patch("src.download.download_slug", side_effect=unavailable):
+        result = download_region_bulletins(
+            "ncr",
+            ("ncr-liquid-fuel-price-monitoring-29-sep-to-5-oct-2026",),
+            tmp_path,
+            ("https://cdn.example/ncr-current.pdf",),
+        )
+
+    assert not result.paths
+    assert len(result.skipped) == 1
+    assert result.skipped[0].url == "https://cdn.example/ncr-current.pdf"

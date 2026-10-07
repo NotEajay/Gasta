@@ -190,7 +190,7 @@ def download_region_bulletins(
         try:
             path = download_slug(region_code, slug, dest_dir, url)
         except (urllib.error.HTTPError, RuntimeError) as exc:
-            if _is_inaccessible(exc) and len(slugs) > 1:
+            if _is_inaccessible(exc):
                 result.skipped.append(
                     SkippedDownload(slug=slug, url=resolved, error=str(exc))
                 )
@@ -199,7 +199,7 @@ def download_region_bulletins(
         result.paths.append(path)
         result.urls.append(resolved)
 
-    if not result.paths:
+    if not result.paths and not result.skipped:
         detail = "; ".join(result.skip_notes) if result.skipped else "no slugs"
         raise RuntimeError(
             f"Failed to download any bulletin PDF for {region_code}: {detail}"

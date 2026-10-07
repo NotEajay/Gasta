@@ -784,7 +784,7 @@ def _latest_undated_group(
         by_subregion.setdefault(key, []).append(document)
 
     dest = Path(probe_dir)
-    weeks: dict[date, dict[str, str]] = {}
+    weeks: dict[date, dict[str, tuple[str, str | None]]] = {}
     for subregion, documents in by_subregion.items():
         for document in sorted(documents, key=_undated_rank)[:UNDATED_PROBE_LIMIT]:
             try:
@@ -794,7 +794,9 @@ def _latest_undated_group(
             except Exception:  # noqa: BLE001 — a bad candidate must not end the probe
                 continue
             if week_start:
-                weeks.setdefault(week_start, {}).setdefault(subregion, document.slug)
+                weeks.setdefault(week_start, {}).setdefault(
+                    subregion, (document.slug, document.url)
+                )
 
     if not weeks:
         return None
@@ -807,6 +809,12 @@ def _latest_undated_group(
     return DiscoveredBulletin(
         region_code=region_code,
         week_start=best_week,
-        slugs=tuple(sorted(weeks[best_week].values())),
+        slugs=tuple(
+            sorted(slug_url[0] for slug_url in weeks[best_week].values())
+        ),
         source="doe-region-page-pdf-header",
+        urls=tuple(
+            slug_url[1] for slug_url in
+            sorted(weeks[best_week].values())
+        ),
     )

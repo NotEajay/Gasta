@@ -151,3 +151,29 @@ def test_pending_retry_uses_rediscovered_url_and_updates_queue(tmp_path: Path) -
         bulletin_date=pending.bulletin_date,
         slug=pending.slug,
     )
+
+
+def test_ncr_pending_retry_rediscovery_matches_exact_week() -> None:
+    pending = PendingDownload(
+        id=8,
+        region_code="NCR",
+        bulletin_date=date(2026, 9, 29),
+        slug="ncr-liquid-fuel-price-monitoring-29-sep-to-5-oct-2026",
+        source_url="https://cdn.example/old.pdf",
+    )
+    document = type(
+        "Document",
+        (),
+        {
+            "week_start": date(2026, 9, 29),
+            "url": "https://cdn.example/ncr-2026-09-29.pdf",
+        },
+    )()
+    with patch("src.pending_retry.discover_region_documents", return_value=[document]), patch(
+        "src.pending_retry.group_documents_by_week",
+        return_value=([type("Bulletin", (), {"week_start": date(2026, 9, 29), "urls": (document.url,)})()], []),
+    ):
+        assert (
+            _rediscover_same_week_url(pending)
+            == "https://cdn.example/ncr-2026-09-29.pdf"
+        )

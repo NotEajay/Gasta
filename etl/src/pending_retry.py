@@ -9,8 +9,10 @@ import urllib.error
 
 from .constants import REGION_KEY_BY_CODE
 from .discover import (
+    discover_region_documents,
     discover_weeks_from_page_headings,
     fetch_region_page_html,
+    group_documents_by_week,
     subregion_for_slug,
 )
 from .download import _is_inaccessible, download_slug
@@ -35,6 +37,14 @@ class PendingRetryResult:
 
 def _rediscover_same_week_url(item: PendingDownload) -> str | None:
     """Find a current official media URL for the queued region/week/sub-region."""
+    if item.region_code == "NCR":
+        documents = discover_region_documents(item.region_code)
+        bulletins, _ = group_documents_by_week(documents)
+        for bulletin in bulletins:
+            if bulletin.week_start != item.bulletin_date:
+                continue
+            return next((url for url in bulletin.urls if url), None)
+        return None
     if item.region_code != "SOUTH_LUZON":
         return None
 
