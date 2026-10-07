@@ -20,65 +20,47 @@ export interface BulletinWeek {
   last_loaded_at: string | null;
 }
 
-/**
- * DOE publishes weekly. Age is measured from the *estimated post date*
- * (bulletin week start + 7 days — the following Tuesday), not from the
- * Tuesday the price week began. That way a Sep 22–28 bulletin posted on
- * Sep 29 reads as "1 day old" on Sep 30, not "8 days old".
- *
- * `STALE_AFTER_DAYS = 7` (since post) matches the ETL's
- * `MAX_BULLETIN_AGE_DAYS` and is equivalent to the old 14-day threshold
- * measured from week start.
- *
- * Kept as a local constant on purpose: the mobile app must not import ETL code
- * or gain a runtime dependency on the pipeline. The two values are maintained
- * in step by this comment, and the ETL remains the single source of truth for
- * what it refuses to load.
- *
- * Usage: this is the DOE bulletin freshness rule and nothing else. It is read
- * by `isBulletinStale` and by the Prices freshness label; no unrelated product
- * rule should borrow it.
- */
-export const DOE_POST_OFFSET_DAYS = 7;
-export const STALE_AFTER_DAYS = 7;
-
-/** Estimated calendar day DOE posts a Tue–Mon bulletin (week_start + 7). */
-export function estimatedDoePostedDate(bulletinDate: string): Date {
-  const [year, month, day] = bulletinDate.split('-').map(Number);
-  const posted = new Date(year, (month || 1) - 1, day || 1);
-  posted.setDate(posted.getDate() + DOE_POST_OFFSET_DAYS);
-  return posted;
+function localCalendarDate(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
 }
 
-/**
- * Calendar days since the estimated DOE post date.
- * Negative = that week has not reached its typical post day yet (still current).
- */
+export interface BulletinFreshness {
+  status: 'current' | 'stale';
+  daysOld: number;
+  label: string;
+}
+
+/** DOE freshness is measured from the end of the covered weekly period. */
+export function getBulletinFreshness(
+  bulletinDate: string,
+  now = new Date()
+): BulletinFreshness {
+  const start = localCalendarDate(bulletinDate);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysOld = Math.max(0, Math.round((today.getTime() - end.getTime()) / 86_400_000));
+
+  if (today >= start && today <= end) {
+    return { status: 'current', daysOld: 0, label: 'Current' };
+  }
+  if (today < start) {
+    return { status: 'stale', daysOld: 0, label: 'Outdated' };
+  }
+  return {
+    status: 'stale',
+    daysOld,
+    label: `Stale · ${daysOld} day${daysOld === 1 ? '' : 's'} old`,
+  };
+}
+
+/** Calendar days since the bulletin period ended. */
 export function bulletinAgeInDays(bulletinDate: string, now = new Date()): number {
-  const published = estimatedDoePostedDate(bulletinDate);
-  const midnightPosted = new Date(
-    published.getFullYear(),
-    published.getMonth(),
-    published.getDate()
-  );
-  const midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((midnightToday.getTime() - midnightPosted.getTime()) / 86_400_000);
+  return getBulletinFreshness(bulletinDate, now).daysOld;
 }
 
 export function isBulletinStale(bulletinDate: string, now = new Date()): boolean {
-  // Week start itself in the future = bad seed / bad parse.
-  const [year, month, day] = bulletinDate.split('-').map(Number);
-  const weekStart = new Date(year, (month || 1) - 1, day || 1);
-  const midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const weekAge = Math.round(
-    (midnightToday.getTime() - weekStart.getTime()) / 86_400_000
-  );
-  if (weekAge < 0) return true;
-
-  const age = bulletinAgeInDays(bulletinDate, now);
-  // Before the typical post day we are still inside a current week.
-  if (age < 0) return false;
-  return age > STALE_AFTER_DAYS;
+  return getBulletinFreshness(bulletinDate, now).status === 'stale';
 }
 
 const regionIdCache = new Map<string, string>();

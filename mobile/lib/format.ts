@@ -56,6 +56,24 @@ export function formatBulletinWeek(date: string): string {
   });
 }
 
+/** DOE bulletin period, e.g. "Sep 29 – Oct 5, 2026". */
+export function formatBulletinRange(startDate: string): string {
+  const start = parseDisplayDate(startDate);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const startLabel = start.toLocaleDateString('en-PH', {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+  const endLabel = end.toLocaleDateString('en-PH', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return `${startLabel} – ${endLabel}`;
+}
+
 export function formatDate(date: string): string {
   return parseDisplayDate(date).toLocaleDateString('en-PH', {
     year: 'numeric',

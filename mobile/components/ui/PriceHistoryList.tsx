@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { palette, radii, spacing, typography } from '@/constants/Theme';
-import { formatCurrency, formatShortDate } from '@/lib/format';
+import { formatBulletinRange, formatCurrency } from '@/lib/format';
 import { useTheme } from '@/lib/useTheme';
 
 export interface HistoryPoint {
@@ -64,11 +64,11 @@ export default function PriceHistoryList({
             ]}>
             <View style={styles.left}>
               <Text style={[styles.date, { color: theme.text }]}>
-                {formatShortDate(point.bulletin_date)}
+                {formatBulletinRange(point.bulletin_date)}
                 {isLatest ? '  ·  Latest' : ''}
               </Text>
               <Text style={[styles.hint, { color: theme.textMuted }]}>
-                {isLatest ? 'Latest Tuesday week' : 'Past Tuesday week'}
+                {isLatest ? 'Latest DOE bulletin' : 'Past DOE bulletin'}
               </Text>
             </View>
             <View style={styles.right}>

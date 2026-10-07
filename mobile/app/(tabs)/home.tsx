@@ -18,7 +18,9 @@ import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { useResponsive } from '@/hooks/useResponsive';
+import { getBulletinFreshness } from '@/lib/services/fuelPrices';
 import {
+  formatBulletinRange,
   formatCurrency,
   formatDate,
   formatPeso,
@@ -492,7 +494,7 @@ export default function HomeScreen() {
 
   // Recommendation card copy — DOE-first "best this week" layout.
   const recoRegionLabel = price
-    ? regionDisplayName(price.regionCode ?? regionCode ?? DASHBOARD_REGION)
+    ? regionDisplayName(price.regionCode ?? DASHBOARD_REGION)
     : null;
   const recoEyebrow = price
     ? price.source === 'community'
@@ -503,13 +505,13 @@ export default function HomeScreen() {
     : null;
 
   const recoUpdatedLabel =
-    price?.bulletinAgeDays == null
-      ? null
-      : price.bulletinAgeDays <= 0
-        ? 'Updated today'
-        : price.bulletinAgeDays === 1
-          ? 'Updated yesterday'
-          : `Updated ${price.bulletinAgeDays} days ago`;
+    price?.source === 'doe' && price.bulletinDate
+      ? formatBulletinRange(price.bulletinDate)
+      : null;
+  const recoFreshnessLabel =
+    price?.source === 'doe' && price.bulletinDate
+      ? getBulletinFreshness(price.bulletinDate).label
+      : null;
 
   const recoDelta =
     price?.vsLastBulletin != null && Number.isFinite(price.vsLastBulletin)
@@ -737,6 +739,11 @@ export default function HomeScreen() {
                   {recoUpdatedLabel ? (
                     <View style={styles.recoAgePill}>
                       <Text style={styles.recoAgePillText}>{recoUpdatedLabel}</Text>
+                    </View>
+                  ) : null}
+                  {recoFreshnessLabel ? (
+                    <View style={styles.recoAgePill}>
+                      <Text style={styles.recoAgePillText}>{recoFreshnessLabel}</Text>
                     </View>
                   ) : null}
                 </View>

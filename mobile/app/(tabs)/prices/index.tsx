@@ -37,7 +37,7 @@ import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import {
-  formatBulletinWeek,
+  formatBulletinRange,
   formatCurrency,
   formatDate,
   formatShortDate,
@@ -54,14 +54,12 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
-  bulletinAgeInDays,
-  estimatedDoePostedDate,
+  getBulletinFreshness,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
   fetchLatestBulletinForRegion,
   fetchPriceTrend,
-  STALE_AFTER_DAYS,
   type BulletinWeek,
   type FuelPriceRow,
 } from '@/lib/services/fuelPrices';
@@ -760,50 +758,16 @@ export default function FuelPricesScreen() {
    * the ETL later loads a newer week the label updates on the next fetch with
    * no code change.
    *
-   * Age is days since the estimated DOE post date (bulletin week start + 7),
-   * not since the Tuesday the price week began — so a Sep 22 week posted on
-   * Sep 29 is "1 day old" on Sep 30.
-   *
-   * `bulletinAgeInDays` does date-only arithmetic so there is no timezone drift.
-   * STALE_AFTER_DAYS matches the ETL (7 days since post ≡ old 14 from week start).
+   * Age is days since the bulletin period ended, using local calendar dates.
    */
   const priceFreshness = useMemo(() => {
     if (!bulletin) return null;
-    const ageDays = bulletinAgeInDays(bulletin.bulletin_date);
-
-    // Week start in the future = bad seed / bad parse upstream.
-    const [y, m, d] = bulletin.bulletin_date.split('-').map(Number);
-    const weekStart = new Date(y, (m || 1) - 1, d || 1);
-    const today = new Date();
-    const midnightToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const weekAge = Math.round(
-      (midnightToday.getTime() - weekStart.getTime()) / 86_400_000
-    );
-    if (weekAge < 0) {
-      return { ageDays, tone: 'stale' as const, label: 'Date out of range' };
-    }
-    // Before typical post day: still the current bulletin week.
-    if (ageDays < 0) {
-      return { ageDays: 0, tone: 'fresh' as const, label: 'Updated recently' };
-    }
-    if (ageDays === 0) return { ageDays, tone: 'fresh' as const, label: 'Updated today' };
-    if (ageDays === 1) return { ageDays, tone: 'fresh' as const, label: 'Updated yesterday' };
-    if (ageDays <= 7) return { ageDays, tone: 'fresh' as const, label: 'Updated recently' };
-    if (ageDays > STALE_AFTER_DAYS) {
-      return { ageDays, tone: 'stale' as const, label: `Stale · ${ageDays} days old` };
-    }
-    return { ageDays, tone: 'aging' as const, label: `${ageDays} days old` };
-  }, [bulletin]);
-
-  const doePostedLabel = useMemo(() => {
-    if (!bulletin?.bulletin_date) return null;
-    const posted = estimatedDoePostedDate(bulletin.bulletin_date);
-    return posted.toLocaleDateString('en-PH', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+    const freshness = getBulletinFreshness(bulletin.bulletin_date);
+    return {
+      ageDays: freshness.daysOld,
+      tone: freshness.status === 'stale' ? ('stale' as const) : ('fresh' as const),
+      label: freshness.label,
+    };
   }, [bulletin]);
 
   /*
@@ -991,14 +955,9 @@ export default function FuelPricesScreen() {
       <View style={styles.headerRow}>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Fuel Prices</Text>
-          {doePostedLabel || bulletin ? (
+          {bulletin ? (
             <Text numberOfLines={1} style={styles.headerMeta}>
-              {[
-                doePostedLabel ? `DOE posted ${doePostedLabel}` : null,
-                bulletin ? formatBulletinWeek(bulletin.bulletin_date) : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+              {formatBulletinRange(bulletin.bulletin_date)}
             </Text>
           ) : null}
         </View>
@@ -1089,7 +1048,6 @@ export default function FuelPricesScreen() {
             style={[
               styles.freshnessPill,
               priceFreshness.tone === 'stale' && styles.freshnessPillStale,
-              priceFreshness.tone === 'aging' && styles.freshnessPillAging,
             ]}>
             <Text
               style={[
@@ -1100,7 +1058,7 @@ export default function FuelPricesScreen() {
             </Text>
           </View>
           <Text style={styles.freshnessMeta} numberOfLines={1}>
-            DOE bulletin · {formatShortDate(bulletin.bulletin_date)}
+            DOE bulletin · {formatBulletinRange(bulletin.bulletin_date)}
           </Text>
         </View>
       ) : null}
@@ -1324,10 +1282,10 @@ export default function FuelPricesScreen() {
               <View style={styles.summaryStrip}>
                 <Text style={styles.summaryStripText}>
                   {historySummary.delta < 0
-                    ? `${formatCurrency(Math.abs(historySummary.delta))} cheaper than ${formatShortDate(historySummary.oldest.bulletin_date)}`
+                    ? `${formatCurrency(Math.abs(historySummary.delta))} cheaper than ${formatBulletinRange(historySummary.oldest.bulletin_date)}`
                     : historySummary.delta > 0
-                      ? `${formatCurrency(historySummary.delta)} higher than ${formatShortDate(historySummary.oldest.bulletin_date)}`
-                      : `Unchanged since ${formatShortDate(historySummary.oldest.bulletin_date)}`}
+                      ? `${formatCurrency(historySummary.delta)} higher than ${formatBulletinRange(historySummary.oldest.bulletin_date)}`
+                      : `Unchanged since ${formatBulletinRange(historySummary.oldest.bulletin_date)}`}
                 </Text>
                 <Text style={styles.summaryStripMeta}>
                   {formatCurrency(historySummary.oldest.price_per_liter)} →{' '}
@@ -1448,7 +1406,7 @@ export default function FuelPricesScreen() {
                 No {fuelLabel} prices in this bulletin
               </Text>
               <Text style={styles.emptyCardBody}>
-                The {formatDate(bulletin.bulletin_date)} bulletin for {regionLabel} does not
+                The {formatBulletinRange(bulletin.bulletin_date)} bulletin for {regionLabel} does not
                 include prices for this fuel type. Try another fuel.
               </Text>
               <Text style={styles.emptyCardHint}>
