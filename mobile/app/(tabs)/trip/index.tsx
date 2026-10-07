@@ -8,6 +8,7 @@ import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import TripSectionHeader from '@/components/trip/TripSectionHeader';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
+import NearbyFuelStations from '@/components/ui/NearbyFuelStations';
 import ModeRankCard from '@/components/ui/ModeRankCard';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import PriorityBalanceBar from '@/components/ui/PriorityBalanceBar';
@@ -1373,6 +1374,13 @@ export default function TripOptimizerScreen() {
           {routeError ? <Text style={styles.error}>{routeError}</Text> : null}
         </View>
       </View>
+
+      <NearbyFuelStations
+        location={originLocation}
+        regionCode={tripRegion}
+        fuelTypeId={selectedVehicle?.fuel_type_id}
+        areaName={originArea}
+      />
 
       {/*
         VEHICLE. Owned vehicles are compact selectable tiles rather than a chip

@@ -34,3 +34,6 @@ verify_jwt = true
 # Places Autocomplete uses the same server-side key and auth gate.
 [functions.google-places-autocomplete]
 verify_jwt = true
+
+[functions.google-places-nearby]
+verify_jwt = true
