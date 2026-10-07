@@ -214,15 +214,10 @@ export async function fetchFuelPricesForBulletin(
 
   if (error) throw error;
   const rows = (data ?? []) as unknown as FuelPriceRow[];
-  // Some regions (e.g. North Luzon) only have region-wide rows — fall back when
-  // the selected city has no DOE AREA prices.
-  if (rows.length === 0 && areaName) {
-    return fetchFuelPricesForBulletin(bulletinId, regionCode, fuelTypeCode, '');
-  }
   return rows;
 }
 
-/** Distinct city/area labels for a bulletin week in a region (excludes region-wide ''). */
+/** Distinct DOE area labels for one bulletin and region (excludes region-wide ''). */
 export async function fetchBulletinAreas(
   bulletinId: string,
   regionCode: string

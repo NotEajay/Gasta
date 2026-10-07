@@ -30,7 +30,6 @@ import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import {
   DOE_REGIONS,
-  REGION_FALLBACK_CITIES,
   type DoeRegionCode,
 } from '@/constants/regions';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
@@ -150,7 +149,7 @@ function buildStationPriceRows(
       id: `doe-area-${row.id}`,
       slug,
       brand: row.oil_company.name,
-      areaName: row.area_name || 'All cities',
+      areaName: row.area_name || 'Region-wide DOE price',
       price: doeBySlug.get(slug) ?? row.price_per_liter,
       source: 'doe_area',
       status: 'DOE area price',
@@ -325,10 +324,9 @@ export default function FuelPricesScreen() {
   /**
    * Apply a resolved place to the filters.
    *
-   * Region is always set. City is set only when the reverse-geocoded city matches
+   * Region is always set. Area is set only when the reverse-geocoded city matches
    * a REAL area name from this region's bulletin -- `matchBulletinArea` never
-   * invents one, so an unmatched city simply leaves City on "All cities" rather
-   * than failing the screen.
+   * invents one, so an unmatched city remains on the region-wide DOE option.
    */
   const applyPlace = useCallback(
     async (place: { regionCode: DoeRegionCode; city: string | null }) => {
@@ -434,16 +432,12 @@ export default function FuelPricesScreen() {
 
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
-  const areaLabel = areaName || 'All cities';
+  const areaLabel = areaName || 'Region-wide DOE price';
+  const selectedBulletinForAreas = selectedPastDate
+    ? pastBulletins.find((week) => week.bulletin_date === selectedPastDate) ?? bulletin
+    : bulletin;
 
-  const areas = useMemo(() => {
-    // Always keep the curated fallback cities (incl. Bicol hubs) visible even
-    // when this week's PDF set is incomplete — selecting one with no city rows
-    // falls back to region-wide DOE prices.
-    const fallback = REGION_FALLBACK_CITIES[region] ?? [];
-    const merged = new Set<string>([...doeAreas, ...fallback]);
-    return [...merged].sort((a, b) => a.localeCompare(b, 'en'));
-  }, [doeAreas, region]);
+  const areas = doeAreas;
 
   const regionOptions = useMemo(
     () => DOE_REGIONS.map((r) => ({ value: r.code, label: r.name })),
@@ -455,7 +449,7 @@ export default function FuelPricesScreen() {
   );
   const areaOptions = useMemo(
     () => [
-      { value: '', label: 'All cities' },
+      { value: '', label: 'Region-wide DOE price' },
       ...areas.map((name) => ({ value: name, label: name })),
     ],
     [areas]
@@ -509,9 +503,8 @@ export default function FuelPricesScreen() {
         return;
       }
 
-      const cityAreas = await fetchBulletinAreas(latest.id, region).catch((): string[] => []);
-      setDoeAreas(cityAreas);
-      setAreasFromDoe(cityAreas.length > 0);
+      setDoeAreas([]);
+      setAreasFromDoe(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load fuel prices');
     } finally {
@@ -519,6 +512,35 @@ export default function FuelPricesScreen() {
       setRefreshing(false);
     }
   }, [region, user]);
+
+  useEffect(() => {
+    const activeBulletin = selectedBulletinForAreas;
+    if (!activeBulletin) {
+      setDoeAreas([]);
+      setAreasFromDoe(false);
+      setAreaName('');
+      return;
+    }
+
+    let cancelled = false;
+    void fetchBulletinAreas(activeBulletin.id, region)
+      .then((nextAreas) => {
+        if (cancelled) return;
+        setDoeAreas(nextAreas);
+        setAreasFromDoe(nextAreas.length > 0);
+        setAreaName((current) => (current && nextAreas.includes(current) ? current : ''));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDoeAreas([]);
+        setAreasFromDoe(false);
+        setAreaName('');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBulletinForAreas, region]);
 
   useEffect(() => {
     setSelectedPastDate(null);
@@ -557,9 +579,7 @@ export default function FuelPricesScreen() {
           return;
         }
 
-        // Prefer DOE city prices when that area exists in the bulletin; otherwise
-        // fetchFuelPricesForBulletin falls back to region-wide mins.
-        const areaForDoe = areasFromDoe && areaName ? areaName : '';
+        const areaForDoe = areaName;
         const [rows, community] = await Promise.all([
           fetchFuelPricesForBulletin(bulletin.id, region, fuelType, areaForDoe),
           communityPromise,
@@ -586,7 +606,7 @@ export default function FuelPricesScreen() {
     return () => {
       cancelled = true;
     };
-  }, [bulletin, region, fuelType, areaName, areasFromDoe, loading]);
+  }, [bulletin, region, fuelType, areaName, loading]);
 
   /*
    * History loads eagerly, in the background, as soon as a bulletin exists --
@@ -733,11 +753,11 @@ export default function FuelPricesScreen() {
     }
     const selected = pastBulletins.find((b) => b.bulletin_date === selectedPastDate);
     if (!selected) return;
-    const areaForDoe = areasFromDoe && areaName ? areaName : '';
+    const areaForDoe = areaName;
     void fetchFuelPricesForBulletin(selected.id, region, fuelType, areaForDoe)
       .then(setPastWeekPrices)
       .catch(() => setPastWeekPrices([]));
-  }, [selectedPastDate, pastBulletins, region, fuelType, areaName, areasFromDoe]);
+  }, [selectedPastDate, pastBulletins, region, fuelType, areaName]);
 
   const historySummary = useMemo(() => {
     if (trend.length < 2) return null;
@@ -1114,12 +1134,12 @@ export default function FuelPricesScreen() {
           style={isCompact ? styles.filterFieldWrap : undefined}
         />
         <PriceFilterField
-          label="City"
+          label="Area"
           value={areaName}
           options={areaOptions}
           onChange={handleManualArea}
           icon="office-building-outline"
-          placeholder="All cities"
+          placeholder="Region-wide DOE price"
           style={isCompact ? styles.filterFieldWrap : undefined}
         />
         <PriceFilterField
@@ -1132,10 +1152,15 @@ export default function FuelPricesScreen() {
         />
       </View>
 
-      {!areasFromDoe && areas.length > 0 ? (
+      {nearMePlace?.city && !areaName ? (
         <Text style={styles.hintText}>
-          DOE has no per-city prices for this region this week — station prices use community
-          reports or region brand estimates.
+          No city-level DOE data for this area. Showing the region-wide DOE price.
+        </Text>
+      ) : null}
+
+      {!areasFromDoe && !nearMePlace?.city ? (
+        <Text style={styles.hintText}>
+          This bulletin has no city-level DOE areas. Region-wide DOE prices are shown.
         </Text>
       ) : null}
 
@@ -1331,9 +1356,10 @@ export default function FuelPricesScreen() {
                 <PriceHistoryList
                   points={trend}
                   selectedDate={selectedPastDate ?? undefined}
-                  onSelectDate={(date) =>
-                    setSelectedPastDate((current) => (current === date ? null : date))
-                  }
+                  onSelectDate={(date) => {
+                    setSelectedPastDate((current) => (current === date ? null : date));
+                    setAreaName('');
+                  }}
                 />
               </View>
             ) : null}
