@@ -156,7 +156,7 @@ def cmd_sync_ncr(args: argparse.Namespace) -> None:
     )
     print(sync_result_to_json(result))
     _report_staleness([result])
-    if result.stale:
+    if result.stale or result.status == "ERROR":
         sys.exit(1)
     if result.skipped:
         sys.exit(0)
@@ -173,7 +173,7 @@ def cmd_sync_region(args: argparse.Namespace) -> None:
     )
     print(sync_result_to_json(result))
     _report_staleness([result])
-    if result.stale:
+    if result.stale or result.status == "ERROR":
         sys.exit(1)
     if result.price_rows == 0 and not args.dry_run and not result.skipped and "Failed" not in result.message:
         sys.exit(1)

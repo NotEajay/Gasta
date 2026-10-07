@@ -43,6 +43,9 @@ class SyncResult:
     upstream_unavailable: bool = False
     # Core fuels (RON_91, DIESEL_PLUS) absent after parse/load — Prices UI empty.
     missing_fuels: tuple[str, ...] = ()
+    # A skipped PDF was downloaded successfully with its siblings, but its retry
+    # queue row could not be persisted.
+    pending_queue_error: bool = False
 
     @property
     def status(self) -> str:
@@ -51,6 +54,8 @@ class SyncResult:
             return "UPSTREAM UNAVAILABLE"
         if self.stale:
             return "STALE"
+        if self.pending_queue_error:
+            return "ERROR"
         if "Failed" in self.message:
             return "ERROR"
         if self.missing_fuels:
@@ -217,17 +222,25 @@ def _sync_discovered(
     downloaded = download_region_bulletins(
         region_key, discovered.slugs, dest_dir, discovered.urls
     )
+    pending_queue_errors: list[str] = []
     # Queue inaccessible PDFs for the daily pending-retry workflow; clear any
-    # that succeeded this run so daily automation stops for those gaps.
+    # that succeeded this run so daily automation stops for those gaps. Queue
+    # failures are retained until the result is built so valid sibling PDFs still
+    # parse/load, while the run is explicitly marked unsuccessful.
     if not dry_run:
         for skip in downloaded.skipped:
-            upsert_pending_download(
-                region_code=region_code,
-                bulletin_date=discovered.week_start,
-                slug=skip.slug,
-                source_url=skip.url,
-                last_error=skip.error,
-            )
+            try:
+                upsert_pending_download(
+                    region_code=region_code,
+                    bulletin_date=discovered.week_start,
+                    slug=skip.slug,
+                    source_url=skip.url,
+                    last_error=skip.error,
+                )
+            except Exception as exc:  # noqa: BLE001 — surface queue loss in result
+                pending_queue_errors.append(
+                    f"{skip.slug}: {type(exc).__name__}: {exc}"
+                )
         skipped_slugs = {item.slug for item in downloaded.skipped}
         for slug in discovered.slugs:
             if slug not in skipped_slugs:
@@ -267,6 +280,12 @@ def _sync_discovered(
         )
     if parsed.warnings:
         coverage_note += " " + "; ".join(parsed.warnings[:3])
+    if pending_queue_errors:
+        coverage_note += (
+            " Failed to persist pending-download queue row(s): "
+            + "; ".join(pending_queue_errors[:3])
+            + "."
+        )
 
     # Check for validation errors
     if parsed.validation_errors:
@@ -281,6 +300,7 @@ def _sync_discovered(
                 message=f"Validation errors: {'; '.join(parsed.validation_errors)}",
                 stale=stale,
                 missing_fuels=parsed_missing,
+                pending_queue_error=bool(pending_queue_errors),
             )
 
     already = (
@@ -303,8 +323,10 @@ def _sync_discovered(
                 message=(
                     f"{region_code} prices for bulletin {parsed.bulletin_date.isoformat()} "
                     f"already in Supabase - skipped. {freshness_note}."
+                    + coverage_note
                 ),
                 stale=stale,
+                pending_queue_error=bool(pending_queue_errors),
             )
         # Week was stored without RON 91 / Diesel Plus — reload on every ETL trigger.
         # Also reload when prior-week cities (e.g. Bicol) were never written.
@@ -329,6 +351,7 @@ def _sync_discovered(
             message="Dry run - no database write." + coverage_note,
             stale=stale,
             missing_fuels=parsed_missing,
+            pending_queue_error=bool(pending_queue_errors),
         )
 
     load_stats = load_bulletin(parsed)
@@ -345,6 +368,7 @@ def _sync_discovered(
         message=message,
         stale=stale,
         missing_fuels=parsed_missing,
+        pending_queue_error=bool(pending_queue_errors),
     )
 
 

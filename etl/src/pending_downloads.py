@@ -103,6 +103,17 @@ def touch_pending_error(pending_id: int, last_error: str) -> None:
     ).eq("id", pending_id).execute()
 
 
+def update_pending_source_url(pending_id: int, source_url: str) -> None:
+    """Record a newly discovered official URL for the same queued bulletin."""
+    client = _client()
+    client.table("doe_pending_downloads").update(
+        {
+            "source_url": source_url,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", pending_id).execute()
+
+
 def pending_count() -> int:
     client = _client()
     response = (
