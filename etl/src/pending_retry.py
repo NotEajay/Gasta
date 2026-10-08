@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -79,6 +80,7 @@ def retry_pending_downloads(
     If the queue is empty the daily workflow should exit quietly — nothing to
     automate. Still-403 rows stay pending for the next day.
     """
+    t_start = time.monotonic()
     pending = list_pending_downloads()
     if not pending:
         return [
@@ -92,7 +94,7 @@ def retry_pending_downloads(
         ]
 
     # Lazy imports keep the idle path free of Supabase / dotenv deps.
-    from .load_supabase import merge_bulletin_prices, record_doe_website_fetch
+    from .load_supabase import merge_bulletin_prices, record_doe_website_fetch, record_etl_run
     from .parse_bulletin import parse_bulletin_pdf
 
     results: list[PendingRetryResult] = []
@@ -222,4 +224,30 @@ def retry_pending_downloads(
     if recovered_any and not dry_run:
         record_doe_website_fetch(trigger="pending-retry")
 
+    # ── Record this retry run in the history table ───────────────────────────
+    if not dry_run and pending:
+        duration = time.monotonic() - t_start
+        recovered = [r for r in results if r.status == "recovered"]
+        still_pending = [r for r in results if r.status == "still_pending"]
+        errors = [r for r in results if r.status == "error"]
+        if errors:
+            status = "partial" if recovered else "failed"
+            error_summary = "; ".join(r.message for r in errors[:3])
+        elif still_pending:
+            status = "partial"
+            error_summary = f"{len(still_pending)} file(s) still unavailable"
+        else:
+            status = "success"
+            error_summary = None
+        record_etl_run(
+            workflow="pending-retry",
+            status=status,
+            regions_ok=len(recovered),
+            regions_failed=len(errors),
+            regions_skipped=len(still_pending),
+            duration_s=duration,
+            error_summary=error_summary,
+        )
+
     return results
+

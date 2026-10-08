@@ -296,6 +296,34 @@ def record_doe_website_fetch(*, trigger: str | None = None, run_id: str | None =
     client.table("doe_etl_state").upsert(payload, on_conflict="id").execute()
 
 
+def record_etl_run(
+    *,
+    workflow: str,
+    status: str,
+    regions_ok: int = 0,
+    regions_failed: int = 0,
+    regions_skipped: int = 0,
+    duration_s: float | None = None,
+    error_summary: str | None = None,
+) -> None:
+    """Insert one row into doe_etl_runs (history log visible in admin panel)."""
+    client = _client()
+    trigger = (os.environ.get("ETL_TRIGGER") or "cli").strip() or "cli"
+    github_run_id = (os.environ.get("GITHUB_RUN_ID") or "").strip() or None
+    payload: dict[str, Any] = {
+        "workflow": workflow,
+        "status": status,
+        "trigger_source": trigger,
+        "github_run_id": github_run_id,
+        "regions_ok": regions_ok,
+        "regions_failed": regions_failed,
+        "regions_skipped": regions_skipped,
+        "duration_s": round(duration_s, 1) if duration_s is not None else None,
+        "error_summary": error_summary,
+    }
+    client.table("doe_etl_runs").insert(payload).execute()
+
+
 def fetch_loaded_weeks(region_code: str) -> set[str]:
     """Bulletin dates that already have prices for a region — one query, used to skip."""
     client = _client()

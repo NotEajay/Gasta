@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { useState, useEffect } from 'react';
+import { ScrollView, StyleSheet, View, Pressable } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
@@ -16,7 +16,7 @@ import { GasTaColors, GasTaRadius, GasTaSpacing, typeScale } from '@/constants/T
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatDate } from '@/lib/format';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 /**
  * Profile is re-themed onto the Sign In screen's visual language (warm cream
@@ -40,6 +40,25 @@ export default function ProfileScreen() {
   const { user, loading: authLoading, signOut } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
   const [signingOut, setSigningOut] = useState(false);
+  const [role, setRole] = useState<'user' | 'developer' | 'admin'>('user');
+  const [roleLoading, setRoleLoading] = useState(true);
+
+  useEffect(() => {
+    if (user && isSupabaseConfigured) {
+      supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single()
+        .then(({ data }) => {
+          if (data) setRole(data.role);
+          setRoleLoading(false);
+        });
+    } else {
+      setRoleLoading(false);
+    }
+  }, [user]);
+
   /**
    * Sign-out failures were previously raised in a modal `Alert`, which
    * interrupts the screen for a problem the user did not cause. It is now an
@@ -70,7 +89,7 @@ export default function ProfileScreen() {
     );
   }
 
-  if (authLoading) return <LoadingState message="Loading profile…" />;
+  if (authLoading || roleLoading) return <LoadingState message="Loading profile…" />;
 
   if (!user) {
     return (
@@ -210,6 +229,43 @@ export default function ProfileScreen() {
           </Text>
         </View>
       </View>
+
+      {/* ---- developer / admin tools ---- */}
+      {(role === 'developer' || role === 'admin') && (
+        <>
+          <Text style={[styles.sectionLabel, { marginTop: GasTaSpacing.xl }]}>
+            Developer & Admin
+          </Text>
+          <View style={styles.detailBlock}>
+            <Pressable
+              style={({ pressed }) => [styles.detailRow, pressed && { backgroundColor: GasTaColors.creamLight }]}
+              onPress={() => router.push('/admin/etl')}
+            >
+              <View style={styles.iconBox}>
+                <Ionicons name="server-outline" size={16} color={GasTaColors.forest} />
+              </View>
+              <Text style={styles.detailLabel}>ETL Status & Workflows</Text>
+              <Ionicons name="chevron-forward" size={16} color={GasTaColors.textMuted} />
+            </Pressable>
+
+            {role === 'admin' && (
+              <>
+                <View style={styles.detailDivider} />
+                <Pressable
+                  style={({ pressed }) => [styles.detailRow, pressed && { backgroundColor: GasTaColors.creamLight }]}
+                  onPress={() => router.push('/admin/users')}
+                >
+                  <View style={styles.iconBox}>
+                    <Ionicons name="people-outline" size={16} color={GasTaColors.forest} />
+                  </View>
+                  <Text style={styles.detailLabel}>User Management</Text>
+                  <Ionicons name="chevron-forward" size={16} color={GasTaColors.textMuted} />
+                </Pressable>
+              </>
+            )}
+          </View>
+        </>
+      )}
 
       {signOutError ? (
         <InlineNotice

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -12,7 +13,7 @@ from .carry_forward import carry_forward_missing_areas, db_missing_areas_vs_prio
 from .discover import DiscoveredBulletin, UpstreamUnavailableError, discover_latest_weeks
 from .download import download_region_bulletins, normalize_region
 from .freshness import describe_freshness, is_bulletin_stale
-from .load_supabase import _client, load_bulletin, record_doe_website_fetch, touch_bulletin_fetched_at
+from .load_supabase import _client, load_bulletin, record_doe_website_fetch, record_etl_run, touch_bulletin_fetched_at
 from .parse_bulletin import (
     BulletinDateUnknown,
     BulletinNotMachineReadable,
@@ -429,6 +430,7 @@ def sync_all_regions(
     force: bool = False,
 ) -> list[SyncResult]:
     """Sync all five macro-regions. Failures for one region do not stop the others."""
+    t_start = time.monotonic()
     results: list[SyncResult] = []
     for region_key in ALL_REGION_KEYS:
         try:
@@ -482,6 +484,29 @@ def sync_all_regions(
     )
     if not dry_run and all_available_current:
         record_doe_website_fetch()
+
+    # ── Record this run in the history table ────────────────────────────────
+    if not dry_run:
+        duration = time.monotonic() - t_start
+        ok      = [r for r in results if not r.stale and "Failed" not in r.message and not r.upstream_unavailable]
+        failed  = [r for r in results if "Failed" in r.message]
+        skipped = [r for r in results if r.upstream_unavailable]
+        if failed:
+            status = "partial" if ok else "failed"
+            error_summary = "; ".join(r.message for r in failed[:3])
+        else:
+            status = "success"
+            error_summary = None
+        record_etl_run(
+            workflow="weekly",
+            status=status,
+            regions_ok=len(ok),
+            regions_failed=len(failed),
+            regions_skipped=len(skipped),
+            duration_s=duration,
+            error_summary=error_summary,
+        )
+
     return results
 
 
