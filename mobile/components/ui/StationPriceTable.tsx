@@ -1,11 +1,11 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { getBrandLogo } from '@/constants/brandLogos';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
+import BrandMark from '@/components/ui/BrandMark';
 
 export type StationPriceRow = {
   id: string;
@@ -30,24 +30,8 @@ export type AreaPriceRow = {
 type Props = {
   rows: StationPriceRow[];
   areaRows?: AreaPriceRow[];
-};
-
-/*
- * Accent tints for the brand mark when a station has no logo file. These are
- * UI-only decorative colours (the fallback gas-station glyph and the dashed
- * frame), not brand artwork -- the actual logos in `brandLogos` are untouched.
- */
-const BRAND_COLOR: Record<string, string> = {
-  seaoil: '#2E7D32',
-  petron: '#2563EB',
-  'flying v': '#DC2626',
-  flyingv: '#DC2626',
-  ptt: '#7C3AED',
-  shell: '#CA8A04',
-  caltex: '#EA580C',
-  phoenix: '#DC2626',
-  total: '#0284C7',
-  unioil: '#64748B',
+  fuelType?: string;
+  region?: string;
 };
 
 const PRICE_FOREST = GasTaColors.forestDark;
@@ -61,11 +45,6 @@ type StatusPresentation = {
   icon: 'shield-check' | 'clock-outline' | 'file-document-outline';
 };
 
-function brandColor(brand: string): string {
-  const key = brand.trim().toLowerCase();
-  return BRAND_COLOR[key] ?? PRICE_FOREST;
-}
-
 function statusPresentation(status?: string): StatusPresentation | null {
   if (status === 'Verified') {
     return { backgroundColor: PRICE_GREEN_SOFT, color: PRICE_GREEN, icon: 'shield-check' };
@@ -73,7 +52,12 @@ function statusPresentation(status?: string): StatusPresentation | null {
   if (status === 'Unverified') {
     return { backgroundColor: palette.warningSoft, color: '#9A6700', icon: 'clock-outline' };
   }
-  if (status === 'DOE estimate') {
+  if (
+    status === 'DOE estimate' ||
+    status === 'Official DOE Price' ||
+    status === 'DOE Area/Brand Estimate' ||
+    status === 'DOE Region-Wide Estimate'
+  ) {
     return {
       backgroundColor: GasTaColors.forestGlow,
       color: PRICE_FOREST,
@@ -83,8 +67,19 @@ function statusPresentation(status?: string): StatusPresentation | null {
   return null;
 }
 
-export default function StationPriceTable({ rows, areaRows = [] }: Props) {
+export default function StationPriceTable({
+  rows,
+  areaRows = [],
+  fuelType,
+  region,
+}: Props) {
   const router = useRouter();
+  const reportFor = (params: Record<string, string>) => {
+    router.push({
+      pathname: '/(tabs)/prices/report',
+      params,
+    });
+  };
   const lowestStationPrice = rows.reduce<number | null>((lowest, row) => {
     if (row.price == null) return lowest;
     return lowest == null || row.price < lowest ? row.price : lowest;
@@ -93,7 +88,7 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
   if (rows.length === 0 && areaRows.length === 0) {
     return (
       <Text style={styles.empty}>
-        No stations for this filter yet. Report a price at a named station to list it here.
+        No DOE prices for these filters. Try another area or fuel type.
       </Text>
     );
   }
@@ -106,10 +101,11 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
         what each row already says and costs a full line of vertical space.
       */}
       {rows.map((row, index) => {
-        const accent = brandColor(row.brand);
-        const logo = getBrandLogo(row.slug);
         const statusStyle = statusPresentation(row.status);
-        const isBestPrice = row.price != null && row.price === lowestStationPrice;
+        const isBestPrice =
+          row.source === 'community' &&
+          row.price != null &&
+          row.price === lowestStationPrice;
         const isLast = index === rows.length - 1 && areaRows.length === 0;
         return (
           <View
@@ -122,18 +118,7 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
               row.status === 'Unverified' && styles.unverifiedRow,
               isBestPrice && styles.bestRow,
             ]}>
-            <View style={styles.logoWrap}>
-              {logo ? (
-                <Image
-                  source={logo}
-                  style={styles.logo}
-                  resizeMode="contain"
-                  accessibilityLabel={`${row.brand} logo`}
-                />
-              ) : (
-                <MaterialCommunityIcons name="gas-station" size={17} color={accent} />
-              )}
-            </View>
+            <BrandMark brand={row.brand} slug={row.slug} stationName={row.station} size="sm" />
 
             <View style={styles.rowMain}>
               <Text style={styles.station} numberOfLines={1}>
@@ -165,10 +150,38 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
               </View>
             </View>
 
-            <Text style={[styles.price, isBestPrice && styles.priceBest]}>
-              {row.price != null ? formatCurrency(row.price) : '—'}
-              {row.price != null ? <Text style={styles.priceUnit}>/L</Text> : null}
-            </Text>
+            <View style={styles.rowRight}>
+              <Text style={[styles.price, isBestPrice && styles.priceBest]}>
+                {row.price != null ? formatCurrency(row.price) : '—'}
+                {row.price != null ? <Text style={styles.priceUnit}>/L</Text> : null}
+              </Text>
+              {row.source === 'doe' ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Report a price at ${row.station}`}
+                  hitSlop={6}
+                  onPress={() =>
+                    reportFor({
+                      station_id: row.id,
+                      station_name: row.station,
+                      brand: row.brand,
+                      ...(fuelType ? { fuel_type: fuelType } : {}),
+                      ...(region ? { region } : {}),
+                    })
+                  }
+                  style={({ pressed }) => [
+                    styles.reportButton,
+                    pressed && styles.reportButtonPressed,
+                  ]}>
+                  <MaterialCommunityIcons
+                    name="map-marker-plus-outline"
+                    size={12}
+                    color={GasTaColors.forest}
+                  />
+                  <Text style={styles.reportButtonText}>Report here</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         );
       })}
@@ -188,40 +201,24 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
               color={GasTaColors.textSoft}
             />
             <Text style={styles.areaNoteText}>
-              No station reported yet — DOE area price
+              Exact branch price unavailable · Showing DOE area or region-wide estimate
             </Text>
           </View>
           {areaRows.map((row, index) => {
-            const logo = getBrandLogo(row.slug);
-            const areaLabel = row.areaName === 'All cities' ? 'All cities' : row.areaName;
+            const areaLabel = row.areaName;
             const isLast = index === areaRows.length - 1;
             return (
               <View
                 key={row.id}
                 style={[styles.row, !isLast && styles.divider, styles.areaRow]}>
-                <View style={[styles.logoWrap, styles.logoWrapDashed]}>
-                  {logo ? (
-                    <Image
-                      source={logo}
-                      style={styles.logo}
-                      resizeMode="contain"
-                      accessibilityLabel={`${row.brand} logo`}
-                    />
-                  ) : (
-                    <MaterialCommunityIcons
-                      name="storefront-outline"
-                      size={17}
-                      color={GasTaColors.textSoft}
-                    />
-                  )}
-                </View>
+                <BrandMark brand={row.brand} slug={row.slug} size="sm" />
 
                 <View style={styles.rowMain}>
                   <Text style={styles.station} numberOfLines={1}>
                     {row.brand} · {areaLabel}
                   </Text>
                   <Text style={styles.areaSub} numberOfLines={1}>
-                    {row.status ?? 'DOE area price'}
+                    {row.status ?? 'DOE Area/Brand Estimate'}
                   </Text>
                 </View>
 
@@ -234,7 +231,14 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
                     accessibilityRole="button"
                     accessibilityLabel={`Report a price for ${row.brand}`}
                     hitSlop={6}
-                    onPress={() => router.push('/(tabs)/prices/report')}
+                    onPress={() =>
+                      reportFor({
+                        brand: row.brand,
+                        area: areaLabel,
+                        ...(fuelType ? { fuel_type: fuelType } : {}),
+                        ...(region ? { region } : {}),
+                      })
+                    }
                     style={({ pressed }) => [
                       styles.reportButton,
                       pressed && styles.reportButtonPressed,
@@ -244,7 +248,7 @@ export default function StationPriceTable({ rows, areaRows = [] }: Props) {
                       size={12}
                       color={GasTaColors.forest}
                     />
-                    <Text style={styles.reportButtonText}>Report here</Text>
+                    <Text style={styles.reportButtonText}>Report station price</Text>
                   </Pressable>
                 </View>
               </View>
@@ -289,23 +293,6 @@ const styles = StyleSheet.create({
      settled figure. */
   unverifiedRow: {
     backgroundColor: 'rgba(180, 83, 9, 0.07)',
-  },
-  logoWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoWrapDashed: {
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.cream,
-  },
-  logo: {
-    width: 26,
-    height: 26,
   },
   rowMain: { flex: 1, minWidth: 0 },
   station: {
@@ -354,6 +341,10 @@ const styles = StyleSheet.create({
   },
   priceBest: { color: '#1B5E20' },
   priceUnit: { fontSize: 10, fontWeight: '700', opacity: 0.7 },
+  rowRight: {
+    minWidth: 88,
+    alignItems: 'flex-end',
+  },
 
   /* ---- DOE area rows, same list language ---- */
   areaNote: {

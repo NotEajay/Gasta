@@ -19,6 +19,7 @@ from src.parse_bulletin import (
     _find_header_anchors,
     _match_fuel_label,
     _parse_fuel_line,
+    _parse_fuel_line_with_area,
     _reject_corrupt_text_layer,
     detect_company_columns,
     missing_core_fuels,
@@ -268,10 +269,29 @@ def test_north_luzon_city_prefixed_ron_91_line() -> None:
     assert prices[0] == 90.50
 
 
+def test_north_luzon_fallback_preserves_city_area() -> None:
+    area, fuel, prices = _parse_fuel_line_with_area(
+        "ILOCOS NORTE BATAC CITY RON 91 90.50 90.50 90.50 90.50 90.50 90.50"
+    )
+
+    assert area == "Batac City"
+    assert fuel == "RON 91"
+    assert prices[0] == 90.50
+
+
+def test_north_luzon_fallback_preserves_municipality_area() -> None:
+    area, fuel, prices = _parse_fuel_line_with_area(
+        "PANGASINAN ROSALES RON 95 91.20 91.20 91.20 91.20 91.20 91.20"
+    )
+
+    assert area == "Rosales"
+    assert fuel == "RON 95"
+    assert prices[0] == 91.20
+
+
 def test_north_luzon_city_prefixed_diesel_plus_line() -> None:
     fuel, prices = _parse_fuel_line(
         "BENGUET BAGUIO CITY DIESEL PLUS 104.20 104.20 108.60 108.60 106.70 104.20"
     )
     assert fuel == "DIESEL PLUS"
     assert 104.20 in prices
-

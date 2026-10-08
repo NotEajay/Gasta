@@ -158,6 +158,20 @@ def _parse_fuel_line(line: str) -> tuple[str, list[float]] | None:
     anywhere in the line — not only at column 0 — then read prices after it.
     Patterns are ordered so DIESEL PLUS wins over DIESEL and RON 100 over RON 91.
     """
+    parsed = _parse_fuel_line_with_area(line)
+    if not parsed:
+        return None
+    _, fuel, prices = parsed
+    return fuel, prices
+
+
+def _parse_fuel_line_with_area(line: str) -> tuple[str, str, list[float]] | None:
+    """Parse a fallback line into (area, canonical fuel, prices).
+
+    Scanned North Luzon tables may not expose a detectable brand header, but their
+    OCR line still includes the city or municipality before the fuel label. Preserve
+    that explicit prefix instead of turning every fallback row into a region-wide row.
+    """
     stripped = line.strip()
     upper = stripped.upper()
     for pattern, fuel in _FUEL_START_PATTERNS:
@@ -166,7 +180,10 @@ def _parse_fuel_line(line: str) -> tuple[str, list[float]] | None:
             continue
         prices = _extract_prices_from_line(stripped[match.end() :].strip())
         if len(prices) >= 3:
-            return fuel, prices
+            label = stripped[: match.end()]
+            matched = _match_fuel_label(label)
+            area = _normalize_area_name(matched[0]) if matched else ""
+            return area, fuel, prices
     return None
 
 
@@ -723,14 +740,14 @@ def parse_bulletin_pdf(
             "using the configured column order and may be unreliable"
         )
         for line in full_text.splitlines():
-            parsed = _parse_fuel_line(line)
+            parsed = _parse_fuel_line_with_area(line)
             if not parsed:
                 continue
-            fuel_label, prices = parsed
+            area_name, fuel_label, prices = parsed
             fuel_code = FUEL_TYPE_CODES[fuel_label]
             for idx, price in enumerate(prices[: len(company_columns)]):
                 company_name = COMPANY_NAMES[company_columns[idx]]
-                buckets.setdefault(("", company_name, fuel_code), []).append(price)
+                buckets.setdefault((area_name, company_name, fuel_code), []).append(price)
 
     # Region-wide mins (area_name '') plus one row set per city/area.
     region_buckets: dict[tuple[str, str], list[float]] = {}

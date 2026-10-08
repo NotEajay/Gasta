@@ -32,6 +32,29 @@ _AREA_PROVINCE_PREFIXES = tuple(
             "Bicol",
             "Calabarzon",
             "Mimaropa",
+            "Mountain Province",
+            "Ilocos Norte",
+            "Ilocos Sur",
+            "La Union",
+            "Pangasinan",
+            "Cagayan",
+            "Isabela",
+            "Quirino",
+            "Nueva Vizcaya",
+            "Nueva Ecija",
+            "North Luzon",
+            "South Luzon",
+            "Benguet",
+            "Abra",
+            "Apayao",
+            "Ifugao",
+            "Kalinga",
+            "Aurora",
+            "Bataan",
+            "Bulacan",
+            "Pampanga",
+            "Tarlac",
+            "Zambales",
         ),
         key=len,
         reverse=True,
@@ -46,7 +69,9 @@ def normalize_area_name(raw: str) -> str:
     "Cavite Tagaytay City" becomes "Tagaytay City", while "Batangas City" stays
     intact (remainder would be only "City").
     """
-    text = re.sub(r"\s+", " ", raw.strip())
+    text = re.sub(r"[|{}\[\]_~=—]+", " ", raw.strip())
+    text = re.sub(r"\s+", " ", text).strip(" -–—\t|/\\")
+    text = re.sub(r"(?<=[a-z])City\b", " City", text, flags=re.IGNORECASE)
     text = re.sub(r"\bCty\b", "City", text, flags=re.IGNORECASE)
     text = text.replace("Para�aque", "Paranaque").replace("PARA�AQUE", "PARANAQUE")
     text = re.sub(r"Paraaque|ParaÃ±aque|ParaÑaque", "Paranaque", text, flags=re.IGNORECASE)

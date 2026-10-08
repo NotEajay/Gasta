@@ -220,17 +220,21 @@ export async function fetchFuelPricesForBulletin(
 /** Distinct DOE area labels for one bulletin and region (excludes region-wide ''). */
 export async function fetchBulletinAreas(
   bulletinId: string,
-  regionCode: string
+  regionCode: string,
+  fuelTypeCode?: string
 ): Promise<string[]> {
   const regionId = await resolveRegionId(regionCode);
-  const { data, error } = await supabase
+  const fuelTypeId = fuelTypeCode ? await resolveFuelTypeId(fuelTypeCode) : null;
+  let query = supabase
     .from('fuel_prices')
     .select('area_name')
     .eq('bulletin_id', bulletinId)
     .eq('region_id', regionId)
     .neq('area_name', '')
     .order('area_name');
+  if (fuelTypeId) query = query.eq('fuel_type_id', fuelTypeId);
 
+  const { data, error } = await query;
   if (error) throw error;
   return [...new Set((data ?? []).map((row) => row.area_name).filter(Boolean))];
 }

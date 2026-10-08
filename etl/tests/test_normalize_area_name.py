@@ -23,3 +23,9 @@ from src.area_names import normalize_area_name
 )
 def test_normalize_area_strips_province_not_city_itself(raw: str, expected: str) -> None:
     assert normalize_area_name(raw) == expected
+
+
+def test_normalize_area_removes_ocr_table_punctuation() -> None:
+    assert normalize_area_name("Ilocos Norte Batac City {") == "Batac City"
+    assert normalize_area_name("Cagayan Solana _—[") == "Solana"
+    assert normalize_area_name("GAPANCITY") == "Gapan City"

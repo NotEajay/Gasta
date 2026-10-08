@@ -10,8 +10,8 @@ interface SourceBadgeProps {
 }
 
 const LABELS: Record<Source, string> = {
-  doe: 'DOE Bulletin',
-  community: 'Community Verified',
+  doe: 'Official DOE',
+  community: 'Community Report',
 };
 
 const COLORS: Record<Source, { bg: string; text: string }> = {

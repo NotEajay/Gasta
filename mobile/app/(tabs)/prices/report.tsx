@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -40,10 +40,27 @@ type SubmittedReport = {
 
 export default function ReportPriceScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    station_id?: string;
+    station_name?: string;
+    brand?: string;
+    fuel_type?: string;
+    region?: string;
+  }>();
   const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
-  const [region, setRegion] = useState<DoeRegionCode>('NCR');
-  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
+  const initialRegion =
+    typeof params.region === 'string' &&
+    DOE_REGIONS.some((option) => option.code === params.region)
+      ? (params.region as DoeRegionCode)
+      : 'NCR';
+  const initialFuelType =
+    typeof params.fuel_type === 'string' &&
+    DOE_FUEL_TYPES.some((option) => option.code === params.fuel_type)
+      ? (params.fuel_type as DoeFuelTypeCode)
+      : 'RON_91';
+  const [region, setRegion] = useState<DoeRegionCode>(initialRegion);
+  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>(initialFuelType);
   const [stations, setStations] = useState<FuelStationOption[]>([]);
   const [companies, setCompanies] = useState<{ id: string; name: string; slug: string }[]>([]);
   const [listedStationId, setListedStationId] = useState<string | null>(null);
@@ -79,6 +96,24 @@ export default function ReportPriceScreen() {
     setLoading(true);
     loadStations();
   }, [loadStations]);
+
+  useEffect(() => {
+    if (!stations.length) return;
+    const stationId = typeof params.station_id === 'string' ? params.station_id : null;
+    if (stationId && stations.some((station) => station.id === stationId)) {
+      applyListedStation(stationId);
+      return;
+    }
+    if (typeof params.brand === 'string' && params.brand.trim() && !stationName) {
+      const company = companies.find(
+        (candidate) =>
+          candidate.name.toLowerCase() === params.brand?.trim().toLowerCase() ||
+          candidate.slug.toLowerCase() === params.brand?.trim().toLowerCase()
+      );
+      setStationType(company?.name ?? params.brand.trim());
+      setCompanyId(company?.id ?? null);
+    }
+  }, [companies, params.brand, params.station_id, stationName, stations]);
 
   const applyListedStation = (id: string) => {
     const station = stations.find((s) => s.id === id);
@@ -139,6 +174,7 @@ export default function ReportPriceScreen() {
         (s) => s.name.trim().toLowerCase() === name.toLowerCase()
       );
       const stationId =
+        listedStationId ??
         match?.id ??
         (await createFuelStation({
           name,
