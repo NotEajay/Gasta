@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -28,17 +28,30 @@ import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
+  archiveVehicle,
   createVehicle,
   deleteVehicle,
+  DUPLICATE_VEHICLE_NAME_MESSAGE,
+  fetchArchivedVehicles,
   fetchFuelTypeIdByCode,
   fetchSharedVehicles,
   fetchVehicleCatalog,
   fetchVehicles,
+  getVehicleHistoryStatus,
+  restoreVehicle,
   updateVehicle,
   updateVehicleLastRefill,
+  type VehicleHistoryState,
 } from '@/lib/services/vehicles';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import type { SharedVehicle, Vehicle, VehicleCatalogEntry } from '@/types';
+
+/**
+ * Normalization rule for vehicle-nickname uniqueness, mirroring the DB index
+ * `lower(btrim(nickname))`. Trims surrounding whitespace and lower-cases, so
+ * "My Car", "my car" and " MY CAR " are all treated as the same name.
+ */
+const normalizeVehicleName = (value: string) => value.trim().toLowerCase();
 
 export default function VehiclesScreen() {
   const router = useRouter();
@@ -48,10 +61,14 @@ export default function VehiclesScreen() {
   // The add/edit form is collapsed by default so saved vehicles lead the page.
   const [formOpen, setFormOpen] = useState(false);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [archivedVehicles, setArchivedVehicles] = useState<Vehicle[]>([]);
   const [sharedVehicles, setSharedVehicles] = useState<SharedVehicle[]>([]);
   const [catalog, setCatalog] = useState<VehicleCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [destructiveBusy, setDestructiveBusy] = useState(false);
 
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
   const [selectedCatalogEntry, setSelectedCatalogEntry] = useState<VehicleCatalogEntry | null>(
@@ -67,6 +84,18 @@ export default function VehiclesScreen() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
 
+  // Duplicate active-nickname modal. Fully independent of the overflow-menu
+  // Modal so the two never interfere. `name` is the conflicting nickname shown
+  // in the message; opened by both the client pre-check and the DB 23505
+  // fallback, and reused for a restore conflict surfaced on this screen.
+  const [duplicateNameModal, setDuplicateNameModal] = useState<{
+    visible: boolean;
+    name: string;
+  }>({
+    visible: false,
+    name: '',
+  });
+
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editLastRefillPrice, setEditLastRefillPrice] = useState('');
   const [updatingRefill, setUpdatingRefill] = useState(false);
@@ -81,11 +110,35 @@ export default function VehiclesScreen() {
    */
   const [shareOpenId, setShareOpenId] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<Vehicle | null>(null);
-  const [menuHasRefill, setMenuHasRefill] = useState(false);
+  // menuVisible is separate from menuFor so the Modal mounts only after the
+  // anchor measurement resolves (no one-frame jump from the fallback corner).
+  const [menuVisible, setMenuVisible] = useState(false);
+  // Mirror of menuFor for probe callbacks (reading state inside .then is
+  // fine; calling setState inside another setState updater is not).
+  const menuForRef = useRef<Vehicle | null>(null);
+  // Gated destructive action: while history is unresolved ('idle'/'loading'/
+  // 'unknown') NO actionable Delete is ever shown — the safe direction is
+  // Archive. Only an explicit 'no-history' unlocks permanent delete, because
+  // FK 23503 only guards refill history; trip/saved-trip/share history would
+  // be silently nulled or cascade-wiped by a premature delete.
+  const [menuHistoryState, setMenuHistoryState] = useState<VehicleHistoryState>('idle');
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number } | null>(
     null,
   );
   const triggerNodes = useRef<Record<string, View | null>>({});
+  // Guards the async probe against a closed menu / a second menu opening:
+  // only the latest probe for the currently open vehicle may write state.
+  const menuProbeSeq = useRef(0);
+  // Deferred menu cleanup. The fade-out Modal keeps its children
+  // mounted for the whole native animation (iOS until the
+  // 'modalDismissed' event, web until the CSS animation ends),
+  // so closeMenu() freezes the menu's visual state and scrubs
+  // it only once the Modal reports onDismiss. Otherwise the
+  // fading menu teleports to the fallback corner and swaps its
+  // content mid-fade. menuClosePendingRef marks a close whose
+  // scrub is still pending; a reopen cancels it.
+  const menuClosePendingRef = useRef(false);
+  const menuCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const toggleShare = useCallback((vehicleId: string) => {
     setShareOpenId((current) => (current === vehicleId ? null : vehicleId));
@@ -96,22 +149,123 @@ export default function VehiclesScreen() {
    * Measurement goes through a plain View wrapper because this project's
    * react-native type surface does not expose `measureInWindow` on Pressable —
    * the same constraint RefillSplitSheet already works around.
+   *
+   * SAFETY: the destructive slot starts in 'loading' with NO actionable
+   * Delete. The probe resolves to has-history / no-history / unknown; only
+   * 'no-history' unlocks Delete. 'unknown' (RPC failure, RLS-truncated
+   * fallback, malformed row) resolves to Archive, never Delete.
    */
-  const openMenu = useCallback((vehicle: Vehicle, hasRefill: boolean) => {
+  const openMenu = useCallback((vehicle: Vehicle) => {
+    const seq = menuProbeSeq.current + 1;
+    menuProbeSeq.current = seq;
+    // This menu replaces any pending close: cancel its deferred
+    // scrub so it can never clear this menu's fresh state.
+    menuClosePendingRef.current = false;
+    if (menuCleanupTimerRef.current != null) {
+      clearTimeout(menuCleanupTimerRef.current);
+      menuCleanupTimerRef.current = null;
+    }
+    // Measure BEFORE showing the modal: menuVisible stays false until the
+    // anchor resolves, so the first painted frame is already positioned and
+    // there is no jump from the fallback corner.
+    menuForRef.current = vehicle;
     setMenuFor(vehicle);
-    setMenuHasRefill(hasRefill);
+    setMenuAnchor(null);
+    setMenuVisible(false);
+    setMenuHistoryState('loading');
     const node = triggerNodes.current[vehicle.id];
     if (node) {
       node.measureInWindow((x, y, width) => {
+        if (menuProbeSeq.current !== seq) return;
         setMenuAnchor({ x, y, width });
+        setMenuVisible(true);
       });
+    } else {
+      // Unmeasurable trigger (should not happen): still open without a jump
+      // by falling back to the default corner position.
+      setMenuVisible(true);
     }
+    void getVehicleHistoryStatus(vehicle.id)
+      .then((status) => {
+        // Direct guarded setState — never nested inside another updater.
+        // (Calling setState inside a setState updater is a purity violation:
+        // React may double-invoke or discard updaters, which previously left
+        // menuHistoryState stuck at 'loading' so Delete never appeared.)
+        if (menuProbeSeq.current !== seq) return;
+        if (menuForRef.current?.id !== vehicle.id) return;
+        setMenuHistoryState(status.state);
+      })
+      .catch(() => {
+        // getVehicleHistoryStatus itself never throws for history failures
+        // (it returns 'unknown'), so this only guards truly unexpected
+        // rejections — still safe: unknown → Archive.
+        if (menuProbeSeq.current !== seq) return;
+        if (menuForRef.current?.id !== vehicle.id) return;
+        setMenuHistoryState('unknown');
+      });
+  }, []);
+
+  /**
+   * Scrubs the menu's visual state. Only safe once the Modal
+   * is fully dismissed: while the fade-out animation runs, the
+   * menu must keep its anchor and content frozen or it
+   * visibly jumps.
+   */
+  const scrubMenuVisualState = useCallback(() => {
+    setMenuFor(null);
+    setMenuHistoryState('idle');
+    setMenuAnchor(null);
   }, []);
 
   const closeMenu = useCallback(() => {
-    setMenuFor(null);
-    setMenuAnchor(null);
-  }, []);
+    // Stale-probe invalidation stays IMMEDIATE: no in-flight
+    // probe may write state after close, and a rapid reopen
+    // must never observe the previous menu's state.
+    menuProbeSeq.current += 1;
+    menuForRef.current = null;
+    // Fade-out first, scrub after. The Modal keeps its children
+    // mounted while animating out (iOS 'modalDismissed' and the
+    // web CSS animation end both surface as onDismiss), so
+    // clearing menuFor / menuAnchor / menuHistoryState here made
+    // the fading menu teleport to the fallback corner and swap
+    // its content mid-fade — the "floating card" artifact.
+    // onDismiss scrubs as soon as the animation finishes; the
+    // timer is the fallback for platforms that never call
+    // onDismiss (Android), where the content unmounts
+    // immediately anyway.
+    menuClosePendingRef.current = true;
+    if (menuCleanupTimerRef.current != null) {
+      clearTimeout(menuCleanupTimerRef.current);
+    }
+    setMenuVisible(false);
+    menuCleanupTimerRef.current = setTimeout(() => {
+      menuCleanupTimerRef.current = null;
+      if (!menuClosePendingRef.current) return;
+      menuClosePendingRef.current = false;
+      scrubMenuVisualState();
+    }, 400);
+  }, [scrubMenuVisualState]);
+
+  // Leaving Vehicles (tab switch / stack push) must never leave a stale
+  // overlay behind: close the menu, clear the anchor, and invalidate any
+  // in-flight probe. Vehicle data and form state are intentionally kept.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        // The screen is unmounting, so the deferred close can
+        // never run — cancel it and force-clean immediately.
+        menuProbeSeq.current += 1;
+        menuForRef.current = null;
+        menuClosePendingRef.current = false;
+        if (menuCleanupTimerRef.current != null) {
+          clearTimeout(menuCleanupTimerRef.current);
+          menuCleanupTimerRef.current = null;
+        }
+        setMenuVisible(false);
+        scrubMenuVisualState();
+      };
+    }, [scrubMenuVisualState]),
+  );
 
   const searchResults = useMemo(() => {
     if (!catalogSearchQuery.trim() || selectedCatalogEntry) {
@@ -136,6 +290,14 @@ export default function VehiclesScreen() {
       ]);
       setVehicles(vehicleList);
       setCatalog(catalogList);
+
+      // Archived section is best-effort: it only exists after the archive
+      // migration is applied, and must never block the active list.
+      try {
+        setArchivedVehicles(await fetchArchivedVehicles(user.id));
+      } catch {
+        setArchivedVehicles([]);
+      }
 
       try {
         setSharedVehicles(await fetchSharedVehicles(user.id));
@@ -221,6 +383,25 @@ export default function VehiclesScreen() {
     setFormOpen(false);
   };
 
+  /**
+   * Opens the shared duplicate-name modal for a given nickname. Used by the
+   * client pre-check (create/edit) and by the DB 23505 fallback so both paths
+   * show the exact same friendly dialog. Never clears the entered value.
+   */
+  const showDuplicateNameModal = (name: string) => {
+    setDuplicateNameModal({ visible: true, name });
+  };
+
+  /**
+   * Dismisses the duplicate-name modal. The form is left open and the entered
+   * value untouched; we scroll the form back into view so the Vehicle name
+   * field — which still shows its inline error — keeps the user's attention.
+   */
+  const hideDuplicateNameModal = () => {
+    setDuplicateNameModal((prev) => ({ ...prev, visible: false }));
+    if (formOpen) revealForm();
+  };
+
   const handleAdd = async () => {
     if (!user) return;
 
@@ -235,6 +416,26 @@ export default function VehiclesScreen() {
 
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
+      return;
+    }
+
+    // Active per-owner nickname uniqueness (mirrors the DB partial unique index
+    // vehicles_user_active_nickname_unique). Compare only nicknames — never
+    // brand/model — against this user's ACTIVE vehicles. On edit, exclude the
+    // vehicle being edited so it may keep (or merely re-case / re-space) its
+    // own name, while still being blocked from taking another vehicle's name.
+    const normalizedName = normalizeVehicleName(vehicleName);
+    const nicknameClash = vehicles.some(
+      (v) =>
+        v.id !== editingVehicle?.id &&
+        v.nickname != null &&
+        normalizeVehicleName(v.nickname) === normalizedName,
+    );
+    if (nicknameClash) {
+      // Keep the inline field error AND surface the shared modal. The form
+      // stays open with the entered value intact.
+      setFieldErrors((prev) => ({ ...prev, vehicleName: DUPLICATE_VEHICLE_NAME_MESSAGE }));
+      showDuplicateNameModal(vehicleName);
       return;
     }
 
@@ -286,7 +487,16 @@ export default function VehiclesScreen() {
         editingVehicle ? 'Vehicle updated successfully.' : 'Vehicle added to your profile.',
       );
     } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save vehicle');
+      // A duplicate returned from the DB/service arrives here as
+      // DUPLICATE_VEHICLE_NAME_MESSAGE (service maps 23505 → that message).
+      // Show the SAME custom modal — never a second native Alert on top of it —
+      // and keep the inline field error. All other errors keep the native path.
+      if (e instanceof Error && e.message === DUPLICATE_VEHICLE_NAME_MESSAGE) {
+        setFieldErrors((prev) => ({ ...prev, vehicleName: DUPLICATE_VEHICLE_NAME_MESSAGE }));
+        showDuplicateNameModal(vehicleName);
+      } else {
+        Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save vehicle');
+      }
     } finally {
       setSaving(false);
     }
@@ -312,39 +522,154 @@ export default function VehiclesScreen() {
     }
   };
 
-  const handleDelete = (vehicleId: string) => {
+  const handleDelete = (vehicleId: string, historyState: VehicleHistoryState) => {
     closeMenu();
-    Alert.alert('Delete vehicle', 'Remove this vehicle from your profile?', [
+    // Vehicles with dependent history — or UNKNOWN history — are archived,
+    // never hard-deleted, so refill, trip, expense and shared rows stay
+    // intact. Only an explicit 'no-history' unlocks permanent delete, because
+    // FK 23503 guards refills only: trip/saved-trip history would be nulled
+    // (SET NULL) and share history cascade-wiped by a premature delete.
+    if (historyState !== 'no-history') {
+      Alert.alert(
+        'Archive vehicle?',
+        'This vehicle will be removed from your active vehicles, but its refill, trip, expense, and shared history will be preserved.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Archive',
+            style: 'destructive',
+            onPress: async () => {
+              if (destructiveBusy) return;
+              setDestructiveBusy(true);
+              try {
+                await archiveVehicle(vehicleId);
+                await load();
+                Alert.alert(
+                  'Archived',
+                  'Vehicle archived. Keeps refill, trip, expense, and shared history.',
+                );
+              } catch (e) {
+                Alert.alert('Error', e instanceof Error ? e.message : 'Failed to archive');
+              } finally {
+                setDestructiveBusy(false);
+              }
+            },
+          },
+        ],
+      );
+      return;
+    }
+    Alert.alert('Delete vehicle', 'Remove this vehicle from your profile? This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Delete',
+        text: 'Delete permanently',
         style: 'destructive',
         onPress: async () => {
+          if (destructiveBusy) return;
+          setDestructiveBusy(true);
           try {
             await deleteVehicle(vehicleId);
             await load();
           } catch (e) {
-            // vehicle_refills.vehicle_id is ON DELETE RESTRICT, so a vehicle with
-            // refill history cannot be removed. Voiding does NOT help: a voided
-            // row still exists and still references the vehicle, so there is no
-            // in-app way to unblock this today. Say so plainly instead of
-            // leaking a Postgres foreign-key message or promising a false fix.
+            // Race-condition backstop ONLY: FK 23503 guards refill history, so a
+            // 23503 here means a refill landed between the probe and the tap.
+            // Trip/saved-trip/share deletes do NOT raise — that is exactly why
+            // Delete is gated on an explicit 'no-history' above and never on
+            // this handler. Never leak SQL — offer the archive path instead.
             const code =
               typeof e === 'object' && e !== null ? (e as { code?: string }).code : undefined;
             if (code === '23503') {
               Alert.alert(
-                'Cannot delete this vehicle',
-                'This vehicle cannot be deleted because it has refill history. ' +
-                  'Keeping the vehicle preserves its fuel records and shared history.',
+                'Cannot delete permanently',
+                'This vehicle now has history and can no longer be permanently deleted. Archive it instead.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Archive vehicle',
+                    style: 'destructive',
+                    onPress: async () => {
+                      try {
+                        await archiveVehicle(vehicleId);
+                        await load();
+                        Alert.alert(
+                          'Archived',
+                          'Vehicle archived. Keeps refill, trip, expense, and shared history.',
+                        );
+                      } catch (archiveError) {
+                        Alert.alert(
+                          'Error',
+                          archiveError instanceof Error ? archiveError.message : 'Failed to archive',
+                        );
+                      }
+                    },
+                  },
+                ],
               );
               return;
             }
             Alert.alert('Error', e instanceof Error ? e.message : 'Failed to delete');
+          } finally {
+            setDestructiveBusy(false);
           }
         },
       },
     ]);
   };
+
+  const handleRestore = (vehicleId: string, label: string) => {
+    Alert.alert('Restore vehicle?', `Return "${label}" to your active vehicles?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Restore',
+        onPress: async () => {
+          setRestoringId(vehicleId);
+          try {
+            await restoreVehicle(vehicleId);
+            await load();
+          } catch (e) {
+            // Restoring an archived vehicle can collide with an ACTIVE vehicle
+            // of the same name; the service maps that 23505 to the duplicate
+            // message. Surface the SAME custom modal instead of a native Alert.
+            if (e instanceof Error && e.message === DUPLICATE_VEHICLE_NAME_MESSAGE) {
+              showDuplicateNameModal(label);
+            } else {
+              Alert.alert('Error', e instanceof Error ? e.message : 'Failed to restore');
+            }
+          } finally {
+            setRestoringId(null);
+          }
+        },
+      },
+    ]);
+  };
+
+  /**
+   * Archive is the safe destructive direction, so it stays
+   * actionable once history resolves to has-history / unknown.
+   * Defined once so the fixed single-row menu slot can render it
+   * without duplicating markup. The history status now only swaps
+   * the third row's content in place — it never changes menu size.
+   */
+  const archiveAction = (
+    <Pressable
+      accessibilityRole="menuitem"
+      accessibilityLabel="Archive vehicle"
+      onPress={() => {
+        const target = menuFor;
+        closeMenu();
+        if (target) handleDelete(target.id, 'has-history');
+      }}
+      style={({ pressed }) => [
+        styles.menuItem,
+        styles.menuSlotRow,
+        pressed && styles.menuItemPressed,
+      ]}>
+      <Ionicons name="archive-outline" size={16} color={palette.danger} />
+      <Text style={[styles.menuItemText, styles.menuItemDanger]} numberOfLines={1}>
+        Archive vehicle
+      </Text>
+    </Pressable>
+  );
 
   if (!isSupabaseConfigured) {
     return (
@@ -583,12 +908,12 @@ export default function VehiclesScreen() {
 
                   {/* Header controls. Icon-only so they never crowd the vehicle
                       name on a 320-375px screen; both carry accessibility
-                      labels. Sharing drives the panel's controlled expansion —
-                      no sharing logic moved. */}
+                      labels. Access management drives the panel's controlled
+                      expansion — no sharing logic moved. */}
                   {showRefillForm || isEditingThis ? null : (
                     <View style={styles.cardHeadActions}>
                       <Pressable
-                        accessibilityLabel="Share vehicle"
+                        accessibilityLabel="Manage access"
                         accessibilityRole="button"
                         accessibilityState={{ expanded: shareOpenId === v.id }}
                         hitSlop={8}
@@ -598,7 +923,7 @@ export default function VehiclesScreen() {
                           pressed && styles.cardHeadBtnPressed,
                         ]}>
                         <Ionicons
-                          name={shareOpenId === v.id ? 'chevron-up' : 'share-social-outline'}
+                          name={shareOpenId === v.id ? 'chevron-up' : 'people-outline'}
                           size={17}
                           color={GasTaColors.forest}
                         />
@@ -612,7 +937,7 @@ export default function VehiclesScreen() {
                           accessibilityLabel="More vehicle actions"
                           accessibilityRole="button"
                           hitSlop={8}
-                          onPress={() => openMenu(v, hasRefill)}
+                          onPress={() => openMenu(v)}
                           style={({ pressed }) => [
                             styles.cardHeadBtn,
                             pressed && styles.cardHeadBtnPressed,
@@ -775,19 +1100,38 @@ export default function VehiclesScreen() {
           A transparent Modal with a tap-to-dismiss backdrop is used because it
           escapes the ScrollView's bounds on every platform, including web, with
           no new dependency. Each item calls the SAME handler the old inline
-          action row used — no logic was duplicated or moved. */}
+          action row used — no logic was duplicated or moved.
+          Lifecycle: menuVisible is set ONLY after measureInWindow
+          resolves, so the first painted frame is already anchored
+          (no corner jump). The destructive/status slot is a SINGLE
+          fixed-height row: the history probe resolving only swaps that
+          row's content in place (Delete / Archive / disabled "Checking…"),
+          so the menu never resizes or jumps mid-open. */}
       <Modal
         animationType="fade"
         transparent
-        visible={menuFor !== null}
-        onRequestClose={closeMenu}>
+        visible={menuVisible}
+        onRequestClose={closeMenu}
+        onDismiss={() => {
+          // The fade-out animation finished (iOS
+          // 'modalDismissed', web CSS animation end).
+          // Safe to scrub the frozen menu state now —
+          // the menu is gone, so nothing can flash.
+          if (!menuClosePendingRef.current) return;
+          menuClosePendingRef.current = false;
+          if (menuCleanupTimerRef.current != null) {
+            clearTimeout(menuCleanupTimerRef.current);
+            menuCleanupTimerRef.current = null;
+          }
+          scrubMenuVisualState();
+        }}>
         <Pressable style={styles.menuBackdrop} onPress={closeMenu} accessibilityLabel="Close menu">
           <View
             pointerEvents="box-none"
             style={[
               styles.menu,
-              // Anchored under the measured ellipsis, clamped so the menu can
-              // never run off the left edge on a narrow screen.
+              // Anchor is always set before menuVisible, but keep the guarded
+              // fallback so a missed measurement can never crash layout.
               menuAnchor
                 ? {
                     top: menuAnchor.y + 30,
@@ -813,7 +1157,7 @@ export default function VehiclesScreen() {
             <Pressable
               accessibilityRole="menuitem"
               accessibilityLabel={
-                menuHasRefill ? 'Update refill price' : 'Set refill price'
+                menuFor?.last_refill_price != null ? 'Update refill price' : 'Set refill price'
               }
               onPress={() => {
                 const target = menuFor;
@@ -827,27 +1171,131 @@ export default function VehiclesScreen() {
               style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
               <Ionicons name="cash-outline" size={16} color={GasTaColors.forestDark} />
               <Text style={styles.menuItemText}>
-                {menuHasRefill ? 'Update refill price' : 'Set refill price'}
+                {menuFor?.last_refill_price != null ? 'Update refill price' : 'Set refill price'}
               </Text>
             </Pressable>
 
             <View style={styles.menuDivider} />
 
-            <Pressable
-              accessibilityRole="menuitem"
-              accessibilityLabel="Delete vehicle"
-              onPress={() => {
-                const target = menuFor;
-                closeMenu();
-                if (target) handleDelete(target.id);
-              }}
-              style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
-              <Ionicons name="trash-outline" size={16} color={palette.danger} />
-              <Text style={[styles.menuItemText, styles.menuItemDanger]}>Delete vehicle</Text>
-            </Pressable>
+            {/* Destructive/status slot — a SINGLE fixed-height row so the
+                menu never resizes or jumps when the history probe resolves.
+                State maps to exactly one action, swapped in place:
+                  loading / idle -> disabled "Checking vehicle history…"
+                  no-history     -> Delete vehicle
+                  has-history    -> Archive vehicle
+                  unknown        -> Archive vehicle
+                No second hint/context row. Archive is intentionally NOT
+                shown alongside the loading row — the disabled row is enough
+                until the trusted state resolves. */}
+            {menuHistoryState === 'loading' || menuHistoryState === 'idle' ? (
+              <View
+                accessibilityRole="text"
+                accessibilityLabel="Checking vehicle history"
+                style={[styles.menuItem, styles.menuSlotRow, styles.menuItemDisabled]}>
+                <Ionicons name="hourglass-outline" size={16} color={GasTaColors.textMuted} />
+                <Text style={[styles.menuItemText, styles.menuItemMuted]} numberOfLines={1}>
+                  Checking vehicle history…
+                </Text>
+              </View>
+            ) : menuHistoryState === 'no-history' ? (
+              <Pressable
+                accessibilityRole="menuitem"
+                accessibilityLabel="Delete vehicle"
+                onPress={() => {
+                  const target = menuFor;
+                  closeMenu();
+                  if (target) handleDelete(target.id, 'no-history');
+                }}
+                style={({ pressed }) => [
+                  styles.menuItem,
+                  styles.menuSlotRow,
+                  pressed && styles.menuItemPressed,
+                ]}>
+                <Ionicons name="trash-outline" size={16} color={palette.danger} />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]} numberOfLines={1}>
+                  Delete vehicle
+                </Text>
+              </Pressable>
+            ) : (
+              archiveAction
+            )}
           </View>
         </Pressable>
       </Modal>
+
+      {/* ------------------------------------------- duplicate vehicle name
+          Friendly in-app dialog shown when a create/edit duplicate is detected
+          client-side, when the DB returns 23505, or when a restore collides
+          with an active vehicle of the same name. Independent of the overflow
+          menu Modal above. Centered card, dim backdrop, single primary action —
+          no destructive red, no oversized graphics. */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={duplicateNameModal.visible}
+        onRequestClose={hideDuplicateNameModal}>
+        <Pressable style={styles.dupNameBackdrop} onPress={hideDuplicateNameModal}>
+          <View style={styles.dupNameCard}>
+            <View style={styles.dupNameIcon}>
+              <Ionicons name="information-circle" size={22} color={GasTaColors.forest} />
+            </View>
+            <Text style={styles.dupNameTitle}>Vehicle name already used</Text>
+            <Text style={styles.dupNameMessage}>
+              You already have an active vehicle named “{duplicateNameModal.name}”. Please use a
+              different name.
+            </Text>
+            <PrimaryButton label="Got it" onPress={hideDuplicateNameModal} />
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* ------------------------------------------- archived vehicles
+          Owner-only management section. Archived rows never appear in active
+          selectors; Restore returns the row to active use. */}
+      {archivedVehicles.length > 0 ? (
+        <View style={styles.archivedSection}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={archivedOpen ? 'Hide archived vehicles' : 'Show archived vehicles'}
+            onPress={() => setArchivedOpen((open) => !open)}
+            style={styles.archivedToggle}>
+            <Text style={styles.archivedTitle}>Archived vehicles ({archivedVehicles.length})</Text>
+            <Ionicons
+              name={archivedOpen ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={GasTaColors.textSoft}
+            />
+          </Pressable>
+          {archivedOpen
+            ? archivedVehicles.map((v) => (
+                <View key={v.id} style={styles.archivedCard}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={styles.vehicleName}>
+                      {v.nickname ?? `${v.brand} ${v.model}`}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.vehicleMeta}>
+                      {v.brand} {v.model} · {v.year}
+                      {v.archived_at ? ` · archived ${formatDate(v.archived_at)}` : ''}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Restore ${v.nickname ?? `${v.brand} ${v.model}`}`}
+                    disabled={restoringId === v.id}
+                    onPress={() => handleRestore(v.id, v.nickname ?? `${v.brand} ${v.model}`)}
+                    style={({ pressed }) => [
+                      styles.archivedRestoreBtn,
+                      pressed && styles.cardHeadBtnPressed,
+                    ]}>
+                    <Text style={styles.archivedRestoreText}>
+                      {restoringId === v.id ? 'Restoring…' : 'Restore'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ))
+            : null}
+        </View>
+      ) : null}
 
     </ScrollView>
     </HideWhenBlurred>
@@ -1076,6 +1524,107 @@ const styles = StyleSheet.create({
   },
   menuItemDanger: {
     color: palette.danger,
+  },
+  menuItemDisabled: {
+    opacity: 0.7,
+  },
+  menuItemMuted: {
+    color: GasTaColors.textMuted,
+    fontWeight: '600',
+  },
+  // Fixed-height third row. A single row whose content swaps in place when
+  // menuHistoryState resolves (Delete / Archive / disabled "Checking…"), so
+  // the menu height is identical in every state and never resizes mid-open.
+  menuSlotRow: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+
+  // ---- duplicate vehicle name modal --------------------------------------
+  dupNameBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 48, 25, 0.42)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: GasTaSpacing.lg,
+  },
+  dupNameCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: GasTaColors.white,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+    paddingHorizontal: GasTaSpacing.lg,
+    paddingTop: GasTaSpacing.lg,
+    paddingBottom: GasTaSpacing.lg,
+    alignItems: 'center',
+    // Restrained lift — present, never heavy.
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    elevation: 6,
+  },
+  dupNameIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TINT_BG,
+    marginBottom: GasTaSpacing.md,
+  },
+  dupNameTitle: {
+    ...typeScale.sectionHeading,
+    color: GasTaColors.forestDark,
+    textAlign: 'center',
+  },
+  dupNameMessage: {
+    ...typeScale.body,
+    color: GasTaColors.textMuted,
+    textAlign: 'center',
+    marginTop: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.lg,
+    lineHeight: 21,
+  },
+  archivedToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  archivedTitle: {
+    ...typeScale.bodySmall,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  archivedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    marginTop: GasTaSpacing.sm,
+    paddingTop: GasTaSpacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.glassBorderSubtle,
+  },
+  archivedRestoreBtn: {
+    paddingHorizontal: GasTaSpacing.md,
+    paddingVertical: 8,
+    borderRadius: GasTaRadius.pill,
+    backgroundColor: TINT_BG,
+  },
+  archivedRestoreText: {
+    ...typeScale.label,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+  },
+  archivedSection: {
+    marginTop: SECTION_GAP,
+    backgroundColor: GasTaColors.white,
+    borderRadius: GasTaRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+    padding: SURFACE_PAD,
   },
   menuDivider: {
     height: StyleSheet.hairlineWidth,

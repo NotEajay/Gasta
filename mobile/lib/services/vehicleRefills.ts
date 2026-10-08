@@ -78,6 +78,9 @@ export interface CreateRefillInput {
 }
 
 export async function createVehicleRefill(input: CreateRefillInput): Promise<VehicleRefill> {
+  // Archived vehicles cannot receive new refills. The active selectors already
+  // hide them, so this is a backstop for stale in-memory state.
+  await assertVehicleActive(input.vehicleId);
   const { data, error } = await db
     .from('vehicle_refills')
     .insert({
@@ -137,4 +140,27 @@ export async function voidVehicleRefill(refillId: string): Promise<VehicleRefill
   const { data, error } = await db.rpc('void_vehicle_refill', { p_refill_id: refillId });
   if (error) throw error;
   return data;
+}
+
+/**
+ * Archived-vehicle guard shared by new-refill writes. Pre-migration projects
+ * have no archived_at column (42703): treat the vehicle as active rather than
+ * blocking the write.
+ */
+async function assertVehicleActive(vehicleId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('id, archived_at')
+    .eq('id', vehicleId)
+    .maybeSingle();
+  if (error) {
+    if (error.code === '42703' || /archived_at/i.test(error.message)) return;
+    // Unreadable vehicle (e.g. revoked share): let the refill INSERT enforce
+    // access via RLS instead of inventing a second error here.
+    return;
+  }
+  const archivedAt = (data as { archived_at?: string | null } | null)?.archived_at ?? null;
+  if (archivedAt != null) {
+    throw new Error('This vehicle is archived and cannot receive new refills. Restore it first.');
+  }
 }

@@ -158,6 +158,8 @@ export interface Vehicle {
   nickname: string | null;
   last_refill_price: number | null;
   last_refill_at: string | null;
+  /** Null = active. Set = archived (soft-deleted, history preserved). */
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }

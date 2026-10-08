@@ -28,6 +28,9 @@ export async function fetchSavedTrips(userId: string): Promise<SavedTrip[]> {
 }
 
 export async function createSavedTrip(input: CreateSavedTripInput): Promise<SavedTrip> {
+  // New saved-trip selection never offers archived vehicles; this guards
+  // stale in-memory state the same way the refill guard does.
+  if (input.vehicleId) await assertVehicleActive(input.vehicleId);
   const { data, error } = await supabase
     .from('saved_trips')
     .insert({
@@ -52,4 +55,20 @@ export async function createSavedTrip(input: CreateSavedTripInput): Promise<Save
 export async function deleteSavedTrip(savedTripId: string): Promise<void> {
   const { error } = await supabase.from('saved_trips').delete().eq('id', savedTripId);
   if (error) throw error;
+}
+
+async function assertVehicleActive(vehicleId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('id, archived_at')
+    .eq('id', vehicleId)
+    .maybeSingle();
+  if (error) {
+    if (error.code === '42703' || /archived_at/i.test(error.message)) return;
+    return;
+  }
+  const archivedAt = (data as { archived_at?: string | null } | null)?.archived_at ?? null;
+  if (archivedAt != null) {
+    throw new Error('This vehicle is archived. Restore it before using it for new trips.');
+  }
 }

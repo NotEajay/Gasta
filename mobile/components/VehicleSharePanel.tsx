@@ -168,7 +168,7 @@ export default function VehicleSharePanel({
 
   const canSubmit = shareMode === 'new' || shareMode === 'restore';
   const primaryLabel =
-    sharing ? 'Saving…' : shareMode === 'restore' ? 'Restore access' : 'Share vehicle';
+    sharing ? 'Saving…' : shareMode === 'restore' ? 'Restore access' : 'Give access';
 
   const loadShares = useCallback(async () => {
     setLoadingShares(true);
@@ -324,7 +324,7 @@ export default function VehicleSharePanel({
     } catch (error) {
       setMessage({
         kind: 'error',
-        text: error instanceof Error ? error.message : 'Unable to share this vehicle.',
+        text: error instanceof Error ? error.message : 'Unable to update vehicle access.',
       });
     } finally {
       setSharing(false);
@@ -370,26 +370,26 @@ export default function VehicleSharePanel({
     <View style={styles.wrap}>
       {controlled ? null : (
         <Pressable
-          accessibilityLabel="Share vehicle"
+          accessibilityLabel="Manage access"
           accessibilityRole="button"
           onPress={toggleExpanded}
           style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}>
           <Ionicons
-            name={expanded ? 'chevron-up' : 'share-social-outline'}
+            name={expanded ? 'chevron-up' : 'people-outline'}
             size={14}
             color={palette.primary}
           />
           <Text style={styles.shareButtonLabel}>
-            {expanded ? 'Hide sharing' : 'Share vehicle'}
+            {expanded ? 'Hide access' : 'Manage access'}
           </Text>
         </Pressable>
       )}
 
       {expanded ? (
         <View style={[styles.panel, { borderTopColor: GasTaColors.glassBorderSubtle }]}>
-          <Text style={[styles.panelTitle, { color: GasTaColors.forestDark }]}>Share vehicle</Text>
+          <Text style={[styles.panelTitle, { color: GasTaColors.forestDark }]}>Vehicle access</Text>
           <Text style={[styles.panelDescription, { color: GasTaColors.textMuted }]}>
-            Invite another GasTa user to access and collaborate on this vehicle.
+            Allow another GasTa user to view or help manage this vehicle.
           </Text>
           <Text style={[styles.ownerNote, { color: GasTaColors.textMuted }]}>
             You are the Owner.
@@ -482,7 +482,7 @@ export default function VehicleSharePanel({
 
           <View style={styles.sharedHeader}>
             <Text style={[styles.sharedHeading, { color: GasTaColors.forestDark }]}>
-              Collaborators ({activeShares.length})
+              People with access ({activeShares.length})
             </Text>
           </View>
 
@@ -494,11 +494,11 @@ export default function VehicleSharePanel({
 
           {loadingShares ? (
             <Text style={[styles.sharedEmpty, { color: GasTaColors.textMuted }]}>
-              Loading collaborators…
+              Loading people with access…
             </Text>
           ) : activeShares.length === 0 ? (
             <Text style={[styles.sharedEmpty, { color: GasTaColors.textMuted }]}>
-              No collaborators yet. Share this vehicle to get started.
+              No one has access yet. Give access to get started.
             </Text>
           ) : (
             activeShares.map((share) => {
@@ -507,7 +507,7 @@ export default function VehicleSharePanel({
               // that string is already in memory and typed by them. No other
               // source may safely expose a collaborator's email today.
               const name = resolveName(members, share.shared_with);
-              const displayName = name ?? 'Shared user';
+              const displayName = name ?? 'GasTa user';
               const knownEmail =
                 lookedUpUser?.id === share.shared_with && email ? email : null;
               const isViewer = share.role === 'Viewer';
