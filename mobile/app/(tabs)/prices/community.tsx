@@ -1,4 +1,4 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
@@ -169,6 +169,15 @@ export default function CommunityPricesScreen() {
       }>
       {/* Header carries the report action so it is reachable from the top of
           the screen rather than only at the bottom. Route is unchanged. */}
+      <Pressable
+        accessibilityLabel="Go back"
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={() => router.back()}
+        style={styles.backBtn}>
+        <Ionicons name="chevron-back" size={18} color={GasTaColors.forest} />
+        <Text style={styles.backText}>Back</Text>
+      </Pressable>
       <View style={styles.headerRow}>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Community Prices</Text>
@@ -398,6 +407,19 @@ const styles = StyleSheet.create({
   padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
 
   /* ---- header ---- */
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 2,
+    paddingVertical: 4,
+    marginBottom: spacing.sm,
+  },
+  backText: {
+    color: GasTaColors.forest,
+    fontSize: 15,
+    fontWeight: '600',
+  },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
