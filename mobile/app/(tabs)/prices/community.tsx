@@ -1,25 +1,29 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import BrandMark from '@/components/ui/BrandMark';
 import LoadingState from '@/components/ui/LoadingState';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, formatRelativeReportAge } from '@/lib/format';
 import {
   canDeleteCommunityReport,
+  communityReportMatchesRecency,
   confirmationsLabel,
   confirmCommunityReport,
   deleteCommunityReport,
-  fetchFreshVerifiedPrices,
+  fetchCommunityReports,
   fetchMyCommunityReports,
   fetchPendingReports,
+  isHistoricalCommunityReport,
+  type CommunityRecency,
   type PendingCommunityReport,
-  type VerifiedCommunityPrice,
+  type CommunityReport,
 } from '@/lib/services/communityReports';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { Text } from '@/components/Themed';
@@ -29,12 +33,21 @@ import { Text } from '@/components/Themed';
  * never binds, so the column is effectively full width.
  */
 const SHELL_MAX_WIDTH = 660;
+const RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = [
+  { value: 'recent', label: 'Recent' },
+  { value: '7days', label: 'Last 7 Days' },
+  { value: '30days', label: 'Last 30 Days' },
+  { value: 'past', label: 'Past' },
+];
 
 export default function CommunityPricesScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-  const [verified, setVerified] = useState<VerifiedCommunityPrice[]>([]);
-  const [pending, setPending] = useState<PendingCommunityReport[]>([]);
+  const [reports, setReports] = useState<CommunityReport[]>([]);
+  // Confirmation queue is fetched without a period bound on purpose (see
+  // `load`): pending reports must stay confirmable in every period.
+  const [pendingAwaiting, setPendingAwaiting] = useState<PendingCommunityReport[]>([]);
+  const [recency, setRecency] = useState<CommunityRecency>('recent');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -50,13 +63,19 @@ export default function CommunityPricesScreen() {
       return;
     }
     try {
-      const [v, p, own] = await Promise.all([
-        fetchFreshVerifiedPrices(),
-        fetchPendingReports(),
+      const [allReports, awaiting, own] = await Promise.all([
+        // Query-side period filter: each chip fetches only its own window, so
+        // the Past filter reaches rows older than 30 days even when newer
+        // reports would fill the row limit first.
+        fetchCommunityReports(200, { recency }),
+        fetchPendingReports(50).catch((e) => {
+          console.warn('Pending community reports failed', e);
+          return [];
+        }),
         user ? fetchMyCommunityReports(user.id).catch(() => []) : Promise.resolve([]),
       ]);
-      setVerified(v);
-      setPending(p);
+      setReports(allReports);
+      setPendingAwaiting(awaiting);
       setMine(own);
     } catch (e) {
       console.warn('Community prices load failed', e);
@@ -64,14 +83,21 @@ export default function CommunityPricesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, recency]);
+
+  const filteredReports = useMemo(
+    // Client-side safety mirror of the query-side bound in `fetchCommunityReports`.
+    () => reports.filter((report) => communityReportMatchesRecency(report.created_at, recency)),
+    [reports, recency]
+  );
+  const displayedReports = filteredReports.filter((report) => report.status !== 'pending');
 
   useFocusEffect(
     useCallback(() => {
-      // Reset state and reload to ensure fresh data from database
-      setVerified([]);
-      setPending([]);
-      setMine([]);
+      // Reload on every focus AND whenever the period changes (this callback's
+      // identity includes `recency`, which re-runs the query-side fetch). No
+      // clearing up-front: the previous rows stay on screen until replacements
+      // land, so switching chips never flashes the empty state.
       void load();
     }, [load])
   );
@@ -195,26 +221,52 @@ export default function CommunityPricesScreen() {
         </Pressable>
       </View>
 
-      <Text style={styles.sectionTitle}>Verified · fresh 7 days</Text>
-      {verified.length === 0 ? (
+      <Text style={styles.filterLabel}>Report period</Text>
+      <View style={styles.filterRow}>
+        {RECENCY_OPTIONS.map((option) => {
+          const active = recency === option.value;
+          return (
+            <Pressable
+              key={option.value}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              onPress={() => setRecency(option.value)}
+              style={[styles.filterChip, active && styles.filterChipActive]}>
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Text style={styles.sectionTitle}>Community Station Reports</Text>
+      {displayedReports.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>No verified community prices yet</Text>
+          <Text style={styles.emptyTitle}>No verified community reports are available for this period.</Text>
           <Text style={styles.emptyLine}>
-            Report a price you saw, then ask others to confirm it at the station.
+            Report a price you saw, then ask others to confirm it at the station. Historical reports remain
+            available through the Past filter.
           </Text>
         </View>
       ) : (
         <View style={[styles.list, styles.verifiedList]}>
-          {verified.map((row, index) => (
+          {displayedReports.map((row, index) => (
             <View
-              key={row.report_id}
+              key={row.id}
               style={[
                 styles.row,
-                index < verified.length - 1 && styles.divider,
+                index < displayedReports.length - 1 && styles.divider,
               ]}>
+              <BrandMark
+                brand={row.station?.brand_label ?? row.station?.oil_company?.name}
+                slug={row.station?.oil_company?.slug}
+                stationName={row.station?.name}
+                size="md"
+              />
               <View style={styles.rowMain}>
                 <Text style={styles.station} numberOfLines={1}>
-                  {row.station_name}
+                  {row.station?.name ?? 'Station'}
                 </Text>
                 <View style={styles.metaRow}>
                   <View style={styles.verifiedPill}>
@@ -224,10 +276,25 @@ export default function CommunityPricesScreen() {
                       color={GasTaColors.forest}
                     />
                     <Text style={styles.verifiedText}>
-                      Verified {formatDate(row.verified_at)}
+                      {/* Older than the 7-day recommendation freshness window
+                          (verified_at): still readable for monitoring/history,
+                          but never labelled as a current price input. */}
+                      {row.status === 'verified'
+                        ? isHistoricalCommunityReport(row)
+                          ? 'Verified · Historical'
+                          : `✓ Verified · ${row.confirmation_count} confirmation${
+                              row.confirmation_count === 1 ? '' : 's'
+                            }`
+                        : row.status === 'needs_review'
+                          ? 'Needs Review'
+                          : 'Rejected'}
                     </Text>
                   </View>
                 </View>
+                <Text style={styles.meta}>
+                  {row.fuel_type?.name ?? 'Fuel'} · {formatRelativeReportAge(row.created_at)}
+                  {isHistoricalCommunityReport(row) ? ` · ${formatDate(row.created_at)}` : ''}
+                </Text>
               </View>
               <Text style={styles.price}>
                 {formatCurrency(row.reported_price)}
@@ -274,6 +341,12 @@ export default function CommunityPricesScreen() {
                       index < mine.length - 1 && styles.divider,
                     ]}>
                     <View style={styles.rowHead}>
+                      <BrandMark
+                        brand={report.station?.brand_label ?? report.station?.oil_company?.name}
+                        slug={report.station?.oil_company?.slug}
+                        stationName={report.station?.name}
+                        size="sm"
+                      />
                       <View style={styles.rowMain}>
                         <View style={styles.ownTitleRow}>
                           <Text style={styles.station} numberOfLines={1}>
@@ -284,9 +357,10 @@ export default function CommunityPricesScreen() {
                           </View>
                         </View>
                         <Text style={styles.meta} numberOfLines={1}>
-                          {report.fuel_type?.name ?? 'Fuel'} ·{' '}
-                          {confirmationsLabel(report.confirmation_count)} ·{' '}
-                          {formatDate(report.created_at)}
+                          {report.fuel_type?.name ?? 'Fuel'} · {formatRelativeReportAge(report.created_at)} ·{' '}
+                          {report.confirmation_count === 0
+                            ? 'Pending · No confirmations yet'
+                            : `Pending · ${report.confirmation_count}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`}
                         </Text>
                       </View>
                       <View style={styles.ownPriceCol}>
@@ -346,20 +420,28 @@ export default function CommunityPricesScreen() {
           message="Sign in to confirm community price reports."
           onSignIn={() => router.push('/login')}
         />
-      ) : pending.length === 0 ? (
+      ) : pendingAwaiting.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>You&apos;re all caught up</Text>
-          <Text style={styles.emptyLine}>No pending reports waiting for confirmation.</Text>
+          <Text style={styles.emptyTitle}>Nothing waiting for confirmation</Text>
+          <Text style={styles.emptyLine}>
+            There are no pending reports waiting for confirmation right now.
+          </Text>
         </View>
       ) : (
         <View style={[styles.list, styles.pendingList]}>
-          {pending.map((report, index) => {
-            const isLast = index === pending.length - 1;
+          {pendingAwaiting.map((report, index) => {
+            const isLast = index === pendingAwaiting.length - 1;
             return (
               <View
                 key={report.id}
                 style={[styles.row, styles.rowStacked, !isLast && styles.divider]}>
                 <View style={styles.rowHead}>
+                  <BrandMark
+                    brand={report.station?.brand_label ?? report.station?.oil_company?.name}
+                    slug={report.station?.oil_company?.slug}
+                    stationName={report.station?.name}
+                    size="sm"
+                  />
                   <View style={styles.rowMain}>
                     <Text style={styles.station} numberOfLines={1}>
                       {report.station?.name ?? 'Station'}
@@ -454,22 +536,52 @@ const styles = StyleSheet.create({
 
   /* ---- sections ---- */
   sectionTitle: {
-    fontSize: 11,
+    fontSize: 17,
     fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
     marginBottom: spacing.sm,
   },
   sectionTitleTop: {
-    fontSize: 11,
+    fontSize: 17,
     fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
     marginTop: spacing.xl,
     marginBottom: spacing.sm,
   },
+  filterLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: GasTaColors.textSoft,
+    marginBottom: spacing.xs,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginBottom: spacing.lg,
+  },
+  filterChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs + 1,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  filterChipActive: {
+    borderColor: GasTaColors.forestDark,
+    backgroundColor: GasTaColors.forest,
+  },
+  filterChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  filterChipTextActive: { color: GasTaColors.textOnForest },
 
   /* ---- rows ----
      Not every section is a white card. Verified data gets a pale forest cast;
@@ -569,7 +681,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
   },
   rowStacked: {
     flexDirection: 'column',
@@ -587,7 +699,7 @@ const styles = StyleSheet.create({
     borderBottomColor: GasTaColors.forestGlow,
   },
   station: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     lineHeight: 19,
     color: GasTaColors.textPrimary,
@@ -604,6 +716,11 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: GasTaColors.textSoft,
     marginTop: 1,
+  },
+  sourceLabel: {
+    fontSize: 10,
+    color: GasTaColors.textMuted,
+    marginTop: 4,
   },
   verifiedPill: {
     flexDirection: 'row',

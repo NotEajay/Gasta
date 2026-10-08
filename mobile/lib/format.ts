@@ -94,6 +94,22 @@ export function formatShortDate(date: string, now = new Date()): string {
   });
 }
 
+export function formatRelativeReportAge(date: string, now = new Date()): string {
+  const reported = new Date(date);
+  const ageDays = Math.max(
+    0,
+    Math.floor(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() -
+        new Date(reported.getFullYear(), reported.getMonth(), reported.getDate()).getTime()) /
+        86_400_000
+    )
+  );
+  if (ageDays === 0) return 'Reported today';
+  if (ageDays === 1) return 'Reported 1 day ago';
+  if (ageDays < 7) return `Reported ${ageDays} days ago`;
+  return `Reported ${formatDate(date)}`;
+}
+
 /** When the ETL wrote this bulletin into Supabase. */
 export function formatLoadedAt(iso: string | null | undefined, now = new Date()): string | null {
   if (!iso) return null;

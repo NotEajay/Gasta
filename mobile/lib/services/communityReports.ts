@@ -68,10 +68,80 @@ export interface PendingCommunityReport {
   confirmation_count: number;
   status: string;
   created_at: string;
+  /** Null until the report reaches `verified`; then set by the confirm RPC. */
+  verified_at: string | null;
   notes: string | null;
   reported_by: string;
-  station: { name: string; region: { code: string } } | null;
+  station: {
+    name: string;
+    brand_label: string | null;
+    oil_company: { name: string; slug: string } | null;
+    region: { code: string };
+  } | null;
   fuel_type: { code: string; name: string } | null;
+}
+
+export type CommunityReport = PendingCommunityReport;
+
+/** Report periods shown by the Prices / Community screens' filter chips. */
+export type CommunityRecency = 'recent' | '7days' | '30days' | 'past';
+
+const RECENCY_DAY_MS = 86_400_000;
+
+/**
+ * Query-side date bound for a report-period filter.
+ *
+ * Each period fetches only its own window straight from the database (`gte`
+ * for the "last N" periods, `lt` for "past"), so the row limit can never hide
+ * older data: the Past filter queries `created_at < now - 30d` directly
+ * instead of filtering the newest N rows in memory — which would otherwise
+ * make Past silently equal to "whatever happens to be in the newest batch".
+ */
+function recencyBound(
+  filter: CommunityRecency,
+  now = new Date()
+): { operator: 'gte' | 'lt'; iso: string } {
+  const days = filter === 'recent' ? 1 : filter === '7days' ? 7 : 30;
+  const cutoff = new Date(now.getTime() - days * RECENCY_DAY_MS).toISOString();
+  return filter === 'past'
+    ? { operator: 'lt', iso: cutoff }
+    : { operator: 'gte', iso: cutoff };
+}
+
+/**
+ * Client-side mirror of `recencyBound`, kept as a display-time safety filter
+ * so the UI can never show a row outside the selected period even if a fetch
+ * is composed from overlapping sources.
+ */
+export function communityReportMatchesRecency(
+  createdAt: string,
+  filter: CommunityRecency,
+  now = new Date()
+): boolean {
+  const ageMs = now.getTime() - new Date(createdAt).getTime();
+  if (filter === 'recent') return ageMs >= 0 && ageMs <= RECENCY_DAY_MS;
+  if (filter === '7days') return ageMs >= 0 && ageMs <= 7 * RECENCY_DAY_MS;
+  if (filter === '30days') return ageMs >= 0 && ageMs <= 30 * RECENCY_DAY_MS;
+  return ageMs > 30 * RECENCY_DAY_MS;
+}
+
+/**
+ * Monitoring label gate: a verified report is "historical" once it is older
+ * than the recommendation freshness window (7 days after verification) — the
+ * same window `fresh_verified_community_prices` uses.
+ *
+ * Historical rows stay readable for monitoring/history, but must never be
+ * labelled *Verified Community Price*, because that wording implies the row
+ * is still a current recommendation input. Use *Verified Community Report ·
+ * Historical* plus its actual date/relative age instead.
+ */
+export function isHistoricalCommunityReport(
+  report: { status: string; verified_at?: string | null; created_at: string },
+  now = new Date()
+): boolean {
+  if (report.status !== 'verified') return false;
+  const verifiedAt = report.verified_at ?? report.created_at;
+  return now.getTime() - new Date(verifiedAt).getTime() > 7 * RECENCY_DAY_MS;
 }
 
 function unwrapOne<T>(value: T | T[] | null | undefined): T | null {
@@ -297,13 +367,16 @@ export async function fetchPendingReports(
       confirmation_count,
       status,
       created_at,
+      verified_at,
       notes,
       reported_by,
       station_id,
       fuel_type_id,
       station:fuel_stations!inner (
         name,
+        brand_label,
         region_id,
+        oil_company:oil_companies ( name, slug ),
         region:regions!inner ( code )
       ),
       fuel_type:fuel_types ( code, name )
@@ -333,16 +406,28 @@ export async function fetchPendingReports(
     confirmation_count: number;
     status: string;
     created_at: string;
+    verified_at: string | null;
     notes: string | null;
     reported_by: string;
     station:
-      | { name: string; region: { code: string } | { code: string }[] | null }
-      | { name: string; region: { code: string } | { code: string }[] | null }[]
+      | {
+          name: string;
+          brand_label: string | null;
+          oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
+          region: { code: string } | { code: string }[] | null;
+        }
+      | {
+          name: string;
+          brand_label: string | null;
+          oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
+          region: { code: string } | { code: string }[] | null;
+        }[]
       | null;
     fuel_type: { code: string; name: string } | { code: string; name: string }[] | null;
   }>).map((row) => {
     const station = unwrapOne(row.station);
     const region = station ? unwrapOne(station.region) : null;
+    const oilCompany = station ? unwrapOne(station.oil_company) : null;
     const fuelType = unwrapOne(row.fuel_type);
     return {
       id: row.id,
@@ -350,14 +435,160 @@ export async function fetchPendingReports(
       confirmation_count: row.confirmation_count,
       status: row.status,
       created_at: row.created_at,
+      verified_at: row.verified_at ?? null,
       notes: row.notes,
       reported_by: row.reported_by,
       station: station
-        ? { name: station.name, region: { code: region?.code ?? '' } }
+        ? {
+            name: station.name,
+            brand_label: station.brand_label ?? null,
+            oil_company: oilCompany
+              ? { name: oilCompany.name, slug: oilCompany.slug }
+              : null,
+            region: { code: region?.code ?? '' },
+          }
         : null,
       fuel_type: fuelType ? { code: fuelType.code, name: fuelType.name } : null,
     };
   });
+}
+
+/**
+ * Visible community reports for MONITORING/history (any status RLS exposes,
+ * any age — verified reports are readable even past the 7-day freshness
+ * window; see migration 20261008000000_community_reports_historical_read.sql).
+ *
+ * `filters.recency` selects the reporting period query-side (see
+ * `recencyBound`), so each period fetches only its own window and the row
+ * limit can never silently truncate the Past view. Recommendation inputs are
+ * unaffected: Trip Optimizer / Fuel Price Recommendation / Fuel Station
+ * Recommendation read `fresh_verified_community_prices` (7-day window) via
+ * `fetchFreshVerifiedPrices`, never this function.
+ */
+export async function fetchCommunityReports(
+  limit = 200,
+  filters?: { regionCode?: string; fuelTypeCode?: string; recency?: CommunityRecency }
+): Promise<CommunityReport[]> {
+  const selectClause = `
+      id,
+      reported_price,
+      confirmation_count,
+      status,
+      created_at,
+      verified_at,
+      notes,
+      reported_by,
+      station_id,
+      fuel_type_id,
+      station:fuel_stations!inner (
+        name,
+        brand_label,
+        region_id,
+        oil_company:oil_companies ( name, slug ),
+        region:regions!inner ( code )
+      ),
+      fuel_type:fuel_types ( code, name )
+    `;
+
+  const run = (withRelationshipFilters: boolean) => {
+    let query = supabase.from('community_fuel_reports').select(selectClause);
+
+    if (filters?.recency) {
+      const bound = recencyBound(filters.recency);
+      query =
+        bound.operator === 'gte'
+          ? query.gte('created_at', bound.iso)
+          : query.lt('created_at', bound.iso);
+    }
+
+    query = query.order('created_at', { ascending: false }).limit(limit);
+
+    if (withRelationshipFilters && filters?.regionCode) {
+      query = query.eq('station.region.code', filters.regionCode);
+    }
+    if (withRelationshipFilters && filters?.fuelTypeCode) {
+      query = query.eq('fuel_type.code', filters.fuelTypeCode);
+    }
+    return query;
+  };
+
+  let { data, error } = await run(true);
+  if (error && (filters?.regionCode || filters?.fuelTypeCode)) {
+    // Mirror `fetchPendingReports`: relationship filters are not supported on
+    // every PostgREST version. Retry without them and filter in memory below.
+    ({ data, error } = await run(false));
+  }
+  if (error) throw error;
+
+  const rows = ((data ?? []) as unknown as Array<{
+    id: string;
+    reported_price: number;
+    confirmation_count: number;
+    status: string;
+    created_at: string;
+    verified_at: string | null;
+    notes: string | null;
+    reported_by: string;
+    station:
+      | {
+          name: string;
+          brand_label: string | null;
+          oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
+          region: { code: string } | { code: string }[] | null;
+        }
+      | {
+          name: string;
+          brand_label: string | null;
+          oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
+          region: { code: string } | { code: string }[] | null;
+        }[]
+      | null;
+    fuel_type: { code: string; name: string } | { code: string; name: string }[] | null;
+  }>).map((row) => {
+    const station = unwrapOne(row.station);
+    const region = station ? unwrapOne(station.region) : null;
+    const oilCompany = station ? unwrapOne(station.oil_company) : null;
+    const fuelType = unwrapOne(row.fuel_type);
+    return {
+      id: row.id,
+      reported_price: row.reported_price,
+      confirmation_count: row.confirmation_count,
+      status: row.status,
+      created_at: row.created_at,
+      verified_at: row.verified_at ?? null,
+      notes: row.notes,
+      reported_by: row.reported_by,
+      station: station
+        ? {
+            name: station.name,
+            brand_label: station.brand_label ?? null,
+            oil_company: oilCompany
+              ? { name: oilCompany.name, slug: oilCompany.slug }
+              : null,
+            region: { code: region?.code ?? '' },
+          }
+        : null,
+      fuel_type: fuelType ? { code: fuelType.code, name: fuelType.name } : null,
+    };
+  });
+
+  // Idempotent in-memory filters: a no-op when the server already applied the
+  // relationship filters, and the only filter when the fallback query ran.
+  // The recency bound is always applied server-side first; repeating it here
+  // keeps overlapping sources (e.g. pending rows) inside the selected period.
+  let result = rows;
+  if (filters?.regionCode) {
+    result = result.filter((row) => row.station?.region.code === filters.regionCode);
+  }
+  if (filters?.fuelTypeCode) {
+    result = result.filter((row) => row.fuel_type?.code === filters.fuelTypeCode);
+  }
+  if (filters?.recency) {
+    result = result.filter((row) =>
+      communityReportMatchesRecency(row.created_at, filters.recency as CommunityRecency)
+    );
+  }
+  return result;
 }
 
 async function fetchPendingReportsFallback(
@@ -390,7 +621,7 @@ async function fetchPendingReportsFallback(
   let query = supabase
     .from('community_fuel_reports')
     .select(
-      'id, reported_price, confirmation_count, status, created_at, notes, reported_by, station_id, fuel_type_id'
+      'id, reported_price, confirmation_count, status, created_at, verified_at, notes, reported_by, station_id, fuel_type_id'
     )
     .eq('status', 'pending')
     .order('created_at', { ascending: false })
@@ -410,7 +641,7 @@ async function fetchPendingReportsFallback(
   const [stationsRes, fuelTypesRes] = await Promise.all([
     supabase
       .from('fuel_stations')
-      .select('id, name, region:regions ( code )')
+      .select('id, name, brand_label, oil_company:oil_companies ( name, slug ), region:regions ( code )')
       .in('id', reportStationIds),
     supabase.from('fuel_types').select('id, code, name').in('id', fuelTypeIds),
   ]);
@@ -428,15 +659,25 @@ async function fetchPendingReportsFallback(
   type StationWithRegionRow = {
     id: string;
     name: string;
+    brand_label: string | null;
+    oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
     region: unknown;
   };
 
   const stationsById = new Map(
     ((stationsRes.data ?? []) as unknown as StationWithRegionRow[]).map((station) => {
       const region = unwrapOne(station.region as { code: string } | { code: string }[] | null);
+      const oilCompany = unwrapOne(station.oil_company);
       return [
         station.id,
-        { name: station.name, region: region ? { code: region.code } : { code: '' } },
+        {
+          name: station.name,
+          brand_label: station.brand_label ?? null,
+          oil_company: oilCompany
+            ? { name: oilCompany.name, slug: oilCompany.slug }
+            : null,
+          region: region ? { code: region.code } : { code: '' },
+        },
       ];
     })
   );
@@ -450,6 +691,7 @@ async function fetchPendingReportsFallback(
     confirmation_count: row.confirmation_count,
     status: row.status,
     created_at: row.created_at,
+    verified_at: row.verified_at ?? null,
     notes: row.notes,
     reported_by: row.reported_by,
     station: stationsById.get(row.station_id) ?? null,
@@ -518,13 +760,16 @@ export async function fetchMyCommunityReports(userId: string): Promise<PendingCo
       confirmation_count,
       status,
       created_at,
+      verified_at,
       notes,
       reported_by,
       station_id,
       fuel_type_id,
       station:fuel_stations!inner (
         name,
+        brand_label,
         region_id,
+        oil_company:oil_companies ( name, slug ),
         region:regions!inner ( code )
       ),
       fuel_type:fuel_types ( code, name )

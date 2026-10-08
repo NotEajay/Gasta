@@ -21,6 +21,7 @@ import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
 import PriceTrendChart from '@/components/ui/PriceTrendChart';
 import SelectField from '@/components/ui/SelectField';
+import BrandMark from '@/components/ui/BrandMark';
 import StationPriceTable, {
   type AreaPriceRow,
   type StationPriceRow,
@@ -39,16 +40,22 @@ import {
   formatBulletinRange,
   formatCurrency,
   formatDate,
+  formatRelativeReportAge,
   formatShortDate,
 } from '@/lib/format';
 import {
+  communityReportMatchesRecency,
   confirmCommunityReport,
+  fetchCommunityReports,
   fetchConfirmedReportIds,
+  fetchPendingReports,
   fetchFreshVerifiedPrices,
   fetchFuelStationsByRegion,
-  fetchPendingReports,
+  isHistoricalCommunityReport,
   usersConfirmedLabel,
+  type CommunityRecency,
   type FuelStationOption,
+  type CommunityReport,
   type PendingCommunityReport,
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
@@ -81,7 +88,8 @@ function buildStationPriceRows(
   city: string,
   fuelCode: string
 ): { stationRows: StationPriceRow[]; areaRows: AreaPriceRow[] } {
-  const doeBySlug = new Map(doePrices.map((row) => [row.oil_company.slug, row.price_per_liter]));
+  const doeBySlug = new Map(doePrices.map((row) => [row.oil_company.slug, row]));
+  const doeByCompanyId = new Map(doePrices.map((row) => [row.oil_company.id, row]));
   const verifiedByStation = new Map(verified.map((row) => [row.station_id, row] as const));
   const pendingByName = new Map<string, PendingCommunityReport>();
   for (const report of pending) {
@@ -90,13 +98,28 @@ function buildStationPriceRows(
     if (name && !pendingByName.has(name)) pendingByName.set(name, report);
   }
 
-  const stationRows = stations
-    .filter((station) => matchesCityFilter(station, city))
+  const matchingStations = stations.filter((station) => matchesCityFilter(station, city));
+  const matchingCompanyIds = new Set(matchingStations.map((station) => station.oil_company.id));
+  const doeCompanyIds = new Set(doePrices.map((row) => row.oil_company.id));
+  const visibleStations = city
+    ? stations.filter(
+        (station) =>
+          matchesCityFilter(station, city) ||
+          (doeCompanyIds.has(station.oil_company.id) &&
+            !matchingCompanyIds.has(station.oil_company.id))
+      )
+    : stations;
+
+  const stationRows = visibleStations
     .map((station) => {
       const brand = station.brand_label?.trim() || station.oil_company.name;
       const verifiedRow = verifiedByStation.get(station.id);
       const pendingRow = pendingByName.get(station.name);
-      const doePrice = doeBySlug.get(station.oil_company.slug) ?? null;
+      const doeRow =
+        doeByCompanyId.get(station.oil_company.id) ??
+        doeBySlug.get(station.oil_company.slug) ??
+        null;
+      const doePrice = doeRow?.price_per_liter ?? null;
 
       if (verifiedRow) {
         return {
@@ -127,22 +150,33 @@ function buildStationPriceRows(
         station: station.name,
         price: doePrice,
         source: doePrice != null ? ('doe' as const) : ('none' as const),
-        status: doePrice != null ? 'DOE estimate' : undefined,
+        status:
+          doeRow == null
+            ? undefined
+            : doeRow.area_name
+              ? 'DOE Area/Brand Estimate'
+              : 'DOE Region-Wide Estimate',
       };
     })
     .sort((a, b) => a.brand.localeCompare(b.brand) || a.station.localeCompare(b.station));
 
   const includedStationSlugs = new Set(
-    stations
-      .filter((station) => matchesCityFilter(station, city))
-      .map((station) => station.oil_company.slug)
+    visibleStations.map((station) => station.oil_company.slug)
+  );
+  const includedCompanyIds = new Set(
+    visibleStations.map((station) => station.oil_company.id)
   );
   const seenAreaSlugs = new Set<string>();
   const areaRows: AreaPriceRow[] = [];
 
   for (const row of doePrices) {
     const slug = row.oil_company.slug;
-    if (includedStationSlugs.has(slug) || seenAreaSlugs.has(slug)) continue;
+    if (
+      includedStationSlugs.has(slug) ||
+      includedCompanyIds.has(row.oil_company.id) ||
+      seenAreaSlugs.has(slug)
+    )
+      continue;
     seenAreaSlugs.add(slug);
 
     areaRows.push({
@@ -150,9 +184,9 @@ function buildStationPriceRows(
       slug,
       brand: row.oil_company.name,
       areaName: row.area_name || 'Region-wide DOE price',
-      price: doeBySlug.get(slug) ?? row.price_per_liter,
+      price: doeBySlug.get(slug)?.price_per_liter ?? row.price_per_liter,
       source: 'doe_area',
-      status: 'DOE area price',
+      status: row.area_name ? 'DOE Area/Brand Estimate' : 'DOE Region-Wide Estimate',
     });
   }
 
@@ -161,7 +195,30 @@ function buildStationPriceRows(
   return { stationRows, areaRows };
 }
 
+function buildOfficialDoeRows(doePrices: FuelPriceRow[]): AreaPriceRow[] {
+  return doePrices
+    .map((row) => ({
+      id: `doe-${row.id}`,
+      slug: row.oil_company.slug,
+      brand: row.oil_company.name,
+      areaName: row.area_name || row.region.code,
+      price: row.price_per_liter,
+      source: 'doe_area' as const,
+      status: row.area_name
+        ? 'DOE Area/Brand Estimate'
+        : 'DOE Region-Wide Estimate',
+    }))
+    .sort((a, b) => a.brand.localeCompare(b.brand));
+}
+
 type PricesView = 'now' | 'history';
+
+const COMMUNITY_RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = [
+  { value: 'recent', label: 'Recent' },
+  { value: '7days', label: 'Last 7 Days' },
+  { value: '30days', label: 'Last 30 Days' },
+  { value: 'past', label: 'Past' },
+];
 
 const HISTORY_WEEKS = 52;
 
@@ -187,6 +244,8 @@ type PriceFilterFieldProps<T extends string> = {
   onChange: (value: T) => void;
   icon: 'map-marker-outline' | 'office-building-outline' | 'gas-station';
   placeholder?: string;
+  loading?: boolean;
+  error?: string | null;
   /** Optional override for the field container, used by the narrow-phone wrap. */
   style?: StyleProp<ViewStyle>;
 };
@@ -198,6 +257,8 @@ function PriceFilterField<T extends string>({
   onChange,
   icon,
   placeholder = 'Choose…',
+  loading = false,
+  error = null,
   style,
 }: PriceFilterFieldProps<T>) {
   const theme = useTheme();
@@ -252,6 +313,24 @@ function PriceFilterField<T extends string>({
               data={[...options]}
               keyExtractor={(item) => item.value}
               style={styles.filterOptionList}
+              ListEmptyComponent={
+                loading ? (
+                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
+                    Loading available areas…
+                  </Text>
+                ) : error ? (
+                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
+                    {error}
+                  </Text>
+                ) : null
+              }
+              ListFooterComponent={
+                options.length > 0 && (loading || error) ? (
+                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
+                    {loading ? 'Refreshing available areas…' : error}
+                  </Text>
+                ) : null
+              }
               renderItem={({ item }) => {
                 const isSelected = item.value === value;
                 return (
@@ -302,6 +381,10 @@ export default function FuelPricesScreen() {
   const [areaName, setAreaName] = useState('');
   const [doeAreas, setDoeAreas] = useState<string[]>([]);
   const [areasFromDoe, setAreasFromDoe] = useState(false);
+  const [doeAreasLoading, setDoeAreasLoading] = useState(false);
+  const [doeAreasError, setDoeAreasError] = useState<string | null>(null);
+  const doeAreasCache = useRef(new Map<string, string[]>());
+  const activeAreaRequestKey = useRef<string | null>(null);
   /*
    * Location-derived filtering.
    *
@@ -421,6 +504,8 @@ export default function FuelPricesScreen() {
   );
   const [verifiedCommunity, setVerifiedCommunity] = useState<VerifiedCommunityPrice[]>([]);
   const [pendingCommunity, setPendingCommunity] = useState<PendingCommunityReport[]>([]);
+  const [communityReports, setCommunityReports] = useState<CommunityReport[]>([]);
+  const [communityRecency, setCommunityRecency] = useState<CommunityRecency>('recent');
   const [stations, setStations] = useState<FuelStationOption[]>([]);
   const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set());
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -430,7 +515,39 @@ export default function FuelPricesScreen() {
   const [error, setError] = useState<string | null>(null);
   const historyLoadedFor = useRef<string | null>(null);
 
+  /*
+   * The community feed is fetched with a query-side period bound (Recent /
+   * Last 7 Days / Last 30 Days / Past), so the row limit only ever truncates
+   * inside the selected period and the Past filter reaches rows older than 30
+   * days instead of only whatever happens to sit inside the newest 200 overall.
+   *
+   * The loader reads the current period from a ref so its identity changes
+   * only with the region: chip changes re-run the effect below without
+   * re-running the focus effect or `loadRegion`. Focus-triggered refreshes
+   * call the same loader through `communityLoaderRef`.
+   */
+  const communityRecencyRef = useRef(communityRecency);
+  const loadCommunityReports = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
+    const rows = await fetchCommunityReports(200, {
+      regionCode: region,
+      recency: communityRecencyRef.current,
+    }).catch((e) => {
+      console.warn('Community reports failed', e);
+      return null;
+    });
+    if (rows) setCommunityReports(rows);
+  }, [region]);
+  const communityLoaderRef = useRef(loadCommunityReports);
+
+  useEffect(() => {
+    communityRecencyRef.current = communityRecency;
+    communityLoaderRef.current = loadCommunityReports;
+    void loadCommunityReports();
+  }, [communityRecency, loadCommunityReports]);
+
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
+  const regionDisplay = DOE_REGIONS.find((r) => r.code === region)?.code ?? regionLabel;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
   const areaLabel = areaName || 'Region-wide DOE price';
   const selectedBulletinForAreas = selectedPastDate
@@ -469,7 +586,11 @@ export default function FuelPricesScreen() {
     }
     try {
       setError(null);
-      const [latest, pending, regionStations] = await Promise.all([
+      // Pending reports are fetched unbounded by period on purpose: the
+      // confirmation queue and the station-row inputs keep showing every
+      // pending report (pre-existing behaviour), while the period-scoped
+      // community feed is loaded separately by `loadCommunityReports`.
+      const [latest, pendingReports, regionStations] = await Promise.all([
         fetchLatestBulletinForRegion(region),
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
@@ -482,14 +603,14 @@ export default function FuelPricesScreen() {
       ]);
 
       setBulletin(latest);
-      setPendingCommunity(pending);
+      setPendingCommunity(pendingReports);
       setStations(regionStations);
       historyLoadedFor.current = null;
 
-      if (user && pending.length > 0) {
+      if (user && pendingReports.length > 0) {
         const voted = await fetchConfirmedReportIds(
           user.id,
-          pending.map((row) => row.id)
+          pendingReports.map((row) => row.id)
         ).catch(() => new Set<string>());
         setConfirmedIds(voted);
       } else {
@@ -503,8 +624,6 @@ export default function FuelPricesScreen() {
         return;
       }
 
-      setDoeAreas([]);
-      setAreasFromDoe(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load fuel prices');
     } finally {
@@ -516,31 +635,56 @@ export default function FuelPricesScreen() {
   useEffect(() => {
     const activeBulletin = selectedBulletinForAreas;
     if (!activeBulletin) {
+      activeAreaRequestKey.current = null;
       setDoeAreas([]);
       setAreasFromDoe(false);
+      setDoeAreasLoading(false);
+      setDoeAreasError(null);
       setAreaName('');
       return;
     }
 
+    const cacheKey = `${activeBulletin.id}:${region}:${fuelType}`;
+    activeAreaRequestKey.current = cacheKey;
+    const cachedAreas = doeAreasCache.current.get(cacheKey);
+    if (cachedAreas) {
+      setDoeAreas(cachedAreas);
+      setAreasFromDoe(cachedAreas.length > 0);
+      setDoeAreasLoading(false);
+      setDoeAreasError(null);
+      setAreaName((current) => (current && !cachedAreas.includes(current) ? '' : current));
+      return;
+    }
+
     let cancelled = false;
-    void fetchBulletinAreas(activeBulletin.id, region)
+    setDoeAreasLoading(true);
+    setDoeAreasError(null);
+    void fetchBulletinAreas(activeBulletin.id, region, fuelType)
       .then((nextAreas) => {
-        if (cancelled) return;
+        if (cancelled || activeAreaRequestKey.current !== cacheKey) return;
+        doeAreasCache.current.set(cacheKey, nextAreas);
         setDoeAreas(nextAreas);
         setAreasFromDoe(nextAreas.length > 0);
         setAreaName((current) => (current && nextAreas.includes(current) ? current : ''));
       })
       .catch(() => {
-        if (cancelled) return;
-        setDoeAreas([]);
-        setAreasFromDoe(false);
-        setAreaName('');
+        if (cancelled || activeAreaRequestKey.current !== cacheKey) return;
+        setDoeAreasError(
+          doeAreasCache.current.has(cacheKey)
+            ? null
+            : 'Could not load area options. Please try again.'
+        );
+      })
+      .finally(() => {
+        if (!cancelled && activeAreaRequestKey.current === cacheKey) {
+          setDoeAreasLoading(false);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [selectedBulletinForAreas, region]);
+  }, [selectedBulletinForAreas, region, fuelType]);
 
   useEffect(() => {
     setSelectedPastDate(null);
@@ -700,6 +844,9 @@ export default function FuelPricesScreen() {
       setStations([]);
       setConfirmedIds(new Set());
       void loadRegion();
+      // Returning to the tab refreshes the period-scoped feed as well; it lives
+      // in its own loader so chip changes never re-run this whole effect.
+      void communityLoaderRef.current();
     }, [loadRegion])
   );
 
@@ -716,13 +863,36 @@ export default function FuelPricesScreen() {
     [stations, verifiedCommunity, pendingCommunity, prices, areaName, fuelType]
   );
 
-  const pendingForFuel = useMemo(
-    () =>
-      pendingCommunity.filter(
-        (report) => !report.fuel_type?.code || report.fuel_type.code === fuelType
-      ),
-    [pendingCommunity, fuelType]
+  const officialRows = useMemo(
+    () => ({ stationRows: [], areaRows: buildOfficialDoeRows(prices) }),
+    [prices]
   );
+
+  const communityForFuel = useMemo(
+    () =>
+      communityReports
+        .filter((report) => !report.fuel_type?.code || report.fuel_type.code === fuelType)
+        .filter((report) => communityReportMatchesRecency(report.created_at, communityRecency)),
+    [communityReports, communityRecency, fuelType]
+  );
+
+  const communityStatusLabel = (report: CommunityReport, isHistorical: boolean): string => {
+    if (report.status === 'verified') {
+      return isHistorical
+        ? 'Verified · Historical'
+        : `✓ Verified · ${report.confirmation_count} confirmation${
+            report.confirmation_count === 1 ? '' : 's'
+          }`;
+    }
+    if (report.status === 'needs_review') return 'Needs Review';
+    if (report.status === 'rejected') return 'Rejected';
+    if (user && report.reported_by !== user.id && confirmedIds.has(report.id)) {
+      return `✓ You confirmed · ${report.confirmation_count}/${VERIFY_CONFIRMATIONS_REQUIRED}`;
+    }
+    return report.confirmation_count === 0
+      ? 'Pending · No confirmations yet'
+      : `Pending · ${report.confirmation_count}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`;
+  };
 
   const handleConfirmPrice = async (report: PendingCommunityReport) => {
     if (!user) {
@@ -739,6 +909,7 @@ export default function FuelPricesScreen() {
           : `${report.confirmation_count + 1}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`
       );
       await loadRegion();
+      await communityLoaderRef.current();
     } catch (e) {
       Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Unknown error');
     } finally {
@@ -962,6 +1133,7 @@ export default function FuelPricesScreen() {
           onRefresh={() => {
             setRefreshing(true);
             void loadRegion();
+            void communityLoaderRef.current();
           }}
           tintColor={GasTaColors.forest}
         />
@@ -1140,6 +1312,8 @@ export default function FuelPricesScreen() {
           onChange={handleManualArea}
           icon="office-building-outline"
           placeholder="Region-wide DOE price"
+          loading={doeAreasLoading}
+          error={doeAreasError}
           style={isCompact ? styles.filterFieldWrap : undefined}
         />
         <PriceFilterField
@@ -1154,13 +1328,13 @@ export default function FuelPricesScreen() {
 
       {nearMePlace?.city && !areaName ? (
         <Text style={styles.hintText}>
-          No city-level DOE data for this area. Showing the region-wide DOE price.
+          No DOE area-level prices are available for this selection. Showing region-wide DOE data.
         </Text>
       ) : null}
 
       {!areasFromDoe && !nearMePlace?.city ? (
         <Text style={styles.hintText}>
-          This bulletin has no city-level DOE areas. Region-wide DOE prices are shown.
+          No DOE area-level prices are available for this selection. Showing region-wide DOE data.
         </Text>
       ) : null}
 
@@ -1387,9 +1561,9 @@ export default function FuelPricesScreen() {
             </>
           ) : null}
 
-          {/* STATIONS & PRICES -- visible in both modes, one continuous story. */}
+          {/* Official DOE data stays separate from station observations. */}
           <View style={styles.listHead}>
-            <Text style={styles.sectionTitle}>Stations & prices</Text>
+            <Text style={styles.sectionTitle}>Official DOE Prices</Text>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Report a price"
@@ -1403,6 +1577,28 @@ export default function FuelPricesScreen() {
               />
               <Text style={styles.reportCtaText}>Report a price</Text>
             </Pressable>
+          </View>
+          <View style={styles.doeInfoStrip}>
+            <View style={styles.doeInfoIcon}>
+              <MaterialCommunityIcons
+                name="file-document-outline"
+                size={16}
+                color={GasTaColors.forest}
+              />
+            </View>
+            <View style={styles.doeInfoCopy}>
+              <Text style={styles.doeEyebrow}>DOE WEEKLY BASELINE</Text>
+              <Text style={styles.doePrimaryMeta} numberOfLines={1}>
+                {fuelLabel} · {regionDisplay}
+              </Text>
+              <Text style={styles.doeSecondaryMeta} numberOfLines={1}>
+                {areaName || 'Region-wide'}
+                {bulletin ? ` · ${formatBulletinRange(bulletin.bulletin_date)}` : ''}
+              </Text>
+              <Text style={styles.doeDisclaimerText} numberOfLines={1}>
+                Official bulletin · Not exact branch pump prices
+              </Text>
+            </View>
           </View>
 
           {/*
@@ -1440,72 +1636,154 @@ export default function FuelPricesScreen() {
                 station.
               </Text>
             </View>
-          ) : stationRows.length === 0 && areaRows.length === 0 ? (
+          ) : officialRows.stationRows.length === 0 && officialRows.areaRows.length === 0 ? (
             <Text style={styles.emptyLine}>
-              No stations for these filters. Try another city or fuel type.
+              No DOE prices for these filters. Try another area or fuel type.
             </Text>
           ) : (
-            <StationPriceTable rows={stationRows} areaRows={areaRows} />
+            <StationPriceTable
+              rows={officialRows.stationRows}
+              areaRows={officialRows.areaRows}
+              fuelType={fuelType}
+              region={region}
+            />
           )}
 
-          {pendingForFuel.length > 0 ? (
-            <>
-              <Text style={styles.sectionTitleTop}>
-                Needs confirmation ({pendingForFuel.length})
-              </Text>
-              <Text style={styles.hintText}>
-                Confirm a station price ({VERIFY_CONFIRMATIONS_REQUIRED} needed).
-              </Text>
-              <View style={styles.confirmList}>
-                {pendingForFuel.map((report, index) => {
-                  const isOwn = Boolean(user && report.reported_by === user.id);
-                  const alreadyVoted = confirmedIds.has(report.id);
-                  const isLast = index === pendingForFuel.length - 1;
-                  const stationTitle = report.station?.name ?? 'Station';
-                  const fuelPart = report.fuel_type?.name ?? 'Fuel';
+          <View style={styles.communitySection}>
+            <View style={styles.listHead}>
+              <View style={styles.communityHeading}>
+                <Text style={styles.sectionTitle}>Community Station Reports</Text>
+                <Text style={styles.sourceDescription}>
+                  User-observed station prices, separate from the official DOE baseline.
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="View all community reports"
+                onPress={() => router.push('/(tabs)/prices/community')}
+                style={({ pressed }) => [styles.reportCta, pressed && styles.pressed]}>
+                <Text style={styles.reportCtaText}>
+                  View all{communityForFuel.length > 0 ? ` (${communityForFuel.length})` : ''}
+                </Text>
+              </Pressable>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.communityFilters}>
+              {COMMUNITY_RECENCY_OPTIONS.map((option) => {
+                const active = communityRecency === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    onPress={() => setCommunityRecency(option.value)}
+                    style={[styles.communityChip, active && styles.communityChipActive]}>
+                    <Text style={[styles.communityChipText, active && styles.communityChipTextActive]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            {communityForFuel.length === 0 ? (
+              <View style={styles.communityEmpty}>
+                <MaterialCommunityIcons
+                  name="map-marker-off-outline"
+                  size={24}
+                  color={GasTaColors.textSoft}
+                />
+                <View style={styles.communityEmptyCopy}>
+                  <Text style={styles.emptyTitle}>No reports in this period</Text>
+                  <Text style={styles.emptyLine}>
+                    Try another recency filter or report a price you saw at a station.
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.communityCards}>
+                {communityForFuel.slice(0, 4).map((report, index) => {
+                  const isVerified = report.status === 'verified';
+                  // Historical = older than the 7-day recommendation freshness
+                  // window (verified_at, not created_at): readable for
+                  // monitoring, but never labelled as a current price input.
+                  const isHistorical = isHistoricalCommunityReport(report);
+                  const statusLabel = communityStatusLabel(report, isHistorical);
+                  const canConfirm =
+                    Boolean(user) &&
+                    report.status === 'pending' &&
+                    report.reported_by !== user?.id &&
+                    !confirmedIds.has(report.id);
                   return (
                     <View
                       key={report.id}
-                      style={[styles.verifyRow, !isLast && styles.rowDivider]}>
-                      <View style={styles.verifyInfo}>
-                        <Text numberOfLines={1} style={styles.verifyTitle}>
-                          {stationTitle}
-                        </Text>
-                        <Text numberOfLines={1} style={styles.verifyMeta}>
-                          {fuelPart} ·{' '}
-                          {isOwn
-                            ? `You reported this · ${report.confirmation_count}/${VERIFY_CONFIRMATIONS_REQUIRED}`
-                            : alreadyVoted
-                              ? `You confirmed this · ${usersConfirmedLabel(report.confirmation_count)}`
-                              : `Unverified · ${usersConfirmedLabel(report.confirmation_count)}`}
+                      style={[
+                        styles.communityCard,
+                        index > 0 && styles.communityCardDivider,
+                        isVerified ? styles.communityCardVerified : styles.communityCardPending,
+                      ]}>
+                      <View style={styles.communityCardTop}>
+                        <BrandMark
+                          brand={report.station?.brand_label ?? report.station?.oil_company?.name}
+                          slug={report.station?.oil_company?.slug}
+                          stationName={report.station?.name}
+                          size="md"
+                        />
+                        <View style={styles.communityCardMain}>
+                          <Text numberOfLines={1} style={styles.communityStation}>
+                            {report.station?.name ?? 'Station'}
+                          </Text>
+                          <Text style={styles.communityMeta}>
+                            {report.fuel_type?.name ?? 'Fuel'} ·{' '}
+                            {formatRelativeReportAge(report.created_at)}
+                            {isHistorical ? ` · ${formatDate(report.created_at)}` : ''}
+                          </Text>
+                        </View>
+                        <Text style={styles.communityPrice}>
+                          {formatCurrency(report.reported_price)}
+                          <Text style={styles.verifyUnit}>/L</Text>
                         </Text>
                       </View>
-                      <Text style={styles.verifyPrice}>
-                        {formatCurrency(report.reported_price)}
-                        <Text style={styles.verifyUnit}>/L</Text>
-                      </Text>
-                      {isOwn || alreadyVoted ? null : (
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={`Confirm the price at ${stationTitle}`}
-                          disabled={confirmingId === report.id}
-                          onPress={() => handleConfirmPrice(report)}
-                          style={({ pressed }) => [
-                            styles.voteBtn,
-                            pressed && styles.pressed,
-                            confirmingId === report.id && styles.voteBtnBusy,
-                          ]}>
-                          <Text style={styles.voteBtnText}>
-                            {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
+                      <View style={styles.communityBadgeRow}>
+                        <View style={[styles.communityBadge, isVerified && styles.communityBadgeVerified]}>
+                          <MaterialCommunityIcons
+                            name={isVerified ? 'shield-check' : 'clock-outline'}
+                            size={11}
+                            color={isVerified ? GasTaColors.forest : '#9A6700'}
+                          />
+                          <Text style={[styles.communityBadgeText, isVerified && styles.communityBadgeTextVerified]}>
+                            {statusLabel}
                           </Text>
-                        </Pressable>
-                      )}
+                        </View>
+                        <Text style={styles.communityConfirmations}>
+                          {usersConfirmedLabel(report.confirmation_count)}
+                        </Text>
+                        {canConfirm ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Confirm the price at ${
+                              report.station?.name ?? 'this station'
+                            }`}
+                            disabled={confirmingId === report.id}
+                            onPress={() => handleConfirmPrice(report)}
+                            style={({ pressed }) => [
+                              styles.inlineConfirm,
+                              pressed && styles.pressed,
+                              confirmingId === report.id && styles.voteBtnBusy,
+                            ]}>
+                            <Text style={styles.inlineConfirmText}>
+                              {confirmingId === report.id ? 'Confirming…' : 'Confirm'}
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
                     </View>
                   );
                 })}
               </View>
-            </>
-          ) : null}
+            )}
+          </View>
         </>
       )}
     </ScrollView>
@@ -1769,6 +2047,12 @@ const styles = StyleSheet.create({
   filterOptionList: {
     paddingHorizontal: spacing.md,
   },
+  filterLoadingText: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
+    fontSize: 14,
+    textAlign: 'center',
+  },
   filterOption: {
     minHeight: 48,
     paddingHorizontal: spacing.md,
@@ -1995,19 +2279,31 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   sectionTitle: {
-    fontSize: 11,
+    fontSize: 17,
     fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
   },
   sectionTitleTop: {
-    fontSize: 11,
+    fontSize: 17,
     fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
     marginTop: spacing.xl,
+  },
+  confirmHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  confirmTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
   },
   reportCta: {
     flexShrink: 0,
@@ -2026,6 +2322,192 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: GasTaColors.forestDark,
   },
+  communitySection: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: GasTaColors.forestGlow,
+  },
+  communityHeading: { flex: 1, minWidth: 0 },
+  sourceDescription: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginTop: 3,
+  },
+  doeInfoStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: 82,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: 'rgba(1, 68, 33, 0.05)',
+  },
+  doeInfoIcon: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.sm,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  doeInfoCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  doeEyebrow: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: GasTaColors.forest,
+    marginBottom: 2,
+  },
+  doePrimaryMeta: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: GasTaColors.textPrimary,
+  },
+  doeSecondaryMeta: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: GasTaColors.textMuted,
+    marginTop: 1,
+  },
+  doeDisclaimerText: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: GasTaColors.textSoft,
+    marginTop: 3,
+  },
+  communityFilters: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: spacing.sm,
+    paddingRight: spacing.sm,
+  },
+  communityChip: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  communityChipActive: {
+    borderColor: GasTaColors.forestDark,
+    backgroundColor: GasTaColors.forest,
+  },
+  communityChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  communityChipTextActive: { color: GasTaColors.textOnForest },
+  communityCards: {
+    overflow: 'hidden',
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(46, 125, 50, 0.18)',
+    backgroundColor: GasTaColors.creamLight,
+  },
+  communityCard: {
+    minHeight: 96,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: spacing.sm,
+  },
+  communityCardDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestGlow,
+  },
+  communityCardVerified: {
+    backgroundColor: 'rgba(46, 125, 50, 0.04)',
+  },
+  communityCardPending: {
+    backgroundColor: 'rgba(180, 83, 9, 0.06)',
+  },
+  communityCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  communityCardMain: { flex: 1, minWidth: 0 },
+  communityStation: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: GasTaColors.textPrimary,
+  },
+  communityMeta: {
+    fontSize: 11,
+    color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  communityPrice: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  communityBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: 4,
+  },
+  communityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(180, 83, 9, 0.12)',
+  },
+  communityBadgeVerified: { backgroundColor: GasTaColors.forestGlow },
+  communityBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#9A6700',
+  },
+  communityBadgeTextVerified: { color: GasTaColors.forest },
+  communityConfirmations: {
+    fontSize: 10,
+    color: GasTaColors.textSoft,
+  },
+  inlineConfirm: {
+    marginLeft: 'auto',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  inlineConfirmText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  communityEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestGlow,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  communityEmptyCopy: { flex: 1, minWidth: 0 },
 
   /* ---- flat row lists ---- */
   plainListTight: {
@@ -2059,7 +2541,8 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    minHeight: 76,
+    paddingVertical: spacing.sm,
   },
   verifyInfo: { flex: 1, minWidth: 0 },
   verifyTitle: {
