@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Keyboard, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Text } from '@/components/Themed';
@@ -308,6 +308,7 @@ export default function TripOptimizerScreen() {
   const [useCustomFuelPrice, setUseCustomFuelPrice] = useState(false);
   const [customFuelPriceInput, setCustomFuelPriceInput] = useState('');
   const [customFuelPriceError, setCustomFuelPriceError] = useState<string | null>(null);
+  const [customPriceConfirmed, setCustomPriceConfirmed] = useState(false);
   /**
    * The comparison result is presented in a bottom sheet, which is the single
    * canonical place it appears. The form underneath keeps its state, so
@@ -513,7 +514,7 @@ export default function TripOptimizerScreen() {
     if (!mode) return null;
     if (mode === 'OWN_VEHICLE') {
       return {
-        label: 'Estimated fuel cost',
+        label: 'Trip fuel cost (you spend)',
         sourceNote: fuelPriceProvenance
           ? `${fuelPriceProvenance.label} · ${fuelPriceProvenance.detail}`
           : null,
@@ -522,7 +523,7 @@ export default function TripOptimizerScreen() {
     }
     const modeName = transportModeLabel(mode).toLowerCase();
     return {
-      label: `Estimated ${modeName} fare`,
+      label: `Trip ${modeName} fare (you spend)`,
       sourceNote: 'Based on configured fare rules',
       disclaimer:
         mode === 'RIDE_HAILING' ? 'Actual app fare may vary with traffic and demand.' : null,
@@ -1608,9 +1609,24 @@ export default function TripOptimizerScreen() {
                       value={customFuelPriceInput}
                       onChangeText={(text) => {
                         setCustomFuelPriceInput(text);
+                        setCustomPriceConfirmed(false);
                         if (customFuelPriceError) setCustomFuelPriceError(null);
                       }}
+                      onFocus={() => setCustomPriceConfirmed(false)}
                       keyboardType="decimal-pad"
+                      returnKeyType="done"
+                      onSubmitEditing={() => {
+                        Keyboard.dismiss();
+                        const raw = customFuelPriceInput.trim();
+                        if (raw) {
+                          const val = Number(raw);
+                          if (!Number.isFinite(val) || val <= 0) {
+                            setCustomFuelPriceError('Enter a price greater than zero.');
+                            return;
+                          }
+                          setCustomPriceConfirmed(true);
+                        }
+                      }}
                       placeholder="e.g. 80.00"
                       error={customFuelPriceError ?? undefined}
                     />
@@ -1623,16 +1639,57 @@ export default function TripOptimizerScreen() {
                         {tripFuelPrice.price.sourceLabel}
                       </Text>
                     ) : null}
-                    <PrimaryButton
-                      label="Use automatic price"
-                      variant="secondary"
-                      size="sm"
-                      onPress={() => {
-                        setUseCustomFuelPrice(false);
-                        setCustomFuelPriceInput('');
-                        setCustomFuelPriceError(null);
-                      }}
-                    />
+                    {!customPriceConfirmed ? (
+                      <View style={styles.overrideButtonsRow}>
+                        <PrimaryButton
+                          label="Done"
+                          variant="primary"
+                          size="sm"
+                          onPress={() => {
+                            Keyboard.dismiss();
+                            const raw = customFuelPriceInput.trim();
+                            if (!raw) {
+                              setCustomFuelPriceError('Enter a price, for example 80.00');
+                              return;
+                            }
+                            const val = Number(raw);
+                            if (!Number.isFinite(val) || val <= 0) {
+                              setCustomFuelPriceError('Enter a price greater than zero.');
+                              return;
+                            }
+                            setCustomFuelPriceError(null);
+                            setCustomPriceConfirmed(true);
+                          }}
+                          style={styles.overrideDoneBtn}
+                        />
+                        <PrimaryButton
+                          label="Use automatic price"
+                          variant="secondary"
+                          size="sm"
+                          onPress={() => {
+                            Keyboard.dismiss();
+                            setUseCustomFuelPrice(false);
+                            setCustomFuelPriceInput('');
+                            setCustomPriceConfirmed(false);
+                            setCustomFuelPriceError(null);
+                          }}
+                          style={styles.overrideAutoBtn}
+                        />
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+                        <Pressable onPress={() => {
+                          setUseCustomFuelPrice(false);
+                          setCustomFuelPriceInput('');
+                          setCustomPriceConfirmed(false);
+                          setCustomFuelPriceError(null);
+                        }} hitSlop={8}>
+                          <Text style={{ fontSize: 13, color: GasTaColors.textSoft, textDecorationLine: 'underline' }}>
+                            Revert to automatic price
+                          </Text>
+                        </Pressable>
+                      </View>
+                    )}
                   </View>
                 ) : (
                   <PrimaryButton
@@ -1709,6 +1766,8 @@ export default function TripOptimizerScreen() {
               value={efficiency}
               onChangeText={setEfficiency}
               keyboardType="decimal-pad"
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
               placeholder="14.0"
             />
             {!selectedCatalogEntry ? (
@@ -1723,6 +1782,8 @@ export default function TripOptimizerScreen() {
               value={manualLastRefillPrice}
               onChangeText={setManualLastRefillPrice}
               keyboardType="decimal-pad"
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
               placeholder="62.50"
             />
           </>
@@ -1737,6 +1798,9 @@ export default function TripOptimizerScreen() {
       */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Compare transport</Text>
+        <Text style={styles.sectionCostNote}>
+          Estimated out-of-pocket trip cost for each option (what you will spend, not savings).
+        </Text>
         <View style={[styles.sectionCard, styles.modeList]}>
           {COMPARE_TRANSPORT_ROWS.map((row) => {
             const evaluation = evaluationByMode.get(row.code);
@@ -1771,6 +1835,7 @@ export default function TripOptimizerScreen() {
                   </Text>
                 </View>
                 <View style={styles.modeRowMetrics}>
+                  <Text style={styles.modeRowCostLabel}>Trip cost</Text>
                   <Text
                     numberOfLines={1}
                     adjustsFontSizeToFit
@@ -1900,7 +1965,7 @@ export default function TripOptimizerScreen() {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}>
               <View style={styles.receiptTotal}>
-                <Text style={styles.receiptTotalLabel}>Recommended for this trip</Text>
+                <Text style={styles.receiptTotalLabel}>Recommended option · Total trip cost</Text>
                 <Text style={styles.receiptTotalMode}>
                   {result ? transportModeLabel(result.recommended.modeCode) : ''}
                 </Text>
@@ -1910,6 +1975,9 @@ export default function TripOptimizerScreen() {
                   adjustsFontSizeToFit
                   minimumFontScale={0.6}>
                   {result ? formatPeso(result.recommended.raw.fuelCost) : ''}
+                </Text>
+                <Text style={styles.receiptCostTypeTag}>
+                  Estimated cost to take this trip (what you will spend, not savings)
                 </Text>
                 {recommendedCost?.sourceNote ? (
                   <Text style={styles.receiptNote}>{recommendedCost.sourceNote}</Text>
@@ -1950,7 +2018,7 @@ export default function TripOptimizerScreen() {
                   ) : null}
                   <View style={styles.receiptDivider} />
                   <View style={styles.receiptRow}>
-                    <Text style={styles.receiptRowLabelStrong}>Estimated total</Text>
+                    <Text style={styles.receiptRowLabelStrong}>Total trip cost (you spend)</Text>
                     <Text style={styles.receiptRowValueStrong}>
                       {formatPeso(ownVehicleBreakdown.totalCost)}
                     </Text>
@@ -1959,7 +2027,7 @@ export default function TripOptimizerScreen() {
                     <Text style={styles.receiptNote}>
                       {selectedVehicle.nickname ??
                         `${selectedVehicle.brand} ${selectedVehicle.model}`}{' '}
-                      · {ownVehicleBreakdown.efficiencyKmPerLiter} km/L
+                        · {ownVehicleBreakdown.efficiencyKmPerLiter} km/L
                     </Text>
                   ) : null}
                 </>
@@ -1987,7 +2055,7 @@ export default function TripOptimizerScreen() {
                   ) : null}
                   <View style={styles.receiptDivider} />
                   <View style={styles.receiptRow}>
-                    <Text style={styles.receiptRowLabelStrong}>Estimated total</Text>
+                    <Text style={styles.receiptRowLabelStrong}>Total trip cost (you spend)</Text>
                     <Text style={styles.receiptRowValueStrong}>
                       {result ? formatPeso(result.recommended.raw.fuelCost) : ''}
                     </Text>
@@ -2005,7 +2073,7 @@ export default function TripOptimizerScreen() {
                           {transportModeLabel(ev.modeCode)}
                         </Text>
                         <Text style={styles.receiptRowValue}>
-                          {formatPeso(ev.raw.fuelCost)} ·{' '}
+                          Trip cost: {formatPeso(ev.raw.fuelCost)} ·{' '}
                           {Math.round(ev.raw.travelTime)} min
                         </Text>
                       </View>
@@ -2302,6 +2370,12 @@ const styles = StyleSheet.create({
     color: GasTaColors.forestDark,
     marginTop: 2,
   },
+  receiptCostTypeTag: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: GasTaColors.forestMuted,
+    marginTop: 4,
+  },
   receiptSectionLabel: {
     ...typography.label,
     fontSize: 10,
@@ -2364,6 +2438,11 @@ const styles = StyleSheet.create({
     color: GasTaColors.forestMuted,
     textTransform: 'uppercase',
     letterSpacing: 1.1,
+    marginBottom: spacing.xs,
+  },
+  sectionCostNote: {
+    fontSize: 12,
+    color: GasTaColors.textSoft,
     marginBottom: spacing.sm,
   },
   sectionCard: {
@@ -2575,6 +2654,14 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     minWidth: 72,
   },
+  modeRowCostLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    color: GasTaColors.forestMuted,
+    marginBottom: 1,
+  },
   modeRowCost: {
     fontSize: 15,
     fontWeight: '800',
@@ -2759,6 +2846,17 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: GasTaColors.textSoft,
     marginBottom: spacing.sm,
+  },
+  overrideButtonsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  overrideDoneBtn: {
+    flex: 1,
+  },
+  overrideAutoBtn: {
+    flex: 1,
   },
   warnHint: {
     fontSize: 11,

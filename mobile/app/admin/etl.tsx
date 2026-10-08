@@ -67,7 +67,7 @@ export default function EtlStatusScreen() {
         const [etlRes, pendingRes, dbRunsRes, ghRes] = await Promise.all([
           supabase.from('doe_etl_state').select('*').single(),
           supabase.from('doe_pending_downloads').select('*').order('bulletin_date', { ascending: false }),
-          supabase.from('doe_etl_runs').select('*').order('run_at', { ascending: false }).limit(20),
+          (supabase as any).from('doe_etl_runs').select('*').order('run_at', { ascending: false }).limit(20),
           fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=30`).catch(() => null),
         ]);
 
@@ -108,9 +108,9 @@ export default function EtlStatusScreen() {
         }
 
         // 2. If GitHub API is rate-limited or db has runs, merge db runs
-        if (dbRunsRes.data && dbRunsRes.data.length > 0) {
+        if (dbRunsRes.data && (dbRunsRes.data as any[]).length > 0) {
           const existingIds = new Set(combinedRuns.map(r => r.github_run_id));
-          for (const dbRun of dbRunsRes.data) {
+          for (const dbRun of (dbRunsRes.data as any[])) {
             if (!dbRun.github_run_id || !existingIds.has(dbRun.github_run_id)) {
               combinedRuns.push({
                 id: dbRun.id,

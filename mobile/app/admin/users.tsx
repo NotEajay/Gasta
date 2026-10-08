@@ -55,11 +55,11 @@ function EditUserModal({
 
   useEffect(() => {
     async function fetchVehicles() {
-      const { data, error } = await supabase.rpc('admin_get_user_vehicles', {
+      const { data, error } = await (supabase as any).rpc('admin_get_user_vehicles', {
         target_user_id: user.user_id,
       });
       if (!error && data) {
-        setVehicles(data);
+        setVehicles(data as Vehicle[]);
         // Initialise edits map
         const edits: Record<string, VehicleEdits> = {};
         (data as Vehicle[]).forEach(v => {
@@ -78,7 +78,7 @@ function EditUserModal({
   const handleSaveProfile = async () => {
     setSaving(true);
     setError(null);
-    const { error } = await supabase.rpc('admin_update_profile', {
+    const { error } = await (supabase as any).rpc('admin_update_profile', {
       target_user_id: user.user_id,
       new_full_name: name.trim(),
       new_role: role,
@@ -100,7 +100,7 @@ function EditUserModal({
     }
     setSavingVehicleId(vehicleId);
     setError(null);
-    const { error } = await supabase.rpc('admin_update_vehicle', {
+    const { error } = await (supabase as any).rpc('admin_update_vehicle', {
       target_vehicle_id: vehicleId,
       new_nickname: edits.nickname.trim() || null,
       new_fuel_efficiency: efficiency,
@@ -122,7 +122,7 @@ function EditUserModal({
 
   const handleDeleteVehicle = async (vehicleId: string, label: string) => {
     const doDelete = async () => {
-      const { error } = await supabase.rpc('admin_delete_vehicle', {
+      const { error } = await (supabase as any).rpc('admin_delete_vehicle', {
         target_vehicle_id: vehicleId,
       });
       if (error) {
@@ -310,7 +310,7 @@ function DeleteConfirmModal({
   const handleConfirm = async () => {
     setDeleting(true);
     setError(null);
-    const { error } = await supabase.rpc('admin_delete_user', {
+    const { error } = await (supabase as any).rpc('admin_delete_user', {
       target_user_id: user.user_id,
     });
     setDeleting(false);
@@ -387,7 +387,7 @@ export default function UserManagementScreen() {
 
   async function loadData() {
     setLoading(true);
-    const { data, error } = await supabase.rpc('get_admin_users_and_vehicles');
+    const { data, error } = await (supabase as any).rpc('get_admin_users_and_vehicles');
     if (error) setErrorMsg(error.message);
     if (data) setUsers(data as UserRow[]);
     setLoading(false);

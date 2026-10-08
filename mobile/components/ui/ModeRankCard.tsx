@@ -61,7 +61,7 @@ export default function ModeRankCard({
 
       <View style={styles.metrics}>
         <View style={styles.metric}>
-          <Text style={styles.metricLabel}>Estimated cost</Text>
+          <Text style={styles.metricLabel}>Trip cost</Text>
           <Text numberOfLines={1} style={styles.metricValue}>
             {formatPeso(evaluation.raw.fuelCost)}
           </Text>
