@@ -1,15 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Alert, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { ActivityIndicator, Animated, Easing, Modal, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import LabeledInput from '@/components/ui/LabeledInput';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import SelectField, { type SelectOption } from '@/components/ui/SelectField';
-// Explicit GasTa tokens instead of the generic `useTheme()` palette, so the
-// sharing panel sits on the same cream/forest canvas as the vehicle card it
-// lives inside. Only the colour SOURCE changed — no behaviour, flow, or gating.
-import { GasTaColors, GasTaRadius, GasTaSpacing, palette } from '@/constants/Theme';
+// GasTa tokens keep the access panel on the vehicle card’s cream/forest canvas.
+import { GasTaColors, GasTaRadius, GasTaSpacing, palette, typeScale } from '@/constants/Theme';
 import { fetchVehicleMembers } from '@/lib/services/vehicleRefills';
 import {
   createVehicleShare,
@@ -30,6 +27,29 @@ import {
 
 /** Faint forest tint, matching the vehicle card this panel lives inside. */
 const TINT_BG = 'rgba(1, 68, 33, 0.06)';
+
+// Presentation accents only; role definitions remain in the domain constants.
+const ROLE_VISUALS = {
+  Member: {
+    icon: 'people-outline', helper: 'Regular shared access',
+    color: GasTaColors.forest, tint: '#EFF6EF', border: '#CBDECE', active: '#E1EEE3',
+  },
+  Driver: {
+    icon: 'car-outline', helper: 'For vehicle drivers',
+    color: '#216775', tint: '#EEF6F7', border: '#CBDFE3', active: '#DFEEF1',
+  },
+  Operator: {
+    icon: 'build-outline', helper: 'Day-to-day operations',
+    color: '#92621D', tint: '#FBF5E9', border: '#EADABD', active: '#F5EACC',
+  },
+  Viewer: {
+    icon: 'eye-outline', helper: 'View information only',
+    color: '#695581', tint: '#F4F1F8', border: '#DDD4E8', active: '#EAE3F2',
+  },
+} satisfies Record<VehicleShareRole, {
+  icon: ComponentProps<typeof Ionicons>['name'];
+  helper: string; color: string; tint: string; border: string; active: string;
+}>;
 
 /**
  * Collaborator display name.
@@ -71,7 +91,7 @@ function initialsOf(name: string | null): string {
 
 type RoleValue = VehicleShareRole | '';
 
-const roleOptions: readonly SelectOption<RoleValue>[] = [
+const roleOptions: readonly { value: VehicleShareRole; label: string }[] = [
   { value: 'Member', label: 'Member' },
   { value: 'Driver', label: 'Driver' },
   { value: 'Operator', label: 'Operator' },
@@ -93,6 +113,8 @@ interface VehicleSharePanelProps {
    */
   expanded?: boolean;
   onToggle?: () => void;
+  /** Reveal a native view using the screen's existing scroll container. */
+  onRequestKeyboardReveal?: (target: View | null) => void;
 }
 
 type PanelMessage = {
@@ -117,6 +139,7 @@ export default function VehicleSharePanel({
   ownerId,
   expanded: expandedProp,
   onToggle,
+  onRequestKeyboardReveal,
 }: VehicleSharePanelProps) {
   // Uncontrolled by default, so any other caller keeps the old behaviour.
   const [expandedLocal, setExpandedLocal] = useState(false);
@@ -131,7 +154,16 @@ export default function VehicleSharePanel({
     }
   }, [onToggle]);
   const [email, setEmail] = useState('');
+  const [showAddForm, setShowAddForm] = useState(true);
+  const [lookupFocused, setLookupFocused] = useState(false);
+  const lookupCardRef = useRef<View>(null);
+  const collaboratorCardRef = useRef<View>(null);
+  const accessActionRef = useRef<View>(null);
+
+  useEffect(() => () => onRequestKeyboardReveal?.(null), [onRequestKeyboardReveal]);
   const [lookedUpUser, setLookedUpUser] = useState<UserProfileLookup | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const isSelected = lookedUpUser !== null && selectedUserId === lookedUpUser.id;
   const [shareRole, setShareRole] = useState<RoleValue>('');
   const [shares, setShares] = useState<VehicleShare[]>([]);
   // Collaborator names, read through the vehicle-scoped `vehicle_members` RPC
@@ -142,8 +174,70 @@ export default function VehicleSharePanel({
   const [lookingUp, setLookingUp] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const removalInFlight = useRef(false);
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    shareId: string;
+    name: string;
+    role: VehicleShareRole;
+  } | null>(null);
   const [message, setMessage] = useState<PanelMessage | null>(null);
+  const [accessResultModal, setAccessResultModal] = useState<{
+    visible: boolean;
+    type: 'success' | 'error' | 'confirm';
+    message: string;
+    role?: VehicleShareRole;
+    title?: string;
+    operation?: 'remove';
+  }>({ visible: false, type: 'success', message: '' });
   const [ownerProfile, setOwnerProfile] = useState<UserProfile | null>(null);
+  const resultAnimation = useRef(new Animated.Value(0)).current;
+  const collaboratorAnimation = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!lookedUpUser) return;
+    collaboratorAnimation.setValue(0);
+    const animation = Animated.timing(collaboratorAnimation, {
+      toValue: 1,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [lookedUpUser?.id, collaboratorAnimation]);
+
+  useEffect(() => {
+    if (!accessResultModal.visible) return;
+    resultAnimation.setValue(0);
+    const animation = Animated.timing(resultAnimation, {
+      toValue: 1,
+      duration: 200,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [accessResultModal.visible, accessResultModal.type, resultAnimation]);
+
+  const dismissAccessResult = () => {
+    if (removalInFlight.current) return;
+    if (accessResultModal.operation === 'remove' && accessResultModal.type === 'error' && pendingRemoval) {
+      showRemovalConfirmation(pendingRemoval);
+      return;
+    }
+    if (accessResultModal.type === 'success') {
+      onRequestKeyboardReveal?.(null);
+      setEmail('');
+      setLookedUpUser(null);
+      setSelectedUserId(null);
+      setShareRole('');
+      setMessage(null);
+      setShowAddForm(false);
+    }
+    // Keep the result content intact during the native dismissal animation.
+    setAccessResultModal((current) => ({ ...current, visible: false }));
+    if (accessResultModal.operation === 'remove') setPendingRemoval(null);
+  };
 
   /** Only active collaborators are listed; revoked ones are hidden. */
   const activeShares = useMemo(() => shares.filter((s) => !s.revoked), [shares]);
@@ -167,6 +261,7 @@ export default function VehicleSharePanel({
   }, [existingShare, lookedUpUser, ownerId]);
 
   const canSubmit = shareMode === 'new' || shareMode === 'restore';
+  const accessActionDisabled = sharing || lookingUp || !isSelected || !canSubmit || !shareRole;
   const primaryLabel =
     sharing ? 'Saving…' : shareMode === 'restore' ? 'Restore access' : 'Give access';
 
@@ -214,6 +309,8 @@ export default function VehicleSharePanel({
     }
 
     setLookingUp(true);
+    setLookedUpUser(null);
+    setSelectedUserId(null);
     setMessage(null);
     try {
       const profile = await findUserByEmail(normalizedEmail);
@@ -263,8 +360,8 @@ export default function VehicleSharePanel({
   };
 
   const handleShare = async () => {
-    if (!lookedUpUser) {
-      setMessage({ kind: 'error', text: 'Look up the user before sharing.' });
+    if (!lookedUpUser || !isSelected) {
+      setMessage({ kind: 'error', text: 'Select the user before sharing.' });
       return;
     }
     if (!shareRole) {
@@ -282,9 +379,11 @@ export default function VehicleSharePanel({
     }
     // An already-active share is never resubmitted: no INSERT, no restore.
     if (shareMode === 'active') {
-      setMessage({
-        kind: 'error',
-        text: `This user already has access to this vehicle as ${existingShare?.role}.`,
+      setMessage(null);
+      setAccessResultModal({
+        visible: true,
+        type: 'error',
+        message: 'This user already has access to this vehicle.',
       });
       return;
     }
@@ -295,6 +394,7 @@ export default function VehicleSharePanel({
     }
 
     const role = shareRole as VehicleShareRole;
+    const grantedName = lookedUpUser.full_name?.trim() || 'This user';
 
     // A revoked share is reactivated on its EXISTING row. It must never reach
     // createVehicleShare(): unique (vehicleID, shared_with) would reject the
@@ -307,7 +407,6 @@ export default function VehicleSharePanel({
       if (restoring) {
         // Reactivate the SAME row rather than inserting a duplicate.
         await restoreVehicleShare(vehicleId, lookedUpUser.id, role);
-        setMessage({ kind: 'success', text: `Access restored as ${role}.` });
       } else {
         await createVehicleShare({
           vehicleId,
@@ -315,55 +414,80 @@ export default function VehicleSharePanel({
           sharedWith: lookedUpUser.id,
           role,
         });
-        setMessage({ kind: 'success', text: 'Vehicle shared successfully.' });
       }
-      setEmail('');
-      setLookedUpUser(null);
-      setShareRole('');
+      // Both actions share the result lifecycle; only Done clears the form.
       await loadShares();
+      setAccessResultModal({
+        visible: true,
+        type: 'success',
+        message: `${grantedName} can now access this vehicle as ${role}.`,
+        role,
+      });
     } catch (error) {
-      setMessage({
-        kind: 'error',
-        text: error instanceof Error ? error.message : 'Unable to update vehicle access.',
+      const alreadyShared =
+        (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') ||
+        (error instanceof Error && /already shared|already has access/i.test(error.message));
+      setAccessResultModal({
+        visible: true,
+        type: 'error',
+        message: alreadyShared
+          ? 'This user already has access to this vehicle.'
+          : 'We couldn’t grant access right now. Please try again.',
       });
     } finally {
       setSharing(false);
     }
   };
 
-  const handleRemove = (share: VehicleShare) => {
-    // Same real name the row shows, via the same vehicle-scoped source.
-    const displayName = resolveName(members, share.shared_with) ?? 'this user';
+  const showRemovalConfirmation = (target: NonNullable<typeof pendingRemoval>) => {
+    setAccessResultModal({
+      visible: true,
+      type: 'confirm',
+      operation: 'remove',
+      title: 'Remove access?',
+      message: `${target.name} will no longer be able to access this vehicle.`,
+    });
+  };
 
-    Alert.alert(
-      'Remove access',
-      `Remove access for ${displayName}?\n\nThey will no longer be able to view or add shared vehicle activity. Existing records will be kept.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove access',
-          style: 'destructive',
-          onPress: async () => {
-            setRevokingId(share['ShareID']);
-            try {
-              await revokeVehicleShare(share['ShareID'], vehicleId, ownerId);
-              setMessage({
-                kind: 'success',
-                text: `Access removed for ${displayName}.`,
-              });
-              await loadShares();
-            } catch (error) {
-              setMessage({
-                kind: 'error',
-                text: error instanceof Error ? error.message : 'Unable to remove access.',
-              });
-            } finally {
-              setRevokingId(null);
-            }
-          },
-        },
-      ],
-    );
+  const handleRemove = (share: VehicleShare) => {
+    if (removalInFlight.current) return;
+    const target = {
+      shareId: share['ShareID'],
+      name: resolveName(members, share.shared_with) ?? 'This user',
+      role: share.role,
+    };
+    setPendingRemoval(target);
+    showRemovalConfirmation(target);
+  };
+
+  const confirmRemoval = async () => {
+    if (!pendingRemoval || removalInFlight.current) return;
+    const target = pendingRemoval;
+    removalInFlight.current = true;
+    setRevokingId(target.shareId);
+    setMessage(null);
+    try {
+      await revokeVehicleShare(target.shareId, vehicleId, ownerId);
+      await loadShares();
+      setAccessResultModal({
+        visible: true,
+        type: 'success',
+        operation: 'remove',
+        title: 'Access removed',
+        message: `${target.name} no longer has access to this vehicle.`,
+      });
+    } catch {
+      setAccessResultModal({
+        visible: true,
+        type: 'error',
+        operation: 'remove',
+        title: "Couldn't remove access",
+        message: "We couldn't remove access right now. Please try again.",
+      });
+    } finally {
+      removalInFlight.current = false;
+      setRevokingId(null);
+    }
   };
 
   return (
@@ -387,75 +511,185 @@ export default function VehicleSharePanel({
 
       {expanded ? (
         <View style={[styles.panel, { borderTopColor: GasTaColors.glassBorderSubtle }]}>
-          <Text style={[styles.panelTitle, { color: GasTaColors.forestDark }]}>Vehicle access</Text>
-          <Text style={[styles.panelDescription, { color: GasTaColors.textMuted }]}>
-            Allow another GasTa user to view or help manage this vehicle.
-          </Text>
+          <View style={styles.panelHeader}>
+            <View style={styles.panelHeaderIcon}>
+              <Ionicons name="people" size={22} color={GasTaColors.forest} />
+            </View>
+            <View style={styles.sharedUserInfo}>
+              <Text style={styles.panelTitle}>Vehicle access</Text>
+              <Text style={[styles.panelDescription, { color: GasTaColors.textMuted }]}>
+                Manage who can view or help manage this vehicle.
+              </Text>
+            </View>
+          </View>
           <Text style={[styles.ownerNote, { color: GasTaColors.textMuted }]}>
             You are the Owner.
           </Text>
 
-          <LabeledInput
-            label="GasTa account email"
-            value={email}
-            onChangeText={(value) => {
-              setEmail(value);
-              setLookedUpUser(null);
-              setShareRole('');
-              setMessage(null);
-            }}
-            placeholder="name@example.com"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <PrimaryButton
-            label={lookingUp ? 'Looking up…' : 'Look up account'}
-            variant="secondary"
-            size="sm"
-            onPress={handleLookup}
-            disabled={lookingUp}
-            style={styles.lookupButton}
-          />
-
-          {lookedUpUser ? (
-            <View style={[styles.foundCard, { backgroundColor: TINT_BG, borderColor: GasTaColors.glassBorderSubtle }]}>
-              <View style={styles.sharedUserInfo}>
-                <Text style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
-                  {lookedUpUser.full_name?.trim() || 'GasTa user'}
-                </Text>
-                <Text style={[styles.sharedUserEmail, { color: GasTaColors.textSoft }]}>
-                  {email}
-                </Text>
+          {showAddForm ? (
+            <>
+              <View ref={lookupCardRef} collapsable={false} style={[styles.lookupCard, lookupFocused && styles.lookupCardFocused]}>
+                <View style={styles.lookupHeading}>
+                  <View style={styles.lookupIcon}>
+                    <Ionicons name="mail-outline" size={18} color={GasTaColors.forest} />
+                  </View>
+                  <Text style={styles.lookupTitle}>Find a GasTa user</Text>
+                </View>
+                <LabeledInput
+                  label="GasTa account email"
+                  value={email}
+                  onChangeText={(value) => {
+                    setEmail(value);
+                    setLookedUpUser(null);
+                    setSelectedUserId(null);
+                    setShareRole('');
+                    setMessage(null);
+                  }}
+                  placeholder="name@example.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onFocus={() => {
+                    setLookupFocused(true);
+                    onRequestKeyboardReveal?.(lookupCardRef.current);
+                  }}
+                  onBlur={() => {
+                    setLookupFocused(false);
+                    onRequestKeyboardReveal?.(null);
+                  }}
+                  style={[styles.lookupInput, lookupFocused && styles.lookupInputFocused]}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={lookingUp ? 'Looking up…' : 'Look up account'}
+                  accessibilityState={{ disabled: lookingUp, busy: lookingUp }}
+                  onPress={handleLookup}
+                  disabled={lookingUp}
+                  style={({ pressed }) => [
+                    styles.lookupButton,
+                    pressed && !lookingUp && styles.lookupButtonPressed,
+                    lookingUp && styles.lookupButtonLoading,
+                  ]}>
+                  {lookingUp ? (
+                    <ActivityIndicator size="small" color={GasTaColors.white} />
+                  ) : (
+                    <Ionicons name="search-outline" size={20} color={GasTaColors.white} />
+                  )}
+                  <Text style={styles.lookupButtonLabel}>
+                    {lookingUp ? 'Looking up…' : 'Look up account'}
+                  </Text>
+                </Pressable>
               </View>
-              {shareMode === 'active' ? (
-                <View style={[styles.stateTag, { backgroundColor: GasTaColors.creamDark }]}>
-                  <Text style={[styles.stateTagLabel, { color: GasTaColors.textMuted }]}>
-                    {existingShare?.role}
-                  </Text>
-                </View>
-              ) : shareMode === 'restore' ? (
-                <View style={[styles.stateTag, { backgroundColor: GasTaColors.creamDark }]}>
-                  <Text style={[styles.stateTagLabel, { color: GasTaColors.textMuted }]}>
-                    Previously {existingShare?.role}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
 
-          <SelectField<RoleValue>
-            label="Access role"
-            value={shareRole}
-            options={roleOptions}
-            onChange={setShareRole}
-            placeholder="Choose an access role"
-          />
-          <Text style={[styles.roleHint, { color: GasTaColors.textMuted }]}>
-            {shareRole && shareRole in VEHICLE_SHARE_ROLE_DESCRIPTIONS
-              ? VEHICLE_SHARE_ROLE_DESCRIPTIONS[shareRole as VehicleShareRole]
-              : 'Select a role to see what this person can do.'}
-          </Text>
+              {lookedUpUser ? (
+                <Animated.View
+                  ref={collaboratorCardRef}
+                  collapsable={false}
+                  onLayout={() => onRequestKeyboardReveal?.(collaboratorCardRef.current)}
+                  style={{
+                  opacity: collaboratorAnimation,
+                  transform: [{ translateY: collaboratorAnimation.interpolate({ inputRange: [0, 1], outputRange: [4, 0] }) }],
+                }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select ${lookedUpUser.full_name?.trim() || email}`}
+                    accessibilityState={{ selected: isSelected, disabled: lookingUp || sharing }}
+                    disabled={lookingUp || sharing}
+                    onPress={() => {
+                      setSelectedUserId(lookedUpUser.id);
+                      onRequestKeyboardReveal?.(collaboratorCardRef.current);
+                    }}
+                    style={({ pressed }) => [
+                      styles.foundCard,
+                      isSelected && styles.foundCardSelected,
+                      pressed && styles.foundCardPressed,
+                    ]}>
+                    <View style={[styles.rowAvatar, styles.foundAvatar, isSelected && styles.foundAvatarSelected]}>
+                      <Text style={[styles.rowAvatarText, isSelected && styles.foundAvatarTextSelected]}>
+                        {initialsOf(lookedUpUser.full_name?.trim() || null)}
+                      </Text>
+                    </View>
+                    <View style={styles.sharedUserInfo}>
+                      <Text numberOfLines={2} style={[styles.sharedUserName, { color: GasTaColors.forestDark }]}>
+                        {lookedUpUser.full_name?.trim() || 'GasTa user'}
+                      </Text>
+                      <Text numberOfLines={1} style={[styles.sharedUserEmail, { color: GasTaColors.textSoft }]}>
+                        {email}
+                      </Text>
+                    </View>
+                    <View style={styles.foundCardStatus}>
+                      {isSelected ? (
+                        <View style={styles.selectedIndicator}>
+                          <Ionicons name="checkmark-circle" size={22} color={GasTaColors.forest} />
+                          <View style={styles.selectedBadge}>
+                            <Text style={styles.selectedLabel}>Selected</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <Text style={styles.selectPrompt}>Tap to select</Text>
+                      )}
+                    {shareMode === 'active' ? (
+                      <View style={[styles.stateTag, { backgroundColor: GasTaColors.creamDark }]}>
+                        <Text style={[styles.stateTagLabel, { color: GasTaColors.textMuted }]}>
+                          {existingShare?.role}
+                        </Text>
+                      </View>
+                    ) : shareMode === 'restore' ? (
+                      <View style={[styles.stateTag, { backgroundColor: GasTaColors.creamDark }]}>
+                        <Text style={[styles.stateTagLabel, { color: GasTaColors.textMuted }]}>
+                          Previously {existingShare?.role}
+                        </Text>
+                      </View>
+                    ) : null}
+                    </View>
+                  </Pressable>
+                </Animated.View>
+              ) : null}
+
+              <Text style={styles.roleLabel}>Choose role</Text>
+              <View style={styles.roleGrid} accessibilityRole="radiogroup" accessibilityLabel="Access role">
+                {roleOptions.map((option) => {
+                  const selected = shareRole === option.value;
+                  const visual = ROLE_VISUALS[option.value];
+                  return (
+                    <Pressable
+                      key={option.value}
+                      accessibilityRole="radio"
+                      accessibilityLabel={option.label}
+                      accessibilityState={{ checked: selected }}
+                      onPress={() => {
+                        setShareRole(option.value);
+                        onRequestKeyboardReveal?.(accessActionRef.current);
+                      }}
+                      style={({ pressed }) => [
+                        styles.roleOption,
+                        { backgroundColor: selected ? visual.active : visual.tint, borderColor: selected ? visual.color : visual.border },
+                        selected && styles.roleOptionSelected,
+                        pressed && styles.foundCardPressed,
+                      ]}>
+                      <View style={styles.roleOptionHeader}>
+                        <View style={[styles.roleIcon, { backgroundColor: visual.active }]}>
+                          <Ionicons name={visual.icon} size={18} color={visual.color} />
+                        </View>
+                        <Text style={[styles.roleOptionLabel, { color: visual.color }, selected && styles.roleOptionLabelSelected]}>
+                          {option.label}
+                        </Text>
+                        {selected ? (
+                          <Ionicons name="checkmark-circle" size={16} color={visual.color} />
+                        ) : null}
+                      </View>
+                      <Text numberOfLines={2} style={styles.roleOptionHelper}>{visual.helper}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={[styles.roleHint, { color: GasTaColors.textMuted }]}>
+                {shareRole && shareRole in VEHICLE_SHARE_ROLE_DESCRIPTIONS
+                  ? VEHICLE_SHARE_ROLE_DESCRIPTIONS[shareRole as VehicleShareRole]
+                  : 'Select a role to see what this person can do.'}
+              </Text>
+            </>
+          ) : null}
 
           {message ? (
             <Text
@@ -474,16 +708,32 @@ export default function VehicleSharePanel({
             </Text>
           ) : null}
 
-          <PrimaryButton
-            label={primaryLabel}
-            onPress={handleShare}
-            disabled={sharing || lookingUp || !lookedUpUser || !canSubmit || !shareRole}
-          />
+          {showAddForm ? (
+            <View ref={accessActionRef} collapsable={false}>
+              <PrimaryButton
+                label={primaryLabel}
+                onPress={handleShare}
+                disabled={accessActionDisabled}
+                style={accessActionDisabled ? { ...styles.primaryAction, opacity: 0.62 } : styles.primaryAction}
+              />
+            </View>
+          ) : null}
 
           <View style={styles.sharedHeader}>
             <Text style={[styles.sharedHeading, { color: GasTaColors.forestDark }]}>
               People with access ({activeShares.length})
             </Text>
+            {!showAddForm ? (
+              <PrimaryButton
+                label="Add person"
+                variant="secondary"
+                size="sm"
+                onPress={() => {
+                  setMessage(null);
+                  setShowAddForm(true);
+                }}
+              />
+            ) : null}
           </View>
 
           {ownerProfile?.full_name?.trim() ? (
@@ -510,7 +760,7 @@ export default function VehicleSharePanel({
               const displayName = name ?? 'GasTa user';
               const knownEmail =
                 lookedUpUser?.id === share.shared_with && email ? email : null;
-              const isViewer = share.role === 'Viewer';
+              const roleVisual = ROLE_VISUALS[share.role];
 
               return (
                 <View key={share['ShareID']} style={styles.sharedUser}>
@@ -533,9 +783,9 @@ export default function VehicleSharePanel({
                     ) : null}
                   </View>
 
-                  <View style={[styles.rowRole, isViewer && styles.rowRoleNeutral]}>
+                  <View style={[styles.rowRole, { backgroundColor: roleVisual.tint, borderColor: roleVisual.border }]}>
                     <Text
-                      style={[styles.rowRoleText, isViewer && styles.rowRoleTextNeutral]}>
+                      style={[styles.rowRoleText, { color: roleVisual.color }]}>
                       {share.role}
                     </Text>
                   </View>
@@ -557,9 +807,7 @@ export default function VehicleSharePanel({
             })
           )}
 
-          {/* Contextual per-row menu. The destructive confirmation Alert and the
-              revoke handler below are used exactly as they were — only the
-              affordance that reaches them moved. */}
+          {/* The contextual action opens confirmation before any revoke call. */}
           <Modal
             animationType="fade"
             transparent
@@ -585,9 +833,7 @@ export default function VehicleSharePanel({
                           }`
                         : 'Remove access'
                     }
-                    // Keeps the busy state the old inline button had: the
-                    // confirmation Alert is still what does the work, so this
-                    // only reflects the in-flight request.
+                    // The confirmation dialog performs the revoke after approval.
                     disabled={revokingId !== null}
                     onPress={() => {
                       const target = rowMenuFor;
@@ -617,11 +863,178 @@ export default function VehicleSharePanel({
           </Modal>
         </View>
       ) : null}
+      {/* The result host must survive changes to expansion and form/list state. */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={accessResultModal.visible}
+        onRequestClose={() => {
+          if (removalInFlight.current) return;
+          if (accessResultModal.operation === 'remove' && accessResultModal.type === 'error') {
+            setAccessResultModal((current) => ({ ...current, visible: false }));
+            setPendingRemoval(null);
+          } else {
+            dismissAccessResult();
+          }
+        }}>
+        <View style={styles.accessResultBackdrop}>
+          <Animated.View
+            style={[
+              styles.accessResultCard,
+              accessResultModal.type !== 'success' && styles.accessResultCardError,
+              {
+                opacity: resultAnimation,
+                transform: [{ scale: resultAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
+              },
+            ]}
+            accessibilityViewIsModal>
+            <View style={[
+              styles.accessResultIcon,
+              accessResultModal.type !== 'success' && styles.accessResultIconError,
+            ]}>
+              <Ionicons
+                name={accessResultModal.type === 'success' ? 'checkmark-circle' : accessResultModal.type === 'confirm' ? 'person-remove-outline' : 'alert-circle-outline'}
+                size={38}
+                color={accessResultModal.type === 'success' ? GasTaColors.forest : palette.warning}
+              />
+            </View>
+            <Text style={styles.accessResultTitle} accessibilityRole="header">
+              {accessResultModal.title ?? (accessResultModal.type === 'success' ? 'Access granted' : 'Couldn’t grant access')}
+            </Text>
+            <Text style={styles.accessResultMessage}>{accessResultModal.message}</Text>
+            {accessResultModal.type === 'success' && accessResultModal.role ? (
+              <View style={[
+                styles.resultRole,
+                { backgroundColor: ROLE_VISUALS[accessResultModal.role].tint, borderColor: ROLE_VISUALS[accessResultModal.role].border },
+              ]}>
+                <Ionicons name={ROLE_VISUALS[accessResultModal.role].icon} size={15} color={ROLE_VISUALS[accessResultModal.role].color} />
+                <Text style={[styles.rowRoleText, { color: ROLE_VISUALS[accessResultModal.role].color }]}>
+                  {accessResultModal.role}
+                </Text>
+              </View>
+            ) : null}
+            {accessResultModal.type === 'confirm' ? (
+              <View style={styles.removalActions}>
+                {pendingRemoval ? (
+                  <Text style={styles.removalRole}>Current role: {pendingRemoval.role}</Text>
+                ) : null}
+                <PrimaryButton
+                  label={revokingId ? 'Removing…' : 'Remove access'}
+                  variant="danger"
+                  onPress={confirmRemoval}
+                  disabled={revokingId !== null}
+                  style={styles.removeAction}
+                />
+                <PrimaryButton
+                  label="Cancel"
+                  variant="secondary"
+                  onPress={dismissAccessResult}
+                  disabled={revokingId !== null}
+                  style={styles.removalCancel}
+                />
+              </View>
+            ) : (
+              <PrimaryButton
+                label={accessResultModal.type === 'success' ? 'Done' : 'Try again'}
+                onPress={dismissAccessResult}
+                style={styles.primaryAction}
+              />
+            )}
+          </Animated.View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  removalActions: {
+    width: '100%',
+    gap: GasTaSpacing.sm,
+  },
+  removalRole: {
+    color: GasTaColors.textMuted,
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: GasTaSpacing.sm,
+  },
+  removeAction: {
+    width: '100%',
+    minHeight: 50,
+    borderRadius: GasTaRadius.sm + GasTaSpacing.xs,
+    backgroundColor: '#A34F3F',
+    borderColor: '#A34F3F',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  removalCancel: {
+    width: '100%',
+    minHeight: 48,
+    borderColor: GasTaColors.glassBorderSubtle,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  accessResultBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 48, 25, 0.42)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: GasTaSpacing.lg,
+  },
+  accessResultCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FCFEFC',
+    borderRadius: GasTaRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.forestBorder,
+    padding: GasTaSpacing.lg,
+    alignItems: 'center',
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  accessResultCardError: {
+    backgroundColor: '#FFFDFA',
+    borderColor: ROLE_VISUALS.Operator.border,
+  },
+  accessResultIcon: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.forestGlow,
+    marginBottom: GasTaSpacing.md,
+  },
+  accessResultIconError: {
+    backgroundColor: ROLE_VISUALS.Operator.active,
+  },
+  accessResultTitle: {
+    ...typeScale.pageTitle,
+    color: GasTaColors.forestDark,
+    textAlign: 'center',
+  },
+  accessResultMessage: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: GasTaColors.textMuted,
+    textAlign: 'center',
+    marginTop: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.lg,
+  },
+  resultRole: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.xs,
+    borderWidth: 1,
+    borderRadius: GasTaRadius.pill,
+    paddingHorizontal: GasTaSpacing.sm + GasTaSpacing.xs,
+    paddingVertical: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.lg,
+  },
   wrap: {
     marginTop: GasTaSpacing.md,
   },
@@ -649,26 +1062,210 @@ const styles = StyleSheet.create({
     paddingTop: GasTaSpacing.md,
   },
   panelTitle: {
-    fontSize: 16,
-    fontWeight: '800',
+    ...typeScale.sectionHeading,
+    color: GasTaColors.forestDark,
     marginBottom: GasTaSpacing.xs,
   },
   panelDescription: {
     fontSize: 13,
     lineHeight: 19,
-    marginBottom: GasTaSpacing.md,
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    backgroundColor: GasTaColors.forestGlow,
+    borderRadius: GasTaRadius.md,
+    padding: GasTaSpacing.md,
+    marginBottom: GasTaSpacing.sm,
+  },
+  panelHeaderIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: GasTaColors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   lookupButton: {
-    alignSelf: 'flex-start',
+    width: '100%',
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: GasTaSpacing.sm,
+    paddingHorizontal: GasTaSpacing.md,
+    paddingVertical: GasTaSpacing.sm,
+    borderRadius: GasTaRadius.sm + GasTaSpacing.xs,
+    backgroundColor: GasTaColors.forest,
+  },
+  lookupButtonPressed: {
+    backgroundColor: GasTaColors.forestDark,
+  },
+  lookupButtonLoading: {
+    opacity: 0.82,
+  },
+  lookupButtonLabel: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: GasTaColors.white,
+  },
+  lookupCard: {
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: ROLE_VISUALS.Member.tint,
+    borderRadius: GasTaRadius.md,
+    padding: GasTaSpacing.md,
     marginBottom: GasTaSpacing.md,
+  },
+  lookupCardFocused: {
+    borderColor: GasTaColors.forest,
+  },
+  lookupInput: {
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.white,
+  },
+  lookupInputFocused: {
+    borderColor: GasTaColors.forest,
+  },
+  lookupHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.md,
+  },
+  lookupIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TINT_BG,
+  },
+  lookupTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  primaryAction: {
+    width: '100%',
+    minHeight: 50,
+    borderRadius: GasTaRadius.sm + GasTaSpacing.xs,
+    backgroundColor: GasTaColors.forest,
+    borderColor: GasTaColors.forest,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  roleLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+    marginBottom: GasTaSpacing.sm,
+  },
+  roleGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.sm,
+  },
+  roleOption: {
+    flexBasis: '45%',
+    flexGrow: 1,
+    minWidth: 0,
+    minHeight: 80,
+    alignItems: 'stretch',
+    gap: GasTaSpacing.xs,
+    padding: GasTaSpacing.sm + GasTaSpacing.xs / 2,
+    borderWidth: 1,
+    borderRadius: GasTaRadius.sm + GasTaSpacing.xs / 2,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.white,
+  },
+  roleOptionSelected: {
+    shadowColor: GasTaColors.forest,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  roleOptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.xs,
+  },
+  roleIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: GasTaRadius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleOptionHelper: {
+    fontSize: 11,
+    lineHeight: 14,
+    color: GasTaColors.textMuted,
+  },
+  roleOptionLabel: {
+    flex: 1,
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: GasTaColors.textMuted,
+  },
+  roleOptionLabelSelected: {
+    fontWeight: '700',
   },
   foundCard: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
+    backgroundColor: GasTaColors.white,
+    borderColor: GasTaColors.glassBorderSubtle,
+    gap: GasTaSpacing.sm,
     borderRadius: GasTaRadius.md,
-    padding: GasTaSpacing.sm,
+    padding: GasTaSpacing.md,
     marginBottom: GasTaSpacing.md,
+  },
+  foundCardSelected: {
+    backgroundColor: ROLE_VISUALS.Member.active,
+    borderColor: GasTaColors.forest,
+  },
+  foundAvatar: {
+    width: 36,
+    height: 36,
+  },
+  foundAvatarSelected: {
+    backgroundColor: GasTaColors.forest,
+  },
+  foundAvatarTextSelected: {
+    color: GasTaColors.white,
+  },
+  foundCardPressed: {
+    opacity: 0.8,
+  },
+  foundCardStatus: {
+    alignItems: 'flex-end',
+    gap: GasTaSpacing.xs,
+  },
+  selectedIndicator: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  selectedBadge: {
+    backgroundColor: GasTaColors.forestGlow,
+    borderRadius: GasTaRadius.pill,
+    paddingHorizontal: GasTaSpacing.sm,
+    paddingVertical: 3,
+  },
+  selectedLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+  },
+  selectPrompt: {
+    fontSize: 11,
+    color: GasTaColors.textMuted,
   },
   stateTag: {
     borderRadius: GasTaRadius.sm,
@@ -682,7 +1279,6 @@ const styles = StyleSheet.create({
   ownerNote: {
     fontSize: 13,
     fontWeight: '700',
-    marginTop: -GasTaSpacing.sm,
     marginBottom: GasTaSpacing.md,
   },
   ownerRow: {
@@ -693,7 +1289,6 @@ const styles = StyleSheet.create({
   roleHint: {
     fontSize: 12,
     lineHeight: 17,
-    marginTop: -GasTaSpacing.sm,
     marginBottom: GasTaSpacing.md,
   },
   message: {
@@ -705,10 +1300,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: GasTaSpacing.sm,
     marginTop: GasTaSpacing.lg,
     marginBottom: GasTaSpacing.sm,
   },
   sharedHeading: {
+    flex: 1,
     fontSize: 15,
     fontWeight: '800',
   },
@@ -717,15 +1314,18 @@ const styles = StyleSheet.create({
     marginBottom: GasTaSpacing.sm,
   },
   // ---- collaborator row ----------------------------------------------------
-  // Flat row, no tint fill, no always-red button. Identity on the left, role
-  // as a chip on the right, one quiet contextual control.
+  // Identity, role tint and one quiet contextual control.
   sharedUser: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: GasTaSpacing.sm,
     paddingVertical: GasTaSpacing.sm,
-    paddingHorizontal: GasTaSpacing.xs,
+    paddingHorizontal: GasTaSpacing.sm,
     borderRadius: GasTaRadius.sm,
+    backgroundColor: GasTaColors.creamLight,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    marginBottom: GasTaSpacing.sm,
   },
   rowAvatar: {
     width: 34,
@@ -754,26 +1354,17 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 1,
   },
-  // Member / Driver / Operator: soft forest tint.
   rowRole: {
     paddingHorizontal: GasTaSpacing.sm,
-    paddingVertical: 2,
+    paddingVertical: 4,
     borderRadius: GasTaRadius.pill,
-    backgroundColor: TINT_BG,
-  },
-  // Viewer: deliberately quieter, and never colour-only — the role text is
-  // always present and readable.
-  rowRoleNeutral: {
-    backgroundColor: GasTaColors.creamDark,
+    borderWidth: 1,
   },
   rowRoleText: {
     fontSize: 11,
     lineHeight: 14,
     fontWeight: '700',
     color: GasTaColors.forest,
-  },
-  rowRoleTextNeutral: {
-    color: GasTaColors.textMuted,
   },
   rowMore: {
     width: 30,

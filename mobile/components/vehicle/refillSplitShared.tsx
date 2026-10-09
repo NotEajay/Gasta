@@ -1,10 +1,14 @@
-import { StyleSheet, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useRef } from 'react';
+import PrimaryButton from '@/components/ui/PrimaryButton';
+import { Animated, Easing, Keyboard, StyleSheet, TextInput, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { HomeColors } from '@/constants/home';
 import type { SplitAllocationInput } from '@/lib/services/refillAllocations';
-import type { VehicleMember } from '@/types';
+import { formatCurrency } from '@/lib/format';
+import type { RefillAllocation, VehicleMember } from '@/types';
 
 /**
  * The shared visual language of the split feature.
@@ -20,8 +24,8 @@ import type { VehicleMember } from '@/types';
  * tokens in one StyleSheet is what stops the two screens from drifting apart
  * again.
  *
- * Nothing in this file knows about refills, ids, allocations, the keyboard or
- * the network. It only knows how the screen should look.
+ * Persistence stays with each caller. Shared input validation and currency
+ * conversion keep the draft and saved-refill screens consistent.
  */
 
 /** Up to two initials for a member avatar: "Danna Paula" -> "DP". */
@@ -318,7 +322,7 @@ export function SplitMemberRow({
  * saved-refill split sheet cannot drift apart: both round through the exact
  * same function.
  */
-export const toCents = (value: number) => Math.round((Number(value) || 0) * 100);
+export const toCents = (value: number) => Math.round(((Number(value) || 0) + Number.EPSILON) * 100);
 export const fromCents = (cents: number) => cents / 100;
 
 /**
@@ -331,7 +335,7 @@ export const fromCents = (cents: number) => cents / 100;
  */
 export function sortEligibleMembers(members: VehicleMember[]): VehicleMember[] {
   return members
-    .filter((m) => m.role !== 'Viewer')
+    .filter((m) => m.user_id && ['Owner', 'Member', 'Driver', 'Operator'].includes(m.role))
     .sort((a, b) => {
       if (a.role === 'Owner') return -1;
       if (b.role === 'Owner') return 1;
@@ -346,7 +350,8 @@ export function memberLabel(member: VehicleMember): string {
 
 /** What the user typed in one amount box, as cents. Blank or junk reads as 0. */
 export function parseDraftCents(raw: string | undefined): number {
-  return toCents(Number.parseFloat(raw ?? '') || 0);
+  const value = Number((raw ?? '').trim());
+  return Number.isFinite(value) ? toCents(value) : 0;
 }
 
 /**
@@ -363,6 +368,105 @@ export function buildSplitPayload(
   members: VehicleMember[],
 ): SplitAllocationInput[] {
   return members
-    .map((m) => ({ userId: m.user_id, amount: Number.parseFloat(draft[m.user_id] ?? '') || 0 }))
+    .map((m) => ({ userId: m.user_id, amount: fromCents(parseDraftCents(draft[m.user_id])) }))
     .filter((line) => line.amount > 0);
 }
+
+/** Blank/zero means unassigned (or retire an existing share); negative/junk never does. */
+export function validateSplitDraft(draft: Record<string, string>, members: VehicleMember[]): string | null {
+  const ids = members.map((m) => m.user_id);
+  if (ids.some((id) => !id)) return 'Complete the split before saving.';
+  if (new Set(ids).size !== ids.length) return 'Each person can only appear once in the split.';
+  for (const id of ids) {
+    const raw = (draft[id] ?? '').trim();
+    if (!raw) continue;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0 || (value > 0 && parseDraftCents(raw) === 0)) {
+      return 'Enter a valid amount of at least ₱0.01, or 0 to leave it unassigned.';
+    }
+  }
+  return null;
+}
+
+/** Current responsibility comes only from allocation rows, never from paid_by. */
+export function currentRefillShare(rows: RefillAllocation[], userId: string, voided = false) {
+  const active = voided ? [] : rows.filter((row) => row.status === 'accepted' || row.status === 'pending');
+  const mine = active.find((row) => row.user_id === userId);
+  return {
+    hasAllocations: active.length > 0,
+    amount: Number(mine?.amount ?? 0),
+    status: mine?.status ?? null,
+    allocated: fromCents(active.reduce((sum, row) => sum + toCents(row.amount), 0)),
+  };
+}
+
+export type SplitResult = {
+  type: 'success' | 'error';
+  message: string;
+  summary?: { share: number; total: number; pending: boolean; allocated: number; unassigned: number };
+};
+
+export function splitSuccessResult(rows: RefillAllocation[], userId: string, total: number): SplitResult {
+  const share = currentRefillShare(rows, userId);
+  return {
+    type: 'success',
+    message: share.status === 'accepted'
+      ? 'Your budget reflects your accepted share.'
+      : share.status === 'pending'
+        ? 'Your proposed share counts toward your budget only after you accept it.'
+        : 'You have no accepted share in this refill.',
+    summary: {
+      share: share.amount, total, pending: share.status === 'pending', allocated: share.allocated,
+      unassigned: fromCents(Math.max(toCents(total) - toCents(share.allocated), 0)),
+    },
+  };
+}
+
+/** Render inside the existing native Modal: stacking native modals loses presentation on iOS. */
+export function SplitResultPopup({ result, onDismiss }: { result: SplitResult | null; onDismiss: () => void }) {
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!result) return;
+    Keyboard.dismiss();
+    progress.setValue(0);
+    const animation = Animated.timing(progress, { toValue: 1, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true });
+    animation.start();
+    return () => animation.stop();
+  }, [result, progress]);
+  if (!result) return null;
+  const success = result.type === 'success';
+  return (
+    <View accessibilityViewIsModal style={resultStyles.overlay}>
+      <Animated.View style={[resultStyles.card, { opacity: progress, transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }]}>
+        <View style={[resultStyles.icon, { backgroundColor: success ? '#E8F5ED' : '#FFF3E5' }]}>
+          <Ionicons name={success ? 'checkmark-circle' : 'alert-circle-outline'} size={42} color={success ? HomeColors.primary : '#B87935'} />
+        </View>
+        <Text accessibilityRole="header" style={resultStyles.title}>{success ? 'Split saved' : "Couldn't save split"}</Text>
+        {success && result.summary ? (
+          <View style={resultStyles.shareCard}>
+            <Text style={resultStyles.shareLabel}>{result.summary.pending ? 'Your proposed share' : 'Your share'}</Text>
+            <Text style={resultStyles.shareAmount}>{formatCurrency(result.summary.share)}</Text>
+            {result.summary.pending ? <Text style={resultStyles.context}>Pending acceptance</Text> : null}
+            <Text style={resultStyles.context}>Total refill: {formatCurrency(result.summary.total)}</Text>
+            {result.summary.unassigned > 0 ? (
+              <Text style={resultStyles.context}>Allocated: {formatCurrency(result.summary.allocated)} · Unassigned: {formatCurrency(result.summary.unassigned)}</Text>
+            ) : null}
+          </View>
+        ) : null}
+        <Text style={resultStyles.message}>{result.message}</Text>
+        <PrimaryButton label={success ? 'Done' : 'Try again'} onPress={onDismiss} />
+      </Animated.View>
+    </View>
+  );
+}
+const resultStyles = StyleSheet.create({
+  overlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(7,18,38,0.45)', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 10 },
+  card: { width: '100%', maxWidth: 380, backgroundColor: '#FFFFFF', borderRadius: 24, padding: 24, gap: 16 },
+  icon: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', alignSelf: 'center' },
+  title: { color: HomeColors.navy, textAlign: 'center', fontSize: 22, fontWeight: '800' },
+  shareCard: { backgroundColor: '#EEF6F2', borderRadius: 14, padding: 14, gap: 5 },
+  shareLabel: { color: HomeColors.primary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 },
+  shareAmount: { color: HomeColors.primary, fontSize: 26, fontWeight: '800' },
+  context: { color: HomeColors.muted, fontSize: 12, lineHeight: 17 },
+  message: { color: HomeColors.muted, textAlign: 'center', fontSize: 14, lineHeight: 21 },
+});

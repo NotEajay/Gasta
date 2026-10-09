@@ -1,23 +1,27 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
+  type TextInputProps,
 } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import LabeledInput from '@/components/ui/LabeledInput';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import SelectField, { type SelectOption } from '@/components/ui/SelectField';
-import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, GasTaRadius, GasTaSpacing, colors, palette, radii, shadow, spacing, typeScale } from '@/constants/Theme';
 import { formatCurrency, formatDate } from '@/lib/format';
 import PendingAllocationInbox from '@/components/vehicle/PendingAllocationInbox';
 import RefillSplitDraftSheet from '@/components/vehicle/RefillSplitDraftSheet';
@@ -28,8 +32,33 @@ import {
   fetchVehicleRefills,
   voidVehicleRefill,
 } from '@/lib/services/vehicleRefills';
-import { saveRefillSplit, type SplitAllocationInput } from '@/lib/services/refillAllocations';
-import type { VehicleMember, VehicleRefill } from '@/types';
+import { fetchAllocationsForRefills, splitErrorMessage, saveRefillSplit, type SplitAllocationInput } from '@/lib/services/refillAllocations';
+import { currentRefillShare, splitSuccessResult, type SplitResult } from './refillSplitShared';
+import type { RefillAllocation, VehicleMember, VehicleRefill } from '@/types';
+
+type HistoryFilter = 'all' | 'this-month' | 'last-month' | 'choose-month';
+type HistoryMonth = { year: number; month: number };
+
+function calendarMonth(date = new Date()): HistoryMonth {
+  return { year: date.getFullYear(), month: date.getMonth() };
+}
+
+function shiftMonth(value: HistoryMonth, offset: number): HistoryMonth {
+  return calendarMonth(new Date(value.year, value.month + offset, 1));
+}
+
+function monthLabel(value: HistoryMonth): string {
+  return new Date(value.year, value.month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+/** Local occurred_at calendar months; filter preserves the service's existing order. */
+function filterRefillHistory(rows: VehicleRefill[], month: HistoryMonth | null): VehicleRefill[] {
+  if (!month) return rows;
+  return rows.filter((row) => {
+    const occurred = new Date(row.occurred_at);
+    return occurred.getFullYear() === month.year && occurred.getMonth() === month.month;
+  });
+}
 
 /**
  * Today's date as a `YYYY-MM-DD` input value, in the user's LOCAL calendar.
@@ -75,6 +104,13 @@ type FieldErrors = Partial<Record<FieldKey, string>>;
 /** Faint forest tint, matching the vehicle card and the auth surfaces. */
 const TINT_BG = 'rgba(1, 68, 33, 0.06)';
 
+type RefillResult = {
+  visible: boolean;
+  type: 'success' | 'error';
+  summary?: string;
+  showHistory?: boolean;
+};
+
 interface Props {
   vehicleId: string;
   vehicleLabel: string;
@@ -103,9 +139,47 @@ export default function VehicleRefillPanel({
   const [members, setMembers] = useState<VehicleMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
+  const [chosenHistoryMonth, setChosenHistoryMonth] = useState<HistoryMonth>(() => calendarMonth());
+  const [draftHistoryMonth, setDraftHistoryMonth] = useState<HistoryMonth>(() => calendarMonth());
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const formScrollRef = useRef<ScrollView>(null);
+  const formScrollOffset = useRef(0);
+  const focusedFieldRef = useRef<View | null>(null);
+  const fieldScrollFrame = useRef<number | null>(null);
+  const revealFormField = useCallback((target: View | null) => {
+    focusedFieldRef.current = target;
+    if (fieldScrollFrame.current !== null) cancelAnimationFrame(fieldScrollFrame.current);
+    if (!target || !Keyboard.isVisible()) return;
+    fieldScrollFrame.current = requestAnimationFrame(() => {
+      fieldScrollFrame.current = null;
+      const scroll = formScrollRef.current;
+      if (!scroll || focusedFieldRef.current !== target) return;
+      scroll.getNativeScrollRef()?.measureInWindow((_x, top, _width, height) => {
+        target.measureInWindow((_fieldX, fieldTop, _fieldWidth, fieldHeight) => {
+          if (focusedFieldRef.current !== target || !Keyboard.isVisible()) return;
+          const bottom = Math.min(top + height, Keyboard.metrics()?.screenY ?? top + height) - GasTaSpacing.md;
+          const overflow = fieldTop + fieldHeight - bottom;
+          if (overflow > 0) scroll.scrollTo({ y: formScrollOffset.current + overflow, animated: true });
+        });
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!formOpen) return;
+    const shown = Keyboard.addListener('keyboardDidShow', () => revealFormField(focusedFieldRef.current));
+    const hidden = Keyboard.addListener('keyboardDidHide', () => { focusedFieldRef.current = null; });
+    return () => {
+      shown.remove();
+      hidden.remove();
+      focusedFieldRef.current = null;
+      if (fieldScrollFrame.current !== null) cancelAnimationFrame(fieldScrollFrame.current);
+    };
+  }, [formOpen, revealFormField]);
   const [formError, setFormError] = useState<string | null>(null);
   /**
    * Per-field validation, populated only after a Save attempt so untouched
@@ -114,14 +188,72 @@ export default function VehicleRefillPanel({
    * failures, and anything raised while creating the refill.
    */
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [historyAllocations, setHistoryAllocations] = useState<RefillAllocation[] | null>(null);
   const [splitFor, setSplitFor] = useState<VehicleRefill | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [refillResult, setRefillResult] = useState<RefillResult>({ visible: false, type: 'success' });
+  const pendingSplitRef = useRef<{ totalAmount: number } | null>(null);
+  const pendingResultRef = useRef<RefillResult | null>(null);
+  const formModalPresentedRef = useRef(false);
+  const afterResultDismissRef = useRef<'form' | 'history' | null>(null);
+  const resultAnimation = useRef(new Animated.Value(0)).current;
+
+  const showPendingResult = useCallback(() => {
+    const pending = pendingResultRef.current;
+    if (!pending) return;
+    pendingResultRef.current = null;
+    setRefillResult({ ...pending, visible: true });
+  }, []);
+
+  const finishResultDismiss = useCallback(() => {
+    const next = afterResultDismissRef.current;
+    afterResultDismissRef.current = null;
+    if (next === 'form') setFormOpen(true);
+    if (next === 'history') setHistoryOpen(true);
+  }, []);
+
+  const queueRefillResult = useCallback((result: Omit<RefillResult, 'visible'>) => {
+    Keyboard.dismiss();
+    setFormOpen(false);
+    if (Platform.OS === 'ios' && !formModalPresentedRef.current) {
+      setRefillResult({ ...result, visible: true });
+    } else {
+      pendingResultRef.current = { ...result, visible: true };
+      setRefillResult({ ...result, visible: false });
+    }
+  }, []);
+
+  // iOS waits for native onDismiss. Android/web unmount the hidden Modal;
+  // present the next one on the frame after that React commit.
+  useEffect(() => {
+    if (Platform.OS === 'ios') return;
+    let frame: number | undefined;
+    if (!formOpen && pendingResultRef.current) {
+      frame = requestAnimationFrame(showPendingResult);
+    } else if (!refillResult.visible && afterResultDismissRef.current) {
+      frame = requestAnimationFrame(finishResultDismiss);
+    }
+    return () => { if (frame !== undefined) cancelAnimationFrame(frame); };
+  }, [formOpen, refillResult, showPendingResult, finishResultDismiss]);
+
+  useEffect(() => {
+    if (!refillResult.visible) return;
+    resultAnimation.setValue(0);
+    const animation = Animated.timing(resultAnimation, {
+      toValue: 1,
+      duration: 200,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [refillResult.visible, resultAnimation]);
 
   /**
    * The PRE-SAVE split step, held while the user is still deciding.
    *
-   * `null` means the flow is not in the split step. When set, no refill row
-   * exists yet: the refill form has already validated, but persistence has NOT
+   * `null` means the flow is not in the split step. Initially no refill row
+   * exists: the refill form has already validated, but persistence has NOT
    * started. That is what makes Cancel able to mean "back to my form, keep
    * editing" against an empty database.
    *
@@ -130,6 +262,36 @@ export default function VehicleRefillPanel({
    * mixed: see §14 of the change request.
    */
   const [splitDraft, setSplitDraft] = useState<{ totalAmount: number } | null>(null);
+  const splitSubmitLock = useRef(false);
+  const createdSplitRefill = useRef<VehicleRefill | null>(null);
+  const [splitResult, setSplitResult] = useState<SplitResult | null>(null);
+  const [splitDraftVisible, setSplitDraftVisible] = useState(false);
+  const afterSplitDismiss = useRef<(() => void) | null>(null);
+  const finishSplitDismiss = useCallback(() => {
+    const action = afterSplitDismiss.current;
+    if (!action) return;
+    afterSplitDismiss.current = null;
+    setSplitDraft(null);
+    action();
+  }, []);
+  const closeSplitDraft = useCallback((action: () => void) => {
+    afterSplitDismiss.current = action;
+    setSplitDraftVisible(false);
+  }, []);
+  const showPendingSplit = useCallback(() => {
+    const pending = pendingSplitRef.current;
+    if (!pending) return;
+    pendingSplitRef.current = null;
+    setSplitDraft(pending);
+    setSplitDraftVisible(true);
+  }, []);
+  useEffect(() => {
+    if (Platform.OS === 'ios') return;
+    let frame: number | undefined;
+    if (!formOpen && pendingSplitRef.current) frame = requestAnimationFrame(showPendingSplit);
+    else if (!splitDraftVisible && afterSplitDismiss.current) frame = requestAnimationFrame(finishSplitDismiss);
+    return () => { if (frame !== undefined) cancelAnimationFrame(frame); };
+  }, [formOpen, splitDraftVisible, showPendingSplit, finishSplitDismiss]);
   const [splitDraftError, setSplitDraftError] = useState<string | null>(null);
   /**
    * Set only after the refill was created but its allocation failed. The refill
@@ -200,9 +362,12 @@ export default function VehicleRefillPanel({
         fetchVehicleRefills(vehicleId),
         fetchVehicleMembers(vehicleId).catch(() => [] as VehicleMember[]),
       ]);
+      const allocationRows = await fetchAllocationsForRefills(refillRows.filter((row) => row.voided_at === null).map((row) => row.id)).catch(() => null);
+      setHistoryAllocations(allocationRows);
       setRefills(refillRows);
       setMembers(memberRows);
     } catch (e) {
+      setHistoryAllocations(null);
       setRefills([]);
       setError(e instanceof Error ? e.message : 'Unable to load refills.');
     } finally {
@@ -248,6 +413,17 @@ export default function VehicleRefillPanel({
     setFieldErrors({});
     setResponsibility('mine');
   }, []);
+
+  const dismissRefillResult = useCallback(() => {
+    if (refillResult.type === 'success') {
+      resetForm();
+      afterResultDismissRef.current = refillResult.showHistory ? 'history' : null;
+    } else {
+      afterResultDismissRef.current = 'form';
+    }
+    // Freeze the content throughout the native dismissal animation.
+    setRefillResult((current) => ({ ...current, visible: false }));
+  }, [refillResult.type, refillResult.showHistory, resetForm]);
 
   /**
    * Every required-field rule the form has always applied, collected in one pass.
@@ -308,6 +484,16 @@ export default function VehicleRefillPanel({
     setFormError(null);
     setFormOpen(true);
   }, []);
+
+  const currentHistoryMonth = calendarMonth();
+  const filterMonth = historyFilter === 'all' ? null
+    : historyFilter === 'this-month' ? currentHistoryMonth
+      : historyFilter === 'last-month' ? shiftMonth(currentHistoryMonth, -1)
+        : chosenHistoryMonth;
+  const filteredRefills = useMemo(
+    () => filterRefillHistory(refills, filterMonth),
+    [refills, historyFilter, filterMonth?.year, filterMonth?.month],
+  );
 
   const activeRefills = useMemo(() => refills.filter((r) => r.voided_at === null), [refills]);
 
@@ -376,10 +562,27 @@ export default function VehicleRefillPanel({
     // stays in component state so Cancel can reopen it exactly as it was, and
     // `responsibility` is still 'split' when the user comes back.
     if (chosen === 'split') {
+      if (splitSubmitLock.current) return;
+      splitSubmitLock.current = true;
+      // The panel's member list may predate a sharing change. Refresh only
+      // when entering the split, before presenting selectable recipients.
+      try {
+        const currentMembers = await fetchVehicleMembers(vehicleId);
+        setMembers(currentMembers);
+      } catch {
+        setFormError('We couldn’t load the people for this split. Please try again.');
+        splitSubmitLock.current = false;
+        setSaving(false);
+        return;
+      }
+      createdSplitRefill.current = null;
+      setSplitResult(null);
       setSplitDraftError(null);
       setSplitRecoveryRefill(null);
-      setSplitDraft({ totalAmount: total });
+      pendingSplitRef.current = { totalAmount: total };
+      if (Platform.OS === 'ios' && !formModalPresentedRef.current) showPendingSplit();
       setFormOpen(false);
+      splitSubmitLock.current = false;
       setSaving(false);
       return;
     }
@@ -401,8 +604,8 @@ export default function VehicleRefillPanel({
         notes: notes.trim() || null,
         receiptRef: null,
       });
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : 'Unable to save this refill.');
+    } catch {
+      queueRefillResult({ type: 'error' });
       setSaving(false);
       return;
     }
@@ -410,14 +613,15 @@ export default function VehicleRefillPanel({
     // --- the refill now EXISTS ---------------------------------------------
     // Nothing below may delete it or re-run the create, or we would duplicate
     // the row. Every later failure degrades to an inline notice instead.
-    resetForm();
-    setFormOpen(false);
+    // Capture the already-validated saved figures before Done resets the form.
+    const savedSummary = `${formatCurrency(total)}${literValue != null && Number.isFinite(literValue) ? ` • ${literValue.toFixed(2)} L` : ''}`;
 
     if (chosen === 'owner') {
       // No allocation at all. The amount stays genuinely unassigned; nothing
       // is auto-assigned to the owner.
-      void load();
+      await load();
       onChanged?.();
+      queueRefillResult({ type: 'success', summary: savedSummary, showHistory: false });
       setSaving(false);
       return;
     }
@@ -435,12 +639,13 @@ export default function VehicleRefillPanel({
         "Refill saved, but we couldn't add it to your budget. You can set the expense from refill history.",
       );
     }
-    setHistoryOpen(true);
-    void load();
+    await load();
     onChanged?.();
+    queueRefillResult({ type: 'success', summary: savedSummary, showHistory: true });
     setSaving(false);
   }, [
     saving,
+    showPendingSplit,
     validateForm,
     totalAmount,
     pricePerLiter,
@@ -453,7 +658,7 @@ export default function VehicleRefillPanel({
     vehicleId,
     vehicleFuelTypeId,
     currentUserId,
-    resetForm,
+    queueRefillResult,
     load,
     onChanged,
   ]);
@@ -469,11 +674,10 @@ export default function VehicleRefillPanel({
    */
   const handleConfirmSplit = useCallback(
     async (payload: SplitAllocationInput[]) => {
-      if (saving) return; // blocks double taps
+      if (splitSubmitLock.current || saving || splitResult || !splitDraft) return;
+      splitSubmitLock.current = true;
       setSaving(true);
       setSplitDraftError(null);
-      setSplitRecoveryRefill(null);
-
       const total = Number.parseFloat(totalAmount);
       const price = Number.parseFloat(pricePerLiter);
       const literValue = liters.trim() ? Number.parseFloat(liters) : derivedLiters;
@@ -484,6 +688,7 @@ export default function VehicleRefillPanel({
         setSplitDraft(null);
         setFormOpen(true);
         setFieldErrors({ paidBy: 'Choose who paid.' });
+        splitSubmitLock.current = false;
         setSaving(false);
         return;
       }
@@ -491,7 +696,7 @@ export default function VehicleRefillPanel({
       // --- stage 1: create the refill ---------------------------------------
       let created: VehicleRefill;
       try {
-        created = await createVehicleRefill({
+        created = createdSplitRefill.current ?? await createVehicleRefill({
           vehicleId,
           totalAmount: total,
           pricePerLiter: price,
@@ -503,12 +708,11 @@ export default function VehicleRefillPanel({
           notes: notes.trim() || null,
           receiptRef: null,
         });
+        createdSplitRefill.current = created;
       } catch (e) {
         // Case A: nothing was written. Stay in the split step with the draft
         // intact so the user can fix it or retry; no allocation is attempted.
-        setSplitDraftError(
-          e instanceof Error ? e.message : 'Unable to save this refill.',
-        );
+        setSplitResult({ type: 'error', message: splitErrorMessage(e) });
         setSaving(false);
         return;
       }
@@ -516,37 +720,30 @@ export default function VehicleRefillPanel({
       // --- stage 2: attach the allocation to the id we just got -------------
       // The refill EXISTS from here on. There is deliberately no retry of the
       // create above, in this branch or in the recovery path.
+      let savedAllocations: RefillAllocation[];
       try {
-        await saveRefillSplit(created.id, payload);
+        savedAllocations = await saveRefillSplit(created.id, payload);
       } catch (e) {
         // Case B: partial success. The refill is saved and stays. Keep the step
         // open, remember the created row, and offer the real split sheet for
         // that exact id so the allocation can be finished without duplicating.
         setSplitRecoveryRefill(created);
-        setSplitDraftError(
-          `${e instanceof Error ? e.message : 'The split could not be saved.'} The refill is saved.`,
-        );
-        void load();
-        onChanged?.();
+        setSplitResult({ type: 'error', message: splitErrorMessage(e) });
+        await load();
         setSaving(false);
         return;
       }
 
-      // --- both succeeded ---------------------------------------------------
-      resetForm();
-      setSplitDraft(null);
-      setNotice(
-        ownerContext
-          ? 'Refill saved and the split is set.'
-          : 'Refill saved and your share is set.',
-      );
-      setHistoryOpen(true);
-      void load();
-      onChanged?.();
+      // Keep the draft and native sheet mounted until Done. A parent reload
+      // can unmount this panel, so notify it only after the popup is dismissed.
+      await load();
+      setSplitResult(splitSuccessResult(savedAllocations, currentUserId, Number(created.total_amount)));
       setSaving(false);
     },
     [
       saving,
+      splitDraft,
+      splitResult,
       totalAmount,
       pricePerLiter,
       liters,
@@ -574,12 +771,12 @@ export default function VehicleRefillPanel({
    * it.
    */
   const handleCancelSplit = useCallback(() => {
-    if (saving) return;
+    if (splitSubmitLock.current || saving || splitResult) return;
     const alreadyCreated = splitRecoveryRefill;
 
-    setSplitDraft(null);
     setSplitDraftError(null);
     setSplitRecoveryRefill(null);
+    createdSplitRefill.current = null;
 
     if (alreadyCreated) {
       // The refill was created before its allocation failed, so it EXISTS.
@@ -588,15 +785,13 @@ export default function VehicleRefillPanel({
       // where the saved row still has its Split expense action.
       resetForm();
       setNotice('Refill saved, but the split could not be saved.');
-      setHistoryOpen(true);
-      void load();
-      onChanged?.();
+      closeSplitDraft(() => { setHistoryOpen(true); void load(); onChanged?.(); });
       return;
     }
 
-    // Nothing was written. Straight back to the form, values intact.
-    setFormOpen(true);
-  }, [saving, splitRecoveryRefill, resetForm, load, onChanged]);
+    // Nothing was written. Wait for the native split sheet to dismiss first.
+    closeSplitDraft(() => setFormOpen(true));
+  }, [saving, splitResult, splitRecoveryRefill, resetForm, load, onChanged, closeSplitDraft]);
 
   /**
    * Abandon the split step once the refill has already been created, by
@@ -607,13 +802,12 @@ export default function VehicleRefillPanel({
    * correct semantics for an already-saved refill.
    */
   const handleSplitRecovery = useCallback(() => {
-    if (!splitRecoveryRefill) return;
-    setSplitDraft(null);
+    if (splitSubmitLock.current || splitResult || !splitRecoveryRefill) return;
+    createdSplitRefill.current = null;
     setSplitDraftError(null);
     setSplitRecoveryRefill(null);
-    setSplitFor(splitRecoveryRefill);
-    setHistoryOpen(true);
-  }, [splitRecoveryRefill]);
+    closeSplitDraft(() => { setSplitFor(splitRecoveryRefill); setHistoryOpen(true); });
+  }, [splitRecoveryRefill, splitResult, closeSplitDraft]);
 
   const handleVoid = useCallback(
     async (refillId: string) => {
@@ -692,7 +886,7 @@ export default function VehicleRefillPanel({
 
       <Modal
         animationType="slide"
-        onRequestClose={() => setHistoryOpen(false)}
+        onRequestClose={() => { if (monthPickerOpen) setMonthPickerOpen(false); else if (!splitFor) setHistoryOpen(false); }}
         transparent
         visible={historyOpen}>
         <View style={styles.backdrop}>
@@ -713,6 +907,35 @@ export default function VehicleRefillPanel({
               </Pressable>
             </View>
 
+            <View style={styles.historyFilters}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.historyFilterChips}>
+                {([
+                  ['all', 'All'], ['this-month', 'This month'],
+                  ['last-month', 'Last month'], ['choose-month', 'Choose month'],
+                ] as const).map(([value, label]) => (
+                  <Pressable
+                    key={value}
+                    accessibilityRole="button"
+                    accessibilityLabel={label}
+                    accessibilityState={{ selected: historyFilter === value }}
+                    onPress={() => {
+                      if (value === 'choose-month') {
+                        setDraftHistoryMonth(filterMonth ?? calendarMonth());
+                        setMonthPickerOpen(true);
+                      } else setHistoryFilter(value);
+                    }}
+                    style={({ pressed }) => [styles.historyFilterChip, historyFilter === value && styles.historyFilterChipSelected, pressed && styles.historyFilterChipPressed]}>
+                    <Text style={[styles.historyFilterText, historyFilter === value && styles.historyFilterTextSelected]}>{label}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              {!loading && !error ? (
+                <Text accessibilityLiveRegion="polite" style={styles.historyFilterCount}>
+                  {filteredRefills.length} {filteredRefills.length === 1 ? 'refill' : 'refills'}{filterMonth ? ` · ${monthLabel(filterMonth)}` : ''}
+                </Text>
+              ) : null}
+            </View>
+
             {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
             {loading ? (
@@ -726,7 +949,7 @@ export default function VehicleRefillPanel({
                   <Text style={styles.retryText}>Try again</Text>
                 </Pressable>
               </View>
-            ) : refills.length === 0 ? (
+            ) : refills.length === 0 && historyFilter === 'all' ? (
               <View style={styles.state}>
                 <Text style={styles.stateText}>
                   No refills yet. Log the first one to start this vehicle&apos;s shared history.
@@ -735,9 +958,16 @@ export default function VehicleRefillPanel({
             ) : (
               <FlatList
                 contentContainerStyle={styles.listContent}
-                data={refills}
+                data={filteredRefills}
                 keyExtractor={(item) => item.id}
-                ListHeaderComponent={<PendingAllocationInbox onChanged={load} />}
+                ListHeaderComponent={refills.length > 0 ? <PendingAllocationInbox onChanged={load} /> : null}
+                ListEmptyComponent={
+                  <View style={styles.state}>
+                    <Text style={styles.historyEmptyTitle}>No refills found</Text>
+                    <Text style={styles.stateText}>No refill records for this month.</Text>
+                    <PrimaryButton label="Show all" variant="secondary" size="sm" onPress={() => setHistoryFilter('all')} />
+                  </View>
+                }
                 ListFooterComponent={
                   <PrimaryButton
                     label="Log refill"
@@ -757,6 +987,8 @@ export default function VehicleRefillPanel({
                     nameOf={nameOf}
                     onSplit={() => setSplitFor(item)}
                     onVoid={() => requestVoid(item.id)}
+                    allocations={historyAllocations?.filter((row) => row.refill_id === item.id) ?? null}
+                    currentUserId={currentUserId}
                     refill={item}
                   />
                 )}
@@ -764,6 +996,32 @@ export default function VehicleRefillPanel({
               />
             )}
           </View>
+
+          {monthPickerOpen ? (
+            <View accessibilityViewIsModal style={[styles.rowMenuBackdrop, styles.monthPickerOverlay]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Cancel month selection" onPress={() => setMonthPickerOpen(false)} style={styles.monthPickerDismissArea} />
+              <View style={styles.monthPickerCard}>
+                <Text accessibilityRole="header" style={styles.historyEmptyTitle}>Choose month</Text>
+                <View style={styles.monthPickerNavigation}>
+                  <Pressable accessibilityRole="button" accessibilityLabel="Previous month" onPress={() => setDraftHistoryMonth((month) => shiftMonth(month, -1))} style={styles.monthPickerArrow}>
+                    <Ionicons name="chevron-back" size={20} color={GasTaColors.forest} />
+                  </Pressable>
+                  <Text accessibilityLiveRegion="polite" style={styles.monthPickerLabel}>{monthLabel(draftHistoryMonth)}</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="Next month" onPress={() => setDraftHistoryMonth((month) => shiftMonth(month, 1))} style={styles.monthPickerArrow}>
+                    <Ionicons name="chevron-forward" size={20} color={GasTaColors.forest} />
+                  </Pressable>
+                </View>
+                <View style={styles.monthPickerActions}>
+                  <PrimaryButton label="Cancel" variant="secondary" onPress={() => setMonthPickerOpen(false)} style={styles.monthPickerButton} />
+                  <PrimaryButton label="Apply" onPress={() => {
+                    setChosenHistoryMonth(draftHistoryMonth);
+                    setHistoryFilter('choose-month');
+                    setMonthPickerOpen(false);
+                  }} style={styles.monthPickerButton} />
+                </View>
+              </View>
+            </View>
+          ) : null}
 
           {/*
             The split sheet lives INSIDE this already-presented modal on purpose.
@@ -793,6 +1051,12 @@ export default function VehicleRefillPanel({
       <Modal
         animationType="slide"
         onRequestClose={() => setFormOpen(false)}
+        onShow={() => { formModalPresentedRef.current = true; }}
+        onDismiss={() => {
+          formModalPresentedRef.current = false;
+          showPendingResult();
+          showPendingSplit();
+        }}
         transparent
         visible={formOpen}>
         {/*
@@ -802,14 +1066,17 @@ export default function VehicleRefillPanel({
           measures the keyboard itself, so the parent must stay out of it.
         */}
         <KeyboardAvoidingView
-          behavior={splitFor ? undefined : Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={splitFor ? undefined : Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
           style={styles.backdrop}>
-          <View style={styles.sheet}>
-            <View style={styles.sheetHead}>
+          <View style={[styles.sheet, styles.refillFormSheet]}>
+            <View style={[styles.sheetHead, styles.refillFormHead]}>
+              <View style={styles.refillFormIcon}>
+                <Ionicons name="water" size={22} color={GasTaColors.white} />
+              </View>
               <View style={styles.sheetTitles}>
                 <Text style={styles.sheetTitle}>Log refill</Text>
-                <Text numberOfLines={1} style={styles.sheetSubtitle}>
-                  {vehicleLabel}
+                <Text style={styles.refillFormIntro}>
+                  Record this vehicle's latest fuel purchase.
                 </Text>
               </View>
               <Pressable
@@ -822,75 +1089,125 @@ export default function VehicleRefillPanel({
             </View>
 
             <ScrollView
+              ref={formScrollRef}
               contentContainerStyle={styles.formContent}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              onScroll={(event) => { formScrollOffset.current = event.nativeEvent.contentOffset.y; }}
+              scrollEventThrottle={16}
+              onLayout={() => revealFormField(focusedFieldRef.current)}
+              onContentSizeChange={() => revealFormField(focusedFieldRef.current)}
               showsVerticalScrollIndicator={false}>
-              <LabeledInput
-                error={fieldErrors.total}
-                keyboardType="decimal-pad"
-                label="Total amount paid (₱)"
-                onChangeText={(text) => {
-                  setTotalAmount(text);
-                  clearFieldError('total');
-                }}
-                placeholder="e.g. 1500"
-                value={totalAmount}
-              />
-              <LabeledInput
-                error={fieldErrors.price}
-                keyboardType="decimal-pad"
-                label="Price per liter (₱/L)"
-                onChangeText={(text) => {
-                  setPricePerLiter(text);
-                  clearFieldError('price');
-                }}
-                placeholder="e.g. 64.20"
-                value={pricePerLiter}
-              />
-              <LabeledInput
-                error={fieldErrors.liters}
-                keyboardType="decimal-pad"
-                label="Liters (optional)"
-                onChangeText={(text) => {
-                  setLiters(text);
-                  clearFieldError('liters');
-                }}
-                placeholder={derivedLiters != null ? String(derivedLiters) : 'e.g. 23.36'}
-                value={liters}
-              />
-              {derivedLiters != null && liters.trim() === '' ? (
-                <Text style={styles.hint}>Calculated from total ÷ price per liter.</Text>
-              ) : null}
+              <View style={styles.vehicleSummary}>
+                <View style={styles.vehicleSummaryIcon}>
+                  <Ionicons name="car-outline" size={20} color={GasTaColors.forest} />
+                </View>
+                <View style={styles.sheetTitles}>
+                  <Text style={styles.summaryLabel}>Refilling</Text>
+                  <Text numberOfLines={2} style={styles.summaryVehicle}>{vehicleLabel}</Text>
+                </View>
+              </View>
 
-              <SelectField
-                error={fieldErrors.paidBy}
-                label="Paid by"
-                onChange={(next) => {
-                  setPaidBy(next);
-                  clearFieldError('paidBy');
-                }}
-                options={memberOptions}
-                placeholder="Choose who paid"
-                value={paidBy ?? ''}
-              />
-              <LabeledInput
-                autoCapitalize="none"
-                autoCorrect={false}
-                error={fieldErrors.date}
-                label="Date (YYYY-MM-DD)"
-                onChangeText={(text) => {
-                  setOccurredAt(text);
-                  clearFieldError('date');
-                }}
-                placeholder="2026-09-26"
-                value={occurredAt}
-              />
-              <LabeledInput
-                label="Notes (optional)"
-                onChangeText={setNotes}
-                placeholder="Anything worth remembering"
-                value={notes}
-              />
+              <View style={[styles.formSection, styles.fuelSection]}>
+                <View style={styles.formSectionHead}>
+                  <Ionicons name="water-outline" size={18} color={GasTaColors.forest} style={styles.sectionIcon} />
+                  <Text style={styles.formSectionTitle}>Fuel amount</Text>
+                </View>
+                <View style={styles.totalCard}>
+                <RefillFormField
+                  error={fieldErrors.total}
+                  onReveal={revealFormField}
+                  amount
+                  unit="₱"
+                  keyboardType="decimal-pad"
+                  label="Total amount paid (₱)"
+                  onChangeText={(text) => {
+                    setTotalAmount(text);
+                    clearFieldError('total');
+                  }}
+                  placeholder="e.g. 1500"
+                  value={totalAmount}
+                />
+                </View>
+                <View style={styles.fuelInputRow}>
+                <RefillFormField
+                  error={fieldErrors.price}
+                  compact
+                  onReveal={revealFormField}
+                  unit="₱/L"
+                  keyboardType="decimal-pad"
+                  label="Price per liter"
+                  onChangeText={(text) => {
+                    setPricePerLiter(text);
+                    clearFieldError('price');
+                  }}
+                  placeholder="e.g. 64.20"
+                  value={pricePerLiter}
+                />
+                <RefillFormField
+                  error={fieldErrors.liters}
+                  compact
+                  onReveal={revealFormField}
+                  unit="L"
+                  keyboardType="decimal-pad"
+                  label="Liters (optional)"
+                  onChangeText={(text) => {
+                    setLiters(text);
+                    clearFieldError('liters');
+                  }}
+                  placeholder={derivedLiters != null ? String(derivedLiters) : 'e.g. 23.36'}
+                  value={liters}
+                />
+                </View>
+                {derivedLiters != null && liters.trim() === '' ? (
+                  <Text style={styles.hint}>Calculated from total ÷ price per liter.</Text>
+                ) : null}
+              </View>
+
+              <View style={styles.formSection}>
+                <View style={styles.formSectionHead}>
+                  <Ionicons name="calendar-outline" size={18} color={GasTaColors.forest} style={styles.sectionIcon} />
+                  <Text style={styles.formSectionTitle}>Refill details</Text>
+                </View>
+                <SelectField
+                  error={fieldErrors.paidBy}
+                  label="Paid by"
+                  onChange={(next) => {
+                    setPaidBy(next);
+                    clearFieldError('paidBy');
+                  }}
+                  options={memberOptions}
+                  placeholder="Choose who paid"
+                  value={paidBy ?? ''}
+                />
+                <RefillFormField
+                  onReveal={revealFormField}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  error={fieldErrors.date}
+                  label="Date (YYYY-MM-DD)"
+                  onChangeText={(text) => {
+                    setOccurredAt(text);
+                    clearFieldError('date');
+                  }}
+                  placeholder="2026-09-26"
+                  value={occurredAt}
+                />
+              </View>
+
+              <View style={styles.formSection}>
+                <View style={styles.formSectionHead}>
+                  <Ionicons name="document-text-outline" size={18} color={GasTaColors.forest} style={styles.sectionIcon} />
+                  <Text style={styles.formSectionTitle}>Notes</Text>
+                </View>
+                <RefillFormField
+                  onReveal={revealFormField}
+                  label="Notes (optional)"
+                  onChangeText={setNotes}
+                  placeholder="Anything worth remembering"
+                  value={notes}
+                />
+              </View>
 
               {/* ---- budget responsibility -------------------------------
                   The common case is a refill that belongs entirely to the
@@ -945,7 +1262,9 @@ export default function VehicleRefillPanel({
                 <Text style={styles.respHelper}>{responsibilityHelper}</Text>
               </View>
 
-              {formError ? <Text style={styles.formError}>{formError}</Text> : null}
+              {formError ? (
+                <Text style={styles.formError}>We couldn’t save this refill right now. Please try again.</Text>
+              ) : null}
 
               <PrimaryButton
                 disabled={saving}
@@ -970,6 +1289,21 @@ export default function VehicleRefillPanel({
       {splitDraft ? (
         <RefillSplitDraftSheet
           currentUserId={currentUserId}
+          visible={splitDraftVisible}
+          onDismiss={finishSplitDismiss}
+          result={splitResult}
+          onDismissResult={() => {
+            const success = splitResult?.type === 'success';
+            splitSubmitLock.current = false;
+            setSplitResult(null);
+            if (success) {
+              resetForm();
+              createdSplitRefill.current = null;
+              setSplitRecoveryRefill(null);
+              setNotice('Refill saved and the split is set.');
+              closeSplitDraft(() => { setHistoryOpen(true); onChanged?.(); });
+            }
+          }}
           error={splitDraftError}
           members={members}
           mode={ownerContext ? 'owner' : 'self'}
@@ -985,7 +1319,99 @@ export default function VehicleRefillPanel({
           vehicleLabel={vehicleLabel}
         />
       ) : null}
+
+      {/* Stable result host, independent of the form/history/split subtrees. */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={refillResult.visible}
+        onRequestClose={dismissRefillResult}
+        onDismiss={finishResultDismiss}>
+        <View style={styles.resultBackdrop}>
+          <Animated.View
+            accessibilityViewIsModal
+            style={[
+              styles.resultCard,
+              refillResult.type === 'error' && styles.resultCardError,
+              {
+                opacity: resultAnimation,
+                transform: [{ scale: resultAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
+              },
+            ]}>
+            <View style={[styles.resultIcon, refillResult.type === 'error' && styles.resultIconError]}>
+              <Ionicons
+                name={refillResult.type === 'success' ? 'checkmark-circle' : 'alert-circle-outline'}
+                size={38}
+                color={refillResult.type === 'success' ? GasTaColors.forest : palette.warning}
+              />
+            </View>
+            <Text accessibilityRole="header" style={styles.resultTitle}>
+              {refillResult.type === 'success' ? 'Refill saved' : "Couldn't save refill"}
+            </Text>
+            <Text style={styles.resultMessage}>
+              {refillResult.type === 'success'
+                ? 'Your refill has been recorded successfully.'
+                : "We couldn't save this refill right now. Please try again."}
+            </Text>
+            {refillResult.type === 'success' && refillResult.summary ? (
+              <Text style={styles.resultSummary}>{refillResult.summary}</Text>
+            ) : null}
+            <PrimaryButton
+              label={refillResult.type === 'success' ? 'Done' : 'Try again'}
+              onPress={dismissRefillResult}
+              style={styles.formSaveBtn}
+            />
+          </Animated.View>
+        </View>
+      </Modal>
     </>
+  );
+}
+
+/** Form-only presentation; values, keyboards and validation stay with the caller. */
+function RefillFormField({
+  label, error, unit, amount = false, compact = false, onReveal, ...inputProps
+}: TextInputProps & {
+  label: string;
+  error?: string;
+  unit?: string;
+  amount?: boolean;
+  compact?: boolean;
+  onReveal: (target: View | null) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const fieldRef = useRef<View>(null);
+  return (
+    <View ref={fieldRef} collapsable={false} style={[styles.formField, compact && styles.formFieldCompact]}>
+      <Text style={[styles.formFieldLabel, focused && styles.formFieldLabelFocused]}>
+        {amount ? <><Ionicons name="receipt-outline" size={14} color={GasTaColors.forest} />{' '}</> : null}
+        {label}
+      </Text>
+      <View style={[
+        styles.formInputSurface,
+        amount && styles.formInputAmount,
+        focused && styles.formInputFocused,
+        error && styles.formInputInvalid,
+      ]}>
+        {amount && unit ? <Text style={styles.amountUnit}>{unit}</Text> : null}
+        <TextInput
+          {...inputProps}
+          accessibilityLabel={label}
+          placeholderTextColor={GasTaColors.textSoft}
+          onFocus={() => {
+            setFocused(true);
+            onReveal(fieldRef.current);
+          }}
+          onBlur={() => {
+            setFocused(false);
+            onReveal(null);
+          }}
+          style={[styles.formInput, amount && styles.formAmountInput]}
+        />
+        {!amount && unit ? <Text style={styles.formUnit}>{unit}</Text> : null}
+      </View>
+      {error ? <Text style={styles.formFieldError}>{error}</Text> : null}
+    </View>
   );
 }
 
@@ -1005,19 +1431,18 @@ function ResponsibilityPill({
       accessibilityState={{ selected }}
       onPress={onPress}
       style={[styles.respPill, selected && styles.respPillOn]}>
-      {selected ? <Ionicons name="checkmark" size={13} color={GasTaColors.textOnForest} /> : null}
+      {selected ? <Ionicons name="checkmark" size={13} color={GasTaColors.forest} /> : null}
       <Text style={[styles.respPillText, selected && styles.respPillTextOn]}>{label}</Text>
     </Pressable>
   );
 }
 
 /**
- * One saved refill, in a compact ledger row.
+ * One saved refill, shared by owned and shared vehicle history.
  *
- * Density matters here: a vehicle accumulates 10-20 of these, so the row is
- * built around three short lines -- amount/date, fuel figures, and who was
- * involved -- with the actions on a single line beneath. `Paid by` and
- * `Logged by` stay distinct facts but collapse onto one line, and the second
+ * Personal responsibility leads; the full transaction and fuel metadata stay
+ * visible underneath. `Paid by` and `Logged by` stay distinct facts on one line,
+ * and the second
  * identity is only spelled out when it differs from the first, since for most
  * refills the person who paid is the person who logged it.
  *
@@ -1027,6 +1452,8 @@ function ResponsibilityPill({
  */
 function RefillRow({
   refill,
+  allocations,
+  currentUserId,
   canVoid,
   canAllocate,
   actionLabel,
@@ -1036,6 +1463,8 @@ function RefillRow({
   onSplit,
 }: {
   refill: VehicleRefill;
+  allocations: RefillAllocation[] | null;
+  currentUserId: string;
   canVoid: boolean;
   canAllocate: boolean;
   actionLabel: string;
@@ -1045,6 +1474,10 @@ function RefillRow({
   onSplit: () => void;
 }) {
   const voided = refill.voided_at !== null;
+  const share = allocations ? currentRefillShare(allocations, currentUserId, voided) : null;
+  const showShare = !voided && share?.hasAllocations;
+  const splitRefill = showShare && (share.amount !== Number(refill.total_amount) || (allocations?.filter((row) => row.status === 'accepted' || row.status === 'pending').length ?? 0) > 1);
+  const pendingShare = share?.status === 'pending';
   const [menuOpen, setMenuOpen] = useState(false);
 
   const dateLabel = formatDate(refill.occurred_at);
@@ -1060,27 +1493,63 @@ function RefillRow({
   const showSplit = canAllocate && !voided;
 
   return (
-    <View style={styles.refillRow}>
+    <View style={[styles.refillRow, voided && styles.refillRowVoided]}>
       <View style={styles.refillHead}>
-        <Text
-          numberOfLines={1}
-          style={[styles.refillAmount, voided && styles.refillAmountVoided]}>
-          {formatCurrency(refill.total_amount)}
-        </Text>
-        <View style={styles.refillHeadRight}>
-          {voided ? (
-            <View style={styles.voidedChip}>
-              <Text style={styles.voidedChipText}>Voided</Text>
-            </View>
-          ) : null}
+        <View style={[styles.refillFuelIcon, voided && styles.refillFuelIconVoided]}>
+          <Ionicons name="water-outline" size={18} color={voided ? GasTaColors.forestMuted : GasTaColors.forest} />
+        </View>
+        <View style={styles.refillHeaderTitles}>
+          <Text style={[styles.refillTitle, voided && styles.refillTitleVoided]}>Fuel refill</Text>
           <Text style={styles.refillDate}>{dateLabel}</Text>
         </View>
+        {voided ? (
+          <View style={styles.voidedChip}>
+            <Text style={styles.voidedChipText}>Voided</Text>
+          </View>
+        ) : null}
       </View>
 
-      <Text numberOfLines={1} style={styles.refillMeta}>
-        {refill.liters != null ? `${refill.liters} L · ` : ''}
-        {formatCurrency(refill.price_per_liter)}/L
-      </Text>
+      <View style={[
+        styles.refillAmountGroup,
+        showShare && styles.refillShareSurface,
+        pendingShare && styles.refillPendingSurface,
+      ]}>
+        <Text style={[styles.refillAmountLabel, showShare && styles.refillShareLabel, pendingShare && styles.refillPendingLabel]}>
+          {showShare ? pendingShare ? 'Your proposed share' : 'Your share' : 'Total refill'}
+        </Text>
+        <Text style={[styles.refillAmount, pendingShare && styles.refillPendingAmount, voided && styles.refillAmountVoided]}>
+          {formatCurrency(showShare ? share.amount : refill.total_amount)}
+        </Text>
+        {showShare ? (
+          <>
+            {pendingShare ? (
+              <View style={styles.refillPendingRow}>
+                <View style={styles.refillPendingBadge}><Text style={styles.refillPendingLabel}>Pending</Text></View>
+                <Text style={styles.refillContext}>Not counted in budget</Text>
+              </View>
+            ) : null}
+            <Text style={styles.refillContext}>Total refill: {formatCurrency(refill.total_amount)}</Text>
+          </>
+        ) : !voided ? (
+          <Text style={styles.refillContext}>{allocations === null ? 'Share unavailable' : 'No responsibility assigned'}</Text>
+        ) : null}
+      </View>
+
+      <View style={styles.refillMetadata}>
+        {refill.liters != null ? (
+          <View style={styles.refillMetaChip}>
+            <Text style={styles.refillMeta}>{refill.liters} L</Text>
+          </View>
+        ) : null}
+        <View style={styles.refillMetaChip}>
+          <Text style={styles.refillMeta}>{formatCurrency(refill.price_per_liter)}/L</Text>
+        </View>
+        {showShare ? (
+          <View style={styles.refillSplitChip}>
+            <Text style={styles.refillSplitBadge}>{splitRefill ? 'Split refill' : 'Your responsibility'}</Text>
+          </View>
+        ) : null}
+      </View>
 
       <Text numberOfLines={1} style={styles.refillWho}>
         Paid by {payer}
@@ -1162,6 +1631,67 @@ function RefillRow({
 }
 
 const styles = StyleSheet.create({
+  resultBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(1, 48, 25, 0.42)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: GasTaSpacing.lg,
+  },
+  resultCard: {
+    width: '100%',
+    maxWidth: 360,
+    padding: GasTaSpacing.lg,
+    borderRadius: GasTaRadius.lg,
+    backgroundColor: GasTaColors.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.forestBorder,
+    alignItems: 'center',
+    shadowColor: GasTaColors.forestDark,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  resultCardError: {
+    borderColor: colors.warningBorder,
+  },
+  resultIcon: {
+    ...shadow('light', 'sm'),
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: GasTaColors.forestGlow,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: GasTaSpacing.md,
+  },
+  resultIconError: {
+    backgroundColor: colors.warningSoft,
+  },
+  resultTitle: {
+    ...typeScale.pageTitle,
+    color: GasTaColors.forestDark,
+    textAlign: 'center',
+  },
+  resultMessage: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: GasTaColors.textMuted,
+    textAlign: 'center',
+    marginTop: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.md,
+  },
+  resultSummary: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+    backgroundColor: TINT_BG,
+    paddingHorizontal: GasTaSpacing.sm + GasTaSpacing.xs,
+    paddingVertical: GasTaSpacing.sm,
+    borderRadius: GasTaRadius.sm,
+    marginBottom: GasTaSpacing.md,
+  },
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1286,7 +1816,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '700',
-    color: GasTaColors.textMuted,
+    color: GasTaColors.forestDark,
     marginTop: spacing.sm,
   },
   respRow: {
@@ -1308,8 +1838,9 @@ const styles = StyleSheet.create({
     borderColor: GasTaColors.glassBorderSubtle,
   },
   respPillOn: {
-    backgroundColor: GasTaColors.forest,
+    backgroundColor: palette.primarySoft,
     borderColor: GasTaColors.forest,
+    boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadDistance: 1, color: GasTaColors.forest, inset: true }],
   },
   respPillText: {
     fontSize: 13,
@@ -1318,7 +1849,7 @@ const styles = StyleSheet.create({
     color: GasTaColors.forestDark,
   },
   respPillTextOn: {
-    color: GasTaColors.textOnForest,
+    color: GasTaColors.forest,
     fontWeight: '700',
   },
   respQuietRow: {
@@ -1339,82 +1870,77 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  /**
-   * Compact ledger row. Padding is `sm` rather than `md` and the metadata lines
-   * are tight, which is what takes a row from roughly 130px to around 95px --
-   * the difference between scrolling a vehicle's refills and scanning them.
-   */
+  historyFilters: { paddingHorizontal: spacing.lg, marginBottom: spacing.sm, gap: spacing.xs },
+  historyFilterChips: { gap: spacing.xs, paddingVertical: spacing.xs },
+  historyFilterChip: { paddingHorizontal: spacing.sm + spacing.xs, minHeight: 34, justifyContent: 'center', borderRadius: GasTaRadius.pill, backgroundColor: GasTaColors.creamLight, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle },
+  historyFilterChipSelected: { backgroundColor: GasTaColors.forest, borderColor: GasTaColors.forest },
+  historyFilterChipPressed: { opacity: 0.8 },
+  historyFilterText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '600' },
+  historyFilterTextSelected: { color: GasTaColors.white },
+  historyFilterCount: { color: GasTaColors.textMuted, fontSize: 11 },
+  historyEmptyTitle: { color: GasTaColors.forestDark, fontSize: 16, fontWeight: '700' },
+  monthPickerOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
+  monthPickerDismissArea: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  monthPickerCard: { ...shadow('light', 'sm'), width: '100%', maxWidth: 360, backgroundColor: GasTaColors.white, borderRadius: GasTaRadius.lg, borderWidth: 1, borderColor: GasTaColors.forestBorder, padding: spacing.md, gap: spacing.md },
+  monthPickerNavigation: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  monthPickerArrow: { width: 40, height: 40, borderRadius: GasTaRadius.sm, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  monthPickerLabel: { flex: 1, textAlign: 'center', color: GasTaColors.forestDark, fontSize: 16, fontWeight: '700' },
+  monthPickerActions: { flexDirection: 'row', gap: spacing.sm },
+  monthPickerButton: { flex: 1 },
+
+  // One shared renderer for owned/shared history; transaction and personal share remain distinct.
   refillRow: {
-    padding: spacing.sm,
-    paddingHorizontal: spacing.md,
+    ...shadow('light', 'sm'),
+    padding: spacing.sm + spacing.xs,
     borderRadius: radii.md,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.glassFillStrong,
+    marginBottom: spacing.sm + spacing.xs,
+  },
+  refillRowVoided: {
+    backgroundColor: GasTaColors.creamLight,
     borderColor: GasTaColors.glassBorderSubtle,
-    backgroundColor: GasTaColors.white,
-    marginBottom: spacing.xs,
+    shadowOpacity: 0,
+    elevation: 0,
   },
-  refillHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+  refillHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  refillFuelIcon: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: GasTaColors.forestGlow,
+    alignItems: 'center', justifyContent: 'center',
   },
-  /**
-   * The amount leads and carries the financial hierarchy, so it is given the
-   * room. `flex: 1` + `minWidth: 0` let it shrink and ellipsis instead of
-   * shoving the date off the row on a wide figure like ₱123,456.78 at 320px.
-   */
-  refillAmount: {
-    flex: 1,
-    minWidth: 0,
-    color: GasTaColors.forestDark,
-    fontSize: 18,
-    lineHeight: 22,
-    fontWeight: '800',
+  refillFuelIconVoided: { backgroundColor: GasTaColors.creamDark },
+  refillHeaderTitles: { flex: 1, minWidth: 0, gap: 2 },
+  refillTitle: { color: GasTaColors.forestDark, fontSize: 13, fontWeight: '700' },
+  refillTitleVoided: { color: GasTaColors.forestMuted },
+  refillDate: { color: GasTaColors.textMuted, fontSize: 11, lineHeight: 15 },
+  refillAmountGroup: { minWidth: 0, gap: 4, marginTop: spacing.sm },
+  refillShareSurface: {
+    backgroundColor: palette.primarySoft,
+    borderRadius: GasTaRadius.sm,
+    padding: spacing.sm + spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.forestBorder,
   },
-  /** A voided refill stays readable; only its amount is desaturated. */
-  refillAmountVoided: {
-    color: GasTaColors.textSoft,
-    textDecorationLine: 'line-through',
-  },
-  refillHeadRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexShrink: 0,
-  },
-  refillDate: {
-    color: GasTaColors.textSoft,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  refillMeta: {
-    color: GasTaColors.forestDark,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  refillWho: {
-    color: GasTaColors.textSoft,
-    fontSize: 12,
-    lineHeight: 16,
-    marginTop: 2,
-  },
-  /** Small danger-soft chip. Paired with the muted amount, never the only cue. */
-  voidedChip: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-    backgroundColor: palette.dangerSoft,
-  },
-  voidedChipText: {
-    color: palette.danger,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
+  refillPendingSurface: { backgroundColor: GasTaColors.creamLight, borderColor: colors.warningBorder },
+  refillAmountLabel: { color: GasTaColors.textMuted, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 },
+  refillShareLabel: { color: GasTaColors.forestMuted },
+  refillContext: { color: GasTaColors.textMuted, fontSize: 12, lineHeight: 17 },
+  refillPendingAmount: { color: GasTaColors.forestMuted },
+  refillPendingRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
+  refillPendingBadge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: GasTaRadius.pill, backgroundColor: colors.warningSoft },
+  refillPendingLabel: { color: palette.warning, fontSize: 10, fontWeight: '700' },
+  refillAmount: { minWidth: 0, color: GasTaColors.forestDark, fontSize: 22, lineHeight: 28, fontWeight: '800' },
+  refillAmountVoided: { color: GasTaColors.textMuted, textDecorationLine: 'line-through' },
+  refillMetadata: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
+  refillMetaChip: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: GasTaRadius.sm, backgroundColor: GasTaColors.creamLight },
+  refillMeta: { color: GasTaColors.forestMuted, fontSize: 11, lineHeight: 15, fontWeight: '600' },
+  refillSplitChip: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: GasTaRadius.pill, backgroundColor: palette.primarySoft },
+  refillSplitBadge: { color: GasTaColors.forest, fontSize: 10, lineHeight: 15, fontWeight: '700' },
+  refillWho: { color: GasTaColors.textMuted, fontSize: 11, lineHeight: 16, marginTop: spacing.sm },
+  voidedChip: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radii.pill, backgroundColor: GasTaColors.creamDark },
+  voidedChipText: { color: GasTaColors.forestMuted, fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.3 },
   /** Actions sit on one short line: the normal one left, overflow right. */
   rowActions: {
     flexDirection: 'row',
@@ -1516,32 +2042,25 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   formContent: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: GasTaSpacing.md,
     // Extra tail room so the last content (the responsibility helper) always
     // scrolls clear of the Save button, and so a validation message appearing
     // under the lowest field is never pinned under it.
     paddingBottom: spacing.xl * 2,
   },
   hint: {
-    color: GasTaColors.textSoft,
+    color: GasTaColors.forestMuted,
     fontSize: 11,
     lineHeight: 15,
-    marginTop: -spacing.sm,
-    marginBottom: spacing.md,
   },
-  /**
-   * The budget-responsibility block owns its own vertical space.
-   *
-   * The helper text used to share the `hint` style, whose negative `marginTop`
-   * is a tightening hack that only makes sense after a LabeledInput (which has
-   * its own bottom margin). Reused here, where the pills above carry no bottom
-   * margin, it dragged the helper up into the control and left the Save button
-   * with almost no breathing room -- which is what the overlap was. Every part
-   * of the block now spaces itself positively instead.
-   */
+  // Responsibility keeps its own card and positive spacing around the controls.
   respSection: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.creamLight,
+    borderRadius: GasTaRadius.md,
+    padding: GasTaSpacing.sm + GasTaSpacing.xs,
+    marginBottom: GasTaSpacing.md,
   },
   respHelper: {
     color: GasTaColors.textSoft,
@@ -1556,6 +2075,181 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   footerBtn: { marginTop: spacing.sm },
-  /** The form's primary action sits a full step below the responsibility block. */
-  formSaveBtn: { marginTop: spacing.lg },
+  // The existing save/split label and action share one full-width CTA.
+  formSaveBtn: {
+    ...shadow('light', 'sm'),
+    width: '100%',
+    minHeight: 50,
+    borderRadius: GasTaRadius.sm + GasTaSpacing.xs,
+    backgroundColor: GasTaColors.forest,
+    borderColor: GasTaColors.forest,
+    marginTop: GasTaSpacing.xs,
+  },
+  refillFormSheet: {
+    ...shadow('light', 'sm'),
+    backgroundColor: GasTaColors.white,
+    borderRadius: GasTaRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  refillFormHead: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+    gap: GasTaSpacing.sm,
+    paddingHorizontal: GasTaSpacing.md,
+  },
+  refillFormIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: GasTaColors.forest,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refillFormIntro: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: GasTaColors.textMuted,
+    marginTop: GasTaSpacing.xs,
+  },
+  vehicleSummary: {
+    ...shadow('light', 'sm'),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    padding: GasTaSpacing.sm + GasTaSpacing.xs,
+    backgroundColor: GasTaColors.glassFillStrong,
+    boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadDistance: 1, color: GasTaColors.forestBorder, inset: true }],
+    borderRadius: GasTaRadius.md,
+    marginBottom: GasTaSpacing.md,
+  },
+  vehicleSummaryIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: GasTaColors.forestGlow,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: GasTaColors.textMuted,
+  },
+  summaryVehicle: {
+    ...typeScale.cardTitle,
+    color: GasTaColors.forestDark,
+  },
+  formSection: {
+    padding: GasTaSpacing.sm + GasTaSpacing.xs,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    borderRadius: GasTaRadius.md,
+    backgroundColor: GasTaColors.creamLight,
+    marginBottom: GasTaSpacing.md,
+    gap: GasTaSpacing.sm,
+  },
+  fuelSection: {
+    ...shadow('light', 'sm'),
+    backgroundColor: GasTaColors.white,
+    borderColor: GasTaColors.forestBorder,
+    borderLeftWidth: 3,
+    borderLeftColor: GasTaColors.forest,
+  },
+  sectionIcon: {
+    width: 28,
+    height: 28,
+    lineHeight: 28,
+    textAlign: 'center',
+    borderRadius: 14,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  formSectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    marginBottom: GasTaSpacing.xs,
+  },
+  formSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  totalCard: {
+    padding: GasTaSpacing.sm,
+    borderRadius: GasTaRadius.sm,
+    backgroundColor: palette.primarySoft,
+    boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadDistance: 2, color: GasTaColors.forestBorder, inset: true }],
+  },
+  fuelInputRow: {
+    flexDirection: 'row',
+    gap: GasTaSpacing.sm,
+  },
+  formField: {
+    minWidth: 0,
+    gap: GasTaSpacing.xs,
+  },
+  formFieldCompact: {
+    flex: 1,
+  },
+  formFieldLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+  },
+  formFieldLabelFocused: {
+    color: GasTaColors.forest,
+    fontWeight: '700',
+  },
+  formInputSurface: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 46,
+    borderWidth: 1,
+    borderRadius: GasTaRadius.sm + GasTaSpacing.xs,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.white,
+    paddingHorizontal: GasTaSpacing.sm,
+    gap: GasTaSpacing.xs,
+  },
+  formInputAmount: {
+    backgroundColor: GasTaColors.white,
+  },
+  formInputFocused: {
+    borderColor: GasTaColors.forest,
+    backgroundColor: palette.primarySoft,
+    boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadDistance: 1, color: GasTaColors.forest, inset: true }],
+  },
+  formInputInvalid: {
+    borderColor: GasTaColors.error,
+    boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadDistance: 1, color: GasTaColors.error, inset: true }],
+  },
+  formInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: GasTaSpacing.sm,
+    fontSize: 15,
+    color: GasTaColors.forestDark,
+  },
+  formAmountInput: {
+    fontSize: 24,
+    fontWeight: '700',
+  },
+  amountUnit: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+  },
+  formUnit: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.forestMuted,
+  },
+  formFieldError: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: GasTaColors.error,
+  },
 });

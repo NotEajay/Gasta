@@ -72,7 +72,7 @@ function isMissingObject(error: { code?: string; message: string }, name: string
   return (
     error.code === '42883' ||
     error.code === '40401' ||
-    new RegExp(name, 'i').test(error.message)
+    (/does not exist|schema cache|could not find/i.test(error.message) && new RegExp(name, 'i').test(error.message))
   );
 }
 
@@ -98,6 +98,14 @@ export async function fetchRefillAllocations(refillId: string): Promise<RefillAl
     if (isMissingObject(error, 'refill_allocations')) throw MISSING('Allocations');
     throw error;
   }
+  return data ?? [];
+}
+
+/** One history query for all visible refills; failures must remain distinct from no shares. */
+export async function fetchAllocationsForRefills(refillIds: string[]): Promise<RefillAllocation[]> {
+  if (refillIds.length === 0) return [];
+  const { data, error } = await db.from('refill_allocations').select('*').in('refill_id', refillIds);
+  if (error) throw error;
   return data ?? [];
 }
 
@@ -149,7 +157,13 @@ export async function saveRefillSplit(
   refillId: string,
   allocations: SplitAllocationInput[],
 ): Promise<RefillAllocation[]> {
-  const payload = allocations.map((a) => ({ user_id: a.userId, amount: a.amount }));
+  const ids = allocations.map((a) => a.userId);
+  if (ids.some((id) => !id)) throw new Error('Each allocation needs a recipient.');
+  if (new Set(ids).size !== ids.length) throw new Error('Duplicate allocation recipient.');
+  if (allocations.some((a) => !Number.isFinite(a.amount) || a.amount < 0 || (a.amount > 0 && Math.round((a.amount + Number.EPSILON) * 100) === 0))) {
+    throw new Error('Allocation amounts cannot be negative or non-finite.');
+  }
+  const payload = allocations.map((a) => ({ user_id: a.userId, amount: Math.round((a.amount + Number.EPSILON) * 100) / 100 }));
 
   const { data, error } = await db.rpc('save_refill_split', {
     p_refill_id: refillId,
@@ -239,3 +253,17 @@ export async function fetchMyAcceptedRefillTotal(year: number, month: number): P
   return Number(data ?? 0);
 }
 
+
+/** Only allow known, friendly messages to reach the split UI. */
+export function splitErrorMessage(error: unknown): string {
+  const value = error as { message?: unknown; code?: unknown } | null;
+  const message = typeof value?.message === 'string' ? value.message.toLowerCase() : '';
+  if (/exceeds|greater than|larger than/.test(message)) return 'Split total is greater than the refill amount.';
+  if (/duplicate|appear once/.test(message)) return 'Each person can only appear once in the split.';
+  if (/recipient|eligible|no longer has access|invalid input syntax for type uuid/.test(message)) return 'One of the selected people no longer has access to this vehicle. Refresh and try again.';
+  if (/voided|refill not found|archived|no longer available/.test(message)) return 'This refill is no longer available for splitting.';
+  if (/permission|own share|only.*own|row-level security/.test(message) || value?.code === '42501') return 'You no longer have permission to update this refill.';
+  if (/negative|non-finite|valid amount|needs a|incomplete|complete.*split/.test(message)) return 'Complete the split before saving.';
+  if (/already been accepted/.test(message)) return 'This share has already been accepted. Refresh the split before making changes.';
+  return "We couldn't save the split right now. Please try again.";
+}

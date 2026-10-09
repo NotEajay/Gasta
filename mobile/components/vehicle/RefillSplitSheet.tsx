@@ -23,6 +23,7 @@ import {
   fetchRefillAllocationSummary,
   fetchRefillAllocations,
   saveRefillSplit,
+  splitErrorMessage,
 } from '@/lib/services/refillAllocations';
 import {
   buildSplitPayload,
@@ -32,6 +33,11 @@ import {
   splitSheetStyles,
   SplitMemberRow,
   toCents,
+  parseDraftCents,
+  validateSplitDraft,
+  SplitResultPopup,
+  type SplitResult,
+  splitSuccessResult,
 } from './refillSplitShared';
 import type {
   RefillAllocation,
@@ -53,7 +59,7 @@ interface Props {
    */
   mode: 'owner' | 'self';
   onClose: () => void;
-  onSaved: (message: string) => void;
+  onSaved: (message: string) => void | Promise<void>;
 }
 
 const STATUS_TEXT: Record<RefillAllocationStatus, string> = {
@@ -101,6 +107,14 @@ export default function RefillSplitSheet({
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const submitLock = useRef(false);
+  const savedMessage = useRef('Split saved.');
+  const [result, setResult] = useState<SplitResult | null>(null);
+  const showResult = (next: SplitResult) => {
+    submitLock.current = true;
+    setResult(next);
+  };
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -214,6 +228,7 @@ export default function RefillSplitSheet({
         fetchVehicleMembers(vehicleId),
       ]);
 
+      setLoaded(true);
       setAllocations(rows);
       setSummary(totals);
       setMembers(memberRows);
@@ -228,7 +243,8 @@ export default function RefillSplitSheet({
       }
       setDraft(seeded);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unable to load the split.');
+      setLoaded(false);
+      setError('We couldn’t load the split right now. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -296,7 +312,7 @@ export default function RefillSplitSheet({
     [allocationByUser, currentUserId, eligibleMembers],
   );
 
-  const myDraftCents = toCents(Number.parseFloat(draft[currentUserId] ?? '') || 0);
+  const myDraftCents = parseDraftCents(draft[currentUserId]);
 
   // Name only. The role is shown on the second line, so appending "· Owner"
   // here as well would read "Dad · Owner" over "Owner · Accepted".
@@ -306,39 +322,44 @@ export default function RefillSplitSheet({
   );
 
   // What the user is typing right now, in cents.
-  const draftCents = useMemo(
-    () =>
-      Object.values(draft).reduce(
-        (sum, raw) => sum + toCents(Number.parseFloat(raw) || 0),
-        0,
-      ),
-    [draft],
-  );
+  const draftCents = useMemo(() => {
+    // Accepted shares of removed people still reserve money. Pending shares
+    // omitted by the owner are retired; self saves leave everyone else's rows alone.
+    const editableIds = new Set(eligibleMembers.filter((m) => canEditRow(m, allocationByUser.get(m.user_id))).map((m) => m.user_id));
+    const retained = allocations.filter((a) => !editableIds.has(a.user_id) &&
+      (a.status === 'accepted' || (!isVehicleOwner && a.status === 'pending')));
+    return retained.reduce((sum, a) => sum + toCents(a.amount), 0) +
+      [...editableIds].reduce((sum, id) => sum + parseDraftCents(draft[id]), 0);
+  }, [eligibleMembers, canEditRow, allocationByUser, allocations, isVehicleOwner, draft]);
 
   const refillCents = toCents(refill.total_amount);
   const draftUnassigned = fromCents(Math.max(refillCents - draftCents, 0));
   const overBudget = draftCents > refillCents;
 
   // True when the form differs from what is actually saved.
-  const hasUnsavedEdits = draftCents !== toCents(summary.reserved);
+  const hasUnsavedEdits = eligibleMembers.some((m) => canEditRow(m, allocationByUser.get(m.user_id)) &&
+    parseDraftCents(draft[m.user_id]) !== toCents(['accepted', 'pending'].includes(allocationByUser.get(m.user_id)?.status ?? '') ? allocationByUser.get(m.user_id)?.amount ?? 0 : 0));
 
   const handleSave = async () => {
+    if (submitLock.current || loading || !loaded || result) return;
+    if (!myMember || refill.voided_at) {
+      showResult({ type: 'error', message: !myMember ? 'You no longer have permission to update this refill.' : 'This refill is no longer available for splitting.' });
+      return;
+    }
     // Only send rows this user is permitted to write.
     const editable = eligibleMembers.filter((m) => canEditRow(m, allocationByUser.get(m.user_id)));
 
-    // ONLY positive amounts go on the wire, via the same shared builder the
-    // pre-save draft uses.
-    //
-    // save_refill_split() rejects any entry with amount <= 0 ("Allocation
-    // amounts must be greater than zero."), so sending a zero made the whole
-    // call fail. A brand-new refill has an empty draft, so every eligible member
-    // the user did not type for produced a zero.
-    //
-    // Omitting a row IS how the server retires it: its trailing update cancels
-    // every `pending` row whose user_id is absent from p_allocations. Filtering
-    // here therefore preserves the intended "zero retires a proposal" behaviour
-    // using the server's own mechanism instead of contradicting it.
+    // Blank/zero rows remain unassigned. Own existing shares need explicit
+    // zero to retire them; omitting only cancels pending proposals for owners.
+    const validation = validateSplitDraft(draft, editable);
+    if (validation) { setError(validation); return; }
     const payload = buildSplitPayload(draft, editable);
+    // Zero explicitly retires the caller's existing share. Omitting it does not.
+    for (const member of editable) {
+      if (member.user_id === currentUserId && ['accepted', 'pending'].includes(allocationByUser.get(member.user_id)?.status ?? '') && parseDraftCents(draft[member.user_id]) === 0) {
+        payload.push({ userId: member.user_id, amount: 0 });
+      }
+    }
 
     const hasPositive = payload.length > 0;
     // All-zero is only meaningful if it actually retires an existing row.
@@ -347,46 +368,30 @@ export default function RefillSplitSheet({
       editable.some((m) => allocationByUser.get(m.user_id)?.status === 'pending');
 
     if (!hasPositive && !hasExisting) {
-      setError('Enter an amount for yourself, or leave it at 0 to have no share.');
+      setError('Complete the split before saving.');
       return;
     }
     if (overBudget) {
-      setError('The split is larger than this refill total.');
+      setError('Split total is greater than the refill amount.');
       return;
     }
 
+    submitLock.current = true;
     setSaving(true);
     setError(null);
     try {
-      if (__DEV__) {
-        // eslint-disable-next-line no-console
-        console.log('[RefillSplitSheet] save', {
-          refillId: refill.id,
-          vehicleId,
-          mode,
-          currentUserId,
-          totalAmount: refill.total_amount,
-          refillCents,
-          draftCents,
-          members: members.map((m) => ({ user_id: m.user_id, role: m.role })),
-          payload,
-        });
-      }
       const saved = await saveRefillSplit(refill.id, payload);
       const needsApproval = saved.some(
         (row) => row.status === 'pending' && row.user_id !== currentUserId,
       );
-      onSaved(needsApproval ? 'Split saved. Waiting for approval.' : 'Split saved.');
-      onClose();
+      savedMessage.current = needsApproval ? 'Split saved. Waiting for approval.' : 'Split saved.';
+      // Refresh locally without reseeding the user's draft on a failed save.
+      const [rows, totals] = await Promise.all([fetchRefillAllocations(refill.id), fetchRefillAllocationSummary(refill.id)]);
+      setAllocations(rows);
+      setSummary(totals);
+      showResult(splitSuccessResult(rows, currentUserId, Number(refill.total_amount)));
     } catch (e) {
-      // A non-Error throw (a raw PostgREST object, for instance) still carries a
-      // usable message, so never collapse it into a generic string.
-      const message = e instanceof Error ? e.message : `Unable to save the split. ${String(e)}`;
-      if (__DEV__) {
-        // eslint-disable-next-line no-console
-        console.error('[RefillSplitSheet] save failed', { payload, error: e });
-      }
-      setError(message);
+      showResult({ type: 'error', message: splitErrorMessage(e) });
     } finally {
       setSaving(false);
     }
@@ -405,9 +410,9 @@ export default function RefillSplitSheet({
    * no confirmation on either, matching the sheet's existing behaviour.
    */
   const handleCancel = useCallback(() => {
-    if (saving) return;
+    if (submitLock.current || result) return;
     onClose();
-  }, [saving, onClose]);
+  }, [result, onClose]);
 
   return (
     // Deliberately NOT a <Modal>.
@@ -460,7 +465,7 @@ export default function RefillSplitSheet({
                 <ActivityIndicator color={HomeColors.primary} />
                 <Text style={styles.loadingText}>Loading split…</Text>
               </View>
-            ) : error && allocations.length === 0 ? (
+            ) : !loaded && error ? (
               // Load failures surface in the sheet itself. The button must never
               // look dead: if the Phase 2 migrations are missing, the reason is
               // shown here with a way to retry.
@@ -511,7 +516,7 @@ export default function RefillSplitSheet({
           </View>
 
 
-          {!loading && (!error || allocations.length > 0) ? (
+          {!loading && loaded ? (
             <View ref={viewportRef} style={styles.viewport}>
               <ScrollView
                 ref={scrollRef}
@@ -555,9 +560,10 @@ export default function RefillSplitSheet({
                       <TextInput
                         style={styles.shareInput}
                         value={draft[currentUserId] ?? ''}
-                        onChangeText={(text) =>
-                          setDraft((prev) => ({ ...prev, [currentUserId]: text }))
-                        }
+                        onChangeText={(text) => {
+                          setDraft((prev) => ({ ...prev, [currentUserId]: text }));
+                          setError(null);
+                        }}
                         placeholder="0"
                         keyboardType="decimal-pad"
                         placeholderTextColor={HomeColors.muted}
@@ -612,9 +618,10 @@ export default function RefillSplitSheet({
                     editable={editable}
                     isSelf={isSelf}
                     member={member}
-                    onChangeText={(text) =>
-                      setDraft((prev) => ({ ...prev, [member.user_id]: text }))
-                    }
+                    onChangeText={(text) => {
+                      setDraft((prev) => ({ ...prev, [member.user_id]: text }));
+                      setError(null);
+                    }}
                     onFocus={() => handleFocus(member.user_id)}
                     staticText={existing ? formatCurrency(existing.amount) : undefined}
                     statusColor={status ? STATUS_COLOR[status] : undefined}
@@ -640,6 +647,14 @@ export default function RefillSplitSheet({
             button.
           */}
           <View style={[styles.footer, keyboardOpen && styles.footerCompact]}>
+            {loaded && (overBudget || error) ? (
+              <View style={styles.errorBlock}>
+                <Ionicons name="alert-circle-outline" size={16} color={palette.danger} />
+                <Text accessibilityLiveRegion="polite" style={styles.errorBody}>
+                  {overBudget ? 'Split total is greater than the refill amount.' : error}
+                </Text>
+              </View>
+            ) : null}
             {keyboardOpen ? null : mode === 'owner' ? (
               <>
                 <View style={styles.summaryRow}>
@@ -672,7 +687,7 @@ export default function RefillSplitSheet({
                   <PrimaryButton
                     label={saving ? 'Saving…' : 'Save split'}
                     onPress={handleSave}
-                    disabled={saving || loading || eligibleMembers.length === 0 || overBudget}
+                    disabled={saving || loading || !loaded || eligibleMembers.length === 0 || overBudget}
                     style={styles.saveBtn}
                   />
                 </View>
@@ -693,7 +708,7 @@ export default function RefillSplitSheet({
                       { color: overBudget ? palette.danger : HomeColors.navy },
                     ]}>
                     {formatCurrency(
-                      Math.max(refillCents - myDraftCents, 0),
+                      fromCents(Math.max(refillCents - draftCents, 0)),
                     )}
                   </Text>
                 </View>
@@ -709,7 +724,7 @@ export default function RefillSplitSheet({
                   <PrimaryButton
                     label={saving ? 'Saving…' : 'Save my share'}
                     onPress={handleSave}
-                    disabled={saving || loading || !myMember || myDraftCents > refillCents}
+                    disabled={saving || loading || !loaded || !myMember || overBudget}
                     style={styles.saveBtn}
                   />
                 </View>
@@ -718,6 +733,12 @@ export default function RefillSplitSheet({
           </View>
         </View>
       </View>
+      <SplitResultPopup result={result} onDismiss={() => {
+        const success = result?.type === 'success';
+        submitLock.current = false;
+        setResult(null);
+        if (success) { onClose(); void onSaved(savedMessage.current); }
+      }} />
     </View>
   );
 }

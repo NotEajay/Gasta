@@ -16,6 +16,9 @@ import {
   splitSheetStyles as s,
   SplitMemberRow,
   toCents,
+  validateSplitDraft,
+  SplitResultPopup,
+  type SplitResult,
 } from './refillSplitShared';
 
 interface Props {
@@ -41,6 +44,10 @@ interface Props {
   onCancel: () => void;
   onConfirm: (payload: SplitAllocationInput[]) => void;
   onRecovery?: () => void;
+  visible: boolean;
+  onDismiss: () => void;
+  result: SplitResult | null;
+  onDismissResult: () => void;
 }
 
 /**
@@ -71,6 +78,10 @@ export default function RefillSplitDraftSheet({
   onCancel,
   onConfirm,
   onRecovery,
+  visible,
+  onDismiss,
+  result,
+  onDismissResult,
 }: Props) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [localError, setLocalError] = useState<string | null>(null);
@@ -98,23 +109,23 @@ export default function RefillSplitDraftSheet({
   const message = localError ?? error;
 
   const handleConfirm = useCallback(() => {
-    if (saving) return; // blocks double taps
+    if (saving || result) return;
+    const validation = validateSplitDraft(draft, rows);
+    if (validation) { setLocalError(validation); return; }
     if (overBudget) {
-      setLocalError('The split is larger than this refill total.');
+      setLocalError('Split total is greater than the refill amount.');
       return;
     }
     if (!hasPositive) {
       setLocalError(
-        mode === 'self'
-          ? 'Enter the amount you are taking responsibility for.'
-          : 'Enter an amount for at least one person.',
+        'Complete the split before saving.',
       );
       return;
     }
     setLocalError(null);
     // Positive-only, and already in the real RPC shape.
     onConfirm(buildSplitPayload(draft, rows));
-  }, [saving, overBudget, hasPositive, mode, onConfirm, draft, rows]);
+  }, [saving, result, overBudget, hasPositive, mode, onConfirm, draft, rows]);
 
   const setAmount = useCallback((userId: string, text: string) => {
     setDraft((prev) => ({ ...prev, [userId]: text }));
@@ -122,7 +133,7 @@ export default function RefillSplitDraftSheet({
   }, []);
 
   return (
-    <Modal animationType="slide" onRequestClose={onCancel} transparent visible>
+    <Modal animationType="slide" onRequestClose={result ? onDismissResult : onCancel} transparent visible={visible} onDismiss={onDismiss}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={s.sheetWrap}>
@@ -200,7 +211,7 @@ export default function RefillSplitDraftSheet({
               <View style={s.errorBlock}>
                 <Ionicons name="alert-circle-outline" size={16} color={palette.danger} />
                 <Text style={s.errorBody}>
-                  {overBudget ? 'The split is larger than this refill total.' : message}
+                  {overBudget ? 'Split total is greater than the refill amount.' : message}
                 </Text>
               </View>
             ) : null}
@@ -224,7 +235,7 @@ export default function RefillSplitDraftSheet({
                 variant="secondary"
               />
               <PrimaryButton
-                disabled={saving || overBudget || rows.length === 0}
+                disabled={saving || !!result || overBudget || rows.length === 0}
                 label={saving ? 'Saving…' : mode === 'owner' ? 'Confirm split' : 'Confirm share'}
                 onPress={handleConfirm}
                 style={s.saveBtn}
@@ -232,6 +243,7 @@ export default function RefillSplitDraftSheet({
             </View>
           </View>
         </View>
+        <SplitResultPopup result={result} onDismiss={onDismissResult} />
       </KeyboardAvoidingView>
     </Modal>
   );
