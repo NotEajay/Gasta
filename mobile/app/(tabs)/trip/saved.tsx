@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
@@ -32,22 +32,32 @@ export default function SavedTripsScreen() {
   const { user, loading: authLoading } = useAuth();
   const [trips, setTrips] = useState<SavedTrip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadRequestId = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     if (!user || !isSupabaseConfigured) {
+      setTrips([]);
       setLoading(false);
       return;
     }
+    setLoading(true);
+    setLoadError(null);
     try {
-      setTrips(await fetchSavedTrips(user.id));
+      const rows = await fetchSavedTrips(user.id);
+      if (requestId === loadRequestId.current) setTrips(rows);
+    } catch {
+      if (requestId === loadRequestId.current) setLoadError('Couldn’t load saved trips. Please try again.');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }, [user]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(useCallback(() => {
+    void load();
+    return () => { loadRequestId.current += 1; };
+  }, [load]));
 
   const handleReRun = (trip: SavedTrip) => {
     router.push({
@@ -74,7 +84,7 @@ export default function SavedTripsScreen() {
             await deleteSavedTrip(trip.id);
             await load();
           } catch (e) {
-            Alert.alert('Error', e instanceof Error ? e.message : 'Failed to delete');
+            Alert.alert('Couldn’t delete template', 'Please try again.');
           }
         },
       },
@@ -108,7 +118,12 @@ export default function SavedTripsScreen() {
       contentContainerStyle={styles.padding}>
       <TripSectionHeader active="saved" />
 
-      {trips.length === 0 ? (
+      {loadError ? (
+        <Card>
+          <Text>{loadError}</Text>
+          <PrimaryButton label="Try again" onPress={load} style={styles.actionBtn} />
+        </Card>
+      ) : trips.length === 0 ? (
         <Card>
           <Text>No saved trips yet. Save a template from New trip.</Text>
           <PrimaryButton

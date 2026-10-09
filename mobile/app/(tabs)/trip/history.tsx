@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
@@ -37,22 +37,32 @@ export default function TripHistoryScreen() {
   const { user, loading: authLoading } = useAuth();
   const [records, setRecords] = useState<TripRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadRequestId = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     if (!user || !isSupabaseConfigured) {
+      setRecords([]);
       setLoading(false);
       return;
     }
+    setLoading(true);
+    setLoadError(null);
     try {
-      setRecords(await fetchRecentTrips(user.id));
+      const rows = await fetchRecentTrips(user.id);
+      if (requestId === loadRequestId.current) setRecords(rows);
+    } catch {
+      if (requestId === loadRequestId.current) setLoadError('Couldn’t load trip history. Please try again.');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }, [user]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(useCallback(() => {
+    void load();
+    return () => { loadRequestId.current += 1; };
+  }, [load]));
 
   if (!isSupabaseConfigured) {
     return (
@@ -81,9 +91,14 @@ export default function TripHistoryScreen() {
       contentContainerStyle={styles.padding}>
       <TripSectionHeader active="history" />
 
-      {records.length === 0 ? (
+      {loadError ? (
         <Card>
-          <Text>No trip history yet. Run the optimizer and tap Log to history.</Text>
+          <Text>{loadError}</Text>
+          <PrimaryButton label="Try again" onPress={load} style={styles.actionBtn} />
+        </Card>
+      ) : records.length === 0 ? (
+        <Card>
+          <Text>No trip history yet. Compare trip costs to record your first trip.</Text>
           <PrimaryButton
             label="New trip"
             variant="secondary"

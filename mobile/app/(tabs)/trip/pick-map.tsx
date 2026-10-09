@@ -170,6 +170,13 @@ async function resolveTappedPlaceName(
   };
 }
 
+function pointFromParams(label?: string, lat?: string, lng?: string): PickedRoutePoint | null {
+  if (!label || lat == null || lng == null) return null;
+  const latitude = Number(lat), longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { displayName: label, latitude, longitude, directionsValue: `${latitude},${longitude}` };
+}
+
 export default function PickOnMapScreen() {
   const router = useRouter();
   const theme = useTheme();
@@ -179,6 +186,10 @@ export default function PickOnMapScreen() {
   const params = useLocalSearchParams<{
     origin?: string;
     destination?: string;
+    originLatitude?: string;
+    originLongitude?: string;
+    destinationLatitude?: string;
+    destinationLongitude?: string;
   }>();
   const mapRef = useRef<MapViewHandle | null>(null);
   const regionRef = useRef<Region>(DEFAULT_REGION);
@@ -188,11 +199,11 @@ export default function PickOnMapScreen() {
   const searchAbortController = useRef<AbortController | null>(null);
   const [origin, setOrigin] = useState<FieldState>({
     query: params.origin ?? "",
-    point: null,
+    point: pointFromParams(params.origin, params.originLatitude, params.originLongitude),
   });
   const [destination, setDestination] = useState<FieldState>({
     query: params.destination ?? "",
-    point: null,
+    point: pointFromParams(params.destination, params.destinationLatitude, params.destinationLongitude),
   });
   const [activeField, setActiveField] = useState<RouteField>("origin");
   const [search, setSearch] = useState<SearchState>({
@@ -242,6 +253,8 @@ export default function PickOnMapScreen() {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = null;
     setResolvingPlaceId(null);
+    setResolvingCoordinate(false);
+    setLocating(false);
     setSearch((current) => ({
       ...current,
       query: "",
@@ -334,6 +347,7 @@ export default function PickOnMapScreen() {
   const handleMapPress = useCallback(
     async (event: MapPressEvent) => {
       clearSearch();
+      const requestId = placeRequestId.current;
       const { latitude, longitude } = event.nativeEvent.coordinate;
       const field = activeField;
       setLocationError(null);
@@ -352,6 +366,7 @@ export default function PickOnMapScreen() {
         latitude,
         longitude,
       );
+      if (requestId !== placeRequestId.current) return;
       setField(field, {
         query: displayName,
         point: {
@@ -374,11 +389,13 @@ export default function PickOnMapScreen() {
     if (locating) return;
     const previousOrigin = origin;
     clearSearch();
+    const requestId = placeRequestId.current;
     setField("origin", { query: "Getting current location...", point: null });
     setLocating(true);
     setLocationError(null);
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
+      if (requestId !== placeRequestId.current) return;
       if (permission.status !== "granted") {
         setField("origin", previousOrigin);
         setLocationError(
@@ -389,6 +406,7 @@ export default function PickOnMapScreen() {
       const current = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
+      if (requestId !== placeRequestId.current) return;
       const { latitude, longitude } = current.coords;
       focusPoint({
         displayName: "Current location",
@@ -401,6 +419,7 @@ export default function PickOnMapScreen() {
         latitude,
         longitude,
       );
+      if (requestId !== placeRequestId.current) return;
       setOrigin({
         query: displayName.startsWith("Pinned location")
           ? "Current location"
@@ -418,12 +437,13 @@ export default function PickOnMapScreen() {
         setLocationError(error);
       }
     } catch {
+      if (requestId !== placeRequestId.current) return;
       setField("origin", previousOrigin);
       setLocationError(
         "Could not get your current location. Check location settings and try again.",
       );
     } finally {
-      setLocating(false);
+      if (requestId === placeRequestId.current) setLocating(false);
     }
   }, [clearSearch, focusPoint, locating, origin, setField]);
 
@@ -543,6 +563,7 @@ export default function PickOnMapScreen() {
 
     const requestId = ++routeRequestId.current;
     const controller = new AbortController();
+    setRoute(null);
     setRouteLoading(true);
     setRouteError(null);
 
@@ -571,6 +592,7 @@ export default function PickOnMapScreen() {
     })();
 
     return () => {
+      routeRequestId.current += 1;
       controller.abort();
     };
   }, [destination.point, origin.point]);

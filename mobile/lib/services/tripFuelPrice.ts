@@ -93,8 +93,7 @@ function regionNameOf(code: DoeRegionCode): string {
  * Which DOE pricing area a trip belongs to.
  *
  * The optimizer has no region of its own, so the trip's geography is derived
- * from coordinates the screen already holds -- destination first (where the
- * trip is heading, and where fuel would be bought), then origin. Matching is
+ * from coordinates the screen already holds -- origin first (where fuel is bought before departure). Matching is
  * nearest-centroid against `REGION_CENTROIDS`, the same constant Prices and
  * Report already use; no new geography is invented.
  */
@@ -151,7 +150,7 @@ async function resolveFuel(
 
 function lowestVerified(verified: VerifiedCommunityPrice[]): VerifiedCommunityPrice | null {
   const usable = verified.filter(
-    (row) => typeof row.reported_price === 'number' && row.reported_price > 0
+    (row) => Number.isFinite(row.reported_price) && row.reported_price > 0
   );
   if (usable.length === 0) return null;
   return usable.reduce((best, row) => (row.reported_price < best.reported_price ? row : best));
@@ -200,7 +199,7 @@ export async function resolveTripFuelPrice(input: {
   try {
     [fuel, bulletin] = await Promise.all([
       resolveFuel(input.fuelTypeId),
-      fetchLatestBulletinForRegion(input.regionCode),
+      fetchLatestBulletinForRegion(input.regionCode).catch(() => null),
     ]);
   } catch {
     return { status: 'unavailable', reason: 'error', message: 'Could not load current fuel prices.' };
@@ -213,16 +212,9 @@ export async function resolveTripFuelPrice(input: {
       message: 'This vehicle’s fuel type has no DOE bulletin price.',
     };
   }
-  if (!bulletin) {
-    return {
-      status: 'unavailable',
-      reason: 'no_bulletin',
-      message: `No DOE bulletin is available for ${regionNameOf(input.regionCode)} yet.`,
-    };
-  }
 
   const base = {
-    bulletinDate: bulletin.bulletin_date,
+    bulletinDate: bulletin?.bulletin_date ?? null,
     regionCode: input.regionCode,
     regionName: regionNameOf(input.regionCode),
     fuelCode: fuel.code,
@@ -237,14 +229,16 @@ export async function resolveTripFuelPrice(input: {
   let regionRows: { price_per_liter: number }[] = [];
   let verified: VerifiedCommunityPrice[] = [];
   try {
-    const areaPromise = areaName
+    const areaPromise = bulletin && areaName
       ? fetchFuelPricesForBulletin(bulletin.id, input.regionCode, fuel.code, areaName).catch(
           () => [] as { price_per_liter: number }[]
         )
       : Promise.resolve([] as { price_per_liter: number }[]);
     [localRows, regionRows, verified] = await Promise.all([
       areaPromise,
-      fetchFuelPricesForBulletin(bulletin.id, input.regionCode, fuel.code, '').catch(() => []),
+      bulletin
+        ? fetchFuelPricesForBulletin(bulletin.id, input.regionCode, fuel.code, '').catch(() => [])
+        : Promise.resolve([]),
       fetchFreshVerifiedPrices(input.regionCode, fuel.code).catch(() => []),
     ]);
   } catch {
@@ -252,30 +246,26 @@ export async function resolveTripFuelPrice(input: {
   }
 
   /*
-   * Verified community wins wherever it applies. It is only called LOCAL when
-   * the station sits in the resolved area; otherwise it is still a trusted
-   * price for the region and is labelled as such. Trip never picks a station,
-   * so nothing here claims to be "the price at <station>".
+   * The verified view is region-scoped. A station-name substring cannot prove
+   * locality, so label this as a regional estimate, never an exact selected
+   * branch price. Community availability does not depend on a DOE bulletin.
    */
   const community = lowestVerified(verified);
   if (community) {
     const verifiedDate = new Date(community.verified_at);
     const reported = Number.isNaN(verifiedDate.getTime()) ? '' : shortDate(verifiedDate, now);
-    const isLocal = areaName
-      ? community.station_name.toLowerCase().includes(areaName.toLowerCase())
-      : false;
-    const place = isLocal && areaName ? areaName : regionNameOf(input.regionCode);
     return {
       status: 'ok',
       price: {
         ...base,
+        bulletinDate: null,
         pricePerLiter: community.reported_price,
         source: 'community_verified',
         sourceLabel: 'Community verified',
         verifiedAt: community.verified_at,
-        locality: isLocal ? 'area' : 'region',
-        areaName: isLocal ? areaName : null,
-        detail: `Verified community price near ${place} · reported ${reported}`.trim(),
+        locality: 'region',
+        areaName: null,
+        detail: `Verified community estimate in ${base.regionName}${reported ? ` · verified ${reported}` : ''}`,
       },
     };
   }
@@ -283,7 +273,7 @@ export async function resolveTripFuelPrice(input: {
   const usable = (rows: { price_per_liter: number }[]) =>
     rows
       .map((row) => row.price_per_liter)
-      .filter((value): value is number => typeof value === 'number' && value > 0);
+      .filter((value): value is number => Number.isFinite(value) && value > 0);
 
   const localPrices = usable(localRows);
   if (areaName && localPrices.length > 0) {
@@ -297,13 +287,13 @@ export async function resolveTripFuelPrice(input: {
         verifiedAt: null,
         locality: 'area',
         areaName,
-        detail: `Lowest trusted price found in ${areaName}`,
+        detail: `DOE area estimate · ${areaName}`,
       },
     };
   }
 
   const regionPrices = usable(regionRows);
-  if (regionPrices.length > 0) {
+  if (bulletin && regionPrices.length > 0) {
     const bulletinDate = new Date(`${bulletin.bulletin_date}T00:00:00`);
     const when = Number.isNaN(bulletinDate.getTime())
       ? bulletin.bulletin_date
@@ -327,7 +317,7 @@ export async function resolveTripFuelPrice(input: {
 
   return {
     status: 'unavailable',
-    reason: 'no_doe_price',
+    reason: bulletin ? 'no_doe_price' : 'no_bulletin',
     message: `No current DOE or verified community price is available for ${fuel.name} in ${regionNameOf(
       input.regionCode
     )}.`,

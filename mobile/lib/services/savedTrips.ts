@@ -57,18 +57,16 @@ export async function deleteSavedTrip(savedTripId: string): Promise<void> {
   if (error) throw error;
 }
 
-async function assertVehicleActive(vehicleId: string): Promise<void> {
+export async function assertVehicleActive(vehicleId: string): Promise<void> {
   const { data, error } = await supabase
     .from('vehicles')
     .select('id, archived_at')
     .eq('id', vehicleId)
     .maybeSingle();
-  if (error) {
-    if (error.code === '42703' || /archived_at/i.test(error.message)) return;
-    return;
+  if (error || !data) {
+    throw new Error('This vehicle is unavailable. Select an active vehicle and try again.');
   }
-  const archivedAt = (data as { archived_at?: string | null } | null)?.archived_at ?? null;
-  if (archivedAt != null) {
+  if (data.archived_at != null) {
     throw new Error('This vehicle is archived. Restore it before using it for new trips.');
   }
 }

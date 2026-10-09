@@ -22,18 +22,19 @@ export interface TripCalculationInput {
 /**
  * Builds raw SAW inputs (cost + travel time) for each transport mode.
  *
- * Walking is always included so long trips still have a cost/time anchor for
- * inverted min-max normalization. Ineligible modes are removed after scoring
- * in `calculateTripRecommendation` so they are not recommended or shown.
+ * Only eligible alternatives participate in normalization. A hidden walking
+ * option on a long trip must not compress the time differences of the options
+ * the user can actually choose.
  */
 export function buildModeRawScores(input: TripCalculationInput): ModeRawScores[] {
   const { distanceKm, fuelPricePerLiter, fuelEfficiencyKmPerLiter, ownVehicleTravelTimeMinutes } =
     input;
 
-  const ownFuelCost =
-    fuelEfficiencyKmPerLiter > 0
-      ? (distanceKm / fuelEfficiencyKmPerLiter) * fuelPricePerLiter
-      : 999999;
+  if (![distanceKm, fuelPricePerLiter, fuelEfficiencyKmPerLiter].every((value) => Number.isFinite(value) && value > 0) ||
+      (ownVehicleTravelTimeMinutes != null && (!Number.isFinite(ownVehicleTravelTimeMinutes) || ownVehicleTravelTimeMinutes <= 0))) {
+    throw new Error('Enter a valid distance, fuel price, efficiency and travel time.');
+  }
+  const ownFuelCost = (distanceKm / fuelEfficiencyKmPerLiter) * fuelPricePerLiter;
 
   const ownTravelTime =
     ownVehicleTravelTimeMinutes != null && ownVehicleTravelTimeMinutes > 0
@@ -51,9 +52,7 @@ export function buildModeRawScores(input: TripCalculationInput): ModeRawScores[]
   (Object.keys(TRANSPORT_MODE_DEFAULTS) as Exclude<TransportModeCode, 'OWN_VEHICLE'>[]).forEach(
     (code) => {
       const defaults = TRANSPORT_MODE_DEFAULTS[code];
-      // Keep walking in the SAW matrix as a scale anchor even when the trip is
-      // too long to recommend it. Other modes only participate when eligible.
-      if (code !== 'WALKING' && !isModeEligibleForDistance(defaults, distanceKm)) {
+      if (!isModeEligibleForDistance(defaults, distanceKm)) {
         return;
       }
 
@@ -72,25 +71,11 @@ export function buildModeRawScores(input: TripCalculationInput): ModeRawScores[]
   return modes;
 }
 
-function isEvaluationEligible(
-  modeCode: TransportModeCode,
-  distanceKm: number,
-): boolean {
-  if (modeCode === 'OWN_VEHICLE') return true;
-  return isModeEligibleForDistance(TRANSPORT_MODE_DEFAULTS[modeCode], distanceKm);
-}
-
 export function calculateTripRecommendation(input: TripCalculationInput) {
   const rawScores = buildModeRawScores(input);
   const evaluations = evaluateModes(rawScores, input.weights);
 
-  // Drop modes that are not practical for this distance (e.g. walking 10 km)
-  // after SAW so normalization still used their raw values as anchors.
-  const eligible = evaluations.filter((evaluation) =>
-    isEvaluationEligible(evaluation.modeCode, input.distanceKm),
-  );
-
-  const sorted = [...eligible].sort((a, b) => b.weightedScore - a.weightedScore);
+  const sorted = [...evaluations].sort((a, b) => b.weightedScore - a.weightedScore);
   const recommended = sorted[0] ?? null;
   return { evaluations: sorted, recommended };
 }

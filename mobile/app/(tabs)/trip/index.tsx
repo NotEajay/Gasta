@@ -19,11 +19,10 @@ import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Th
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import { formatPeso, transportModeLabel } from '@/lib/format';
-import { weightsSumToOne } from '@/lib/mcda';
+import { weightsForTimePriority, weightsSumToOne } from '@/lib/mcda';
 import { createSavedTrip } from '@/lib/services/savedTrips';
 import { logTripToHistory } from '@/lib/services/trips';
 import {
-  regionForTrip,
   resolveTripFuelPrice,
   type TripFuelPriceResult,
 } from '@/lib/services/tripFuelPrice';
@@ -34,7 +33,7 @@ import {
 } from '@/lib/services/location';
 import { fetchBulletinAreas, fetchLatestBulletinForRegion } from '@/lib/services/fuelPrices';
 import type { DoeRegionCode } from '@/constants/regions';
-import { fetchVehicleCatalog, fetchVehicles } from '@/lib/services/vehicles';
+import { fetchVehicleCatalog, fetchTripVehicles } from '@/lib/services/vehicles';
 import { calculateTripRecommendation } from '@/lib/tripCalculator';
 import {
   DirectionsError,
@@ -53,7 +52,7 @@ import {
   searchPlaceSuggestions,
   type PlaceSuggestion,
 } from '@/lib/services/googlePlacesAutocomplete';
-import { getReadableAddress } from '@/lib/services/googleGeocoding';
+import { getReadableAddress, searchPlaces } from '@/lib/services/googleGeocoding';
 import { useTheme } from '@/lib/useTheme';
 import type { MCDAWeights, ModeEvaluation } from '@/types/mcda';
 import type { Vehicle, VehicleCatalogEntry } from '@/types';
@@ -123,7 +122,7 @@ export default function TripOptimizerScreen() {
    */
   const [templateNameError, setTemplateNameError] = useState<string | null>(null);
   const [efficiency, setEfficiency] = useState('14');
-  const [manualLastRefillPrice, setManualLastRefillPrice] = useState('');
+  const [manualTripFuelPrice, setManualTripFuelPrice] = useState('');
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [catalog, setCatalog] = useState<VehicleCatalogEntry[]>([]);
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
@@ -144,6 +143,25 @@ export default function TripOptimizerScreen() {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
   const [routeDurationMinutes, setRouteDurationMinutes] = useState<number | null>(null);
+  const routeKey = JSON.stringify([
+    originLocation ? `${originLocation.latitude},${originLocation.longitude}` : origin.trim(),
+    destinationRouteValue || destination.trim(),
+  ]);
+  const [resolvedRouteKey, setResolvedRouteKey] = useState<string | null>(null);
+  const compareInFlight = useRef<number | null>(null);
+  const routePreviewRequestId = useRef(0);
+  const optimizeAbort = useRef<AbortController | null>(null);
+  const saveInFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [vehicleError, setVehicleError] = useState<string | null>(null);
+  const vehiclesLoaded = useRef(false);
+  const selectedVehicleRef = useRef(selectedVehicleId);
+  selectedVehicleRef.current = selectedVehicleId;
   const [lastOptimizeElapsedMs, setLastOptimizeElapsedMs] = useState<number | null>(null);
   const [result, setResult] = useState<ReturnType<typeof calculateTripRecommendation> | null>(null);
 
@@ -151,6 +169,12 @@ export default function TripOptimizerScreen() {
     useCallback(() => {
       const selection = consumeRouteSelection();
       if (!selection) return;
+      placeResolveRequestId.current += 1;
+      placeSearchRequestId.current += 1;
+      placeSearchAbort.current?.abort();
+      if (placeSearchTimer.current) clearTimeout(placeSearchTimer.current);
+      setPlaceSearch(EMPTY_PLACE_SEARCH);
+      setResolvingPlaceId(null);
       setOrigin(selection.origin.displayName);
       setOriginLocation(selection.origin);
       setDestination(selection.destination.displayName);
@@ -160,22 +184,23 @@ export default function TripOptimizerScreen() {
   );
 
   useEffect(() => {
-    if (params.origin) {
+    if (params.origin !== undefined) {
       setOrigin(params.origin);
       setOriginLocation(null);
     }
-    if (params.destination) {
+    if (params.destination !== undefined) {
       setDestination(params.destination);
       setDestinationRouteValue('');
+      setDestinationPoint(null);
     }
     if (params.templateName) setTemplateName(params.templateName);
     if (params.vehicleId) {
       setSelectedVehicleId(params.vehicleId === 'manual' ? 'manual' : params.vehicleId);
     }
     if (params.fuelCostWeight && params.travelTimeWeight) {
-      const fuelCost = parseFloat(params.fuelCostWeight);
-      const travelTime = parseFloat(params.travelTimeWeight);
-      if (Number.isFinite(fuelCost) && Number.isFinite(travelTime)) {
+      const fuelCost = Number(params.fuelCostWeight);
+      const travelTime = Number(params.travelTimeWeight);
+      if (weightsSumToOne({ fuelCost, travelTime })) {
         setWeights({ fuelCost, travelTime });
       }
     }
@@ -188,48 +213,55 @@ export default function TripOptimizerScreen() {
     params.templateName,
   ]);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
     async function load() {
-      if (!isSupabaseConfigured) {
-        setLoading(false);
-        return;
-      }
+      if (!isSupabaseConfigured) { setLoading(false); return; }
       try {
-        const catalogPromise = fetchVehicleCatalog().catch(() => [] as VehicleCatalogEntry[]);
-
-        if (!user) {
-          setVehicles([]);
-          setSelectedVehicleId('manual');
-          setCatalog(await catalogPromise);
-          return;
-        }
-
         const [list, catalogList] = await Promise.all([
-          fetchVehicles(user.id),
-          catalogPromise,
+          user ? fetchTripVehicles(user.id) : Promise.resolve([] as Vehicle[]),
+          fetchVehicleCatalog().catch(() => [] as VehicleCatalogEntry[]),
         ]);
+        if (cancelled) return;
         setVehicles(list);
         setCatalog(catalogList);
-
-        // Respect an explicit "manual" / Other selection from saved-trip params.
-        if (params.vehicleId === 'manual') {
-          setSelectedVehicleId('manual');
-          return;
+        setVehicleError(null);
+        const current = selectedVehicleRef.current;
+        if (!list.some((vehicle) => vehicle.id === current)) {
+          if (current !== 'manual') {
+            setVehicleError('That vehicle is no longer available. Choose an active vehicle or enter vehicle details.');
+          }
+          setSelectedVehicleId(!vehiclesLoaded.current && !params.vehicleId ? list[0]?.id ?? 'manual' : 'manual');
         }
-
-        const paramVehicle =
-          params.vehicleId && params.vehicleId !== 'manual' ? params.vehicleId : null;
-        const nextVehicle =
-          paramVehicle && list.some((vehicle) => vehicle.id === paramVehicle)
-            ? paramVehicle
-            : list[0]?.id ?? 'manual';
-        setSelectedVehicleId(nextVehicle);
+        vehiclesLoaded.current = true;
+      } catch {
+        if (!cancelled) {
+          setVehicles([]);
+          setSelectedVehicleId('manual');
+          setVehicleError('Could not load your vehicles. Try reopening this tab, or enter vehicle details.');
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
-    load();
-  }, [user, params.vehicleId]);
+    void load();
+    return () => { cancelled = true; };
+  }, [user, params.vehicleId]));
+
+  // Templates store labels, not coordinates. Resolve their saved origin once
+  // so reopening a template can use current prices without inventing geography.
+  useEffect(() => {
+    if (!params.origin?.trim()) return;
+    let cancelled = false;
+    const requestId = placeResolveRequestId.current;
+    void searchPlaces(params.origin).then((places) => {
+      const place = places[0];
+      if (!cancelled && requestId === placeResolveRequestId.current && place) {
+        setOriginLocation({ displayName: params.origin!, latitude: place.latitude, longitude: place.longitude });
+      }
+    }).catch(() => { /* Manual selection/price remains available if geocoding fails. */ });
+    return () => { cancelled = true; };
+  }, [params.origin]);
 
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId);
   const hasRegisteredVehicles = vehicles.length > 0;
@@ -244,18 +276,6 @@ export default function TripOptimizerScreen() {
         entry.model.toLowerCase().includes(query),
     );
   }, [catalog, catalogSearchQuery, selectedCatalogEntry]);
-
-  useEffect(() => {
-    // Other / manual is always allowed, even when saved vehicles exist.
-    if (selectedVehicleId === 'manual') return;
-    if (!hasRegisteredVehicles) {
-      setSelectedVehicleId('manual');
-      return;
-    }
-    if (!vehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
-      setSelectedVehicleId(vehicles[0].id);
-    }
-  }, [hasRegisteredVehicles, selectedVehicleId, vehicles]);
 
   useEffect(() => {
     if (!selectedVehicle) return;
@@ -318,9 +338,9 @@ export default function TripOptimizerScreen() {
 
   const manualPriceValue = useMemo(() => {
     if (!isManualVehicle && !useCustomFuelPrice) return null;
-    const manual = parseFloat(customFuelPriceInput);
+    const manual = Number((isManualVehicle ? manualTripFuelPrice : customFuelPriceInput).trim());
     return Number.isFinite(manual) && manual > 0 ? manual : null;
-  }, [isManualVehicle, useCustomFuelPrice, customFuelPriceInput]);
+  }, [isManualVehicle, useCustomFuelPrice, customFuelPriceInput, manualTripFuelPrice]);
 
   /*
    * Where the fuel for this trip would actually be bought.
@@ -340,12 +360,16 @@ export default function TripOptimizerScreen() {
   const [originPlace, setOriginPlace] = useState<{
     regionCode: DoeRegionCode;
     city: string | null;
+    originKey: string;
   } | null>(null);
   const [originArea, setOriginArea] = useState<string | null>(null);
+  const [originAreaKey, setOriginAreaKey] = useState<string | null>(null);
+  const originKey = originLocation ? `${originLocation.latitude},${originLocation.longitude}` : null;
+  const matchedOriginArea = originAreaKey === originKey ? originArea : null;
 
   const tripRegion = useMemo(
-    () => originPlace?.regionCode ?? regionForTrip([originLocation]),
-    [originPlace, originLocation]
+    () => originLocation ? regionFromCoordinates(originLocation.latitude, originLocation.longitude) : null,
+    [originLocation]
   );
 
   /*
@@ -356,20 +380,25 @@ export default function TripOptimizerScreen() {
    * Area unset and the price falls back to the region figure.
    */
   useEffect(() => {
-    if (!originPlace) {
+    if (!originPlace?.city || originPlace.originKey !== originKey) {
       setOriginArea(null);
       return;
     }
     let cancelled = false;
+    setOriginArea(null);
     void (async () => {
       try {
         const week = await fetchLatestBulletinForRegion(originPlace.regionCode);
-        if (cancelled || !week) {
+        if (cancelled) return;
+        if (!week) {
           setOriginArea(null);
           return;
         }
         const areas = await fetchBulletinAreas(week.id, originPlace.regionCode);
-        if (!cancelled) setOriginArea(matchBulletinArea(originPlace.city, areas));
+        if (!cancelled) {
+          setOriginArea(matchBulletinArea(originPlace.city, areas));
+          setOriginAreaKey(originKey);
+        }
       } catch {
         if (!cancelled) setOriginArea(null);
       }
@@ -377,7 +406,7 @@ export default function TripOptimizerScreen() {
     return () => {
       cancelled = true;
     };
-  }, [originPlace]);
+  }, [originPlace, originKey]);
 
   /*
    * Derive the origin's place from the origin the map picker returned.
@@ -400,10 +429,12 @@ export default function TripOptimizerScreen() {
     }
     const regionCode = regionFromCoordinates(originLocation.latitude, originLocation.longitude);
     let cancelled = false;
+    setOriginArea(null);
+    setOriginPlace({ regionCode, city: null, originKey: `${originLocation.latitude},${originLocation.longitude}` });
     void reverseGeocodeCityOnly(originLocation.latitude, originLocation.longitude).then(
       (city) => {
         if (cancelled) return;
-        setOriginPlace({ regionCode, city });
+        setOriginPlace({ regionCode, city, originKey: `${originLocation.latitude},${originLocation.longitude}` });
       }
     );
     return () => {
@@ -419,11 +450,10 @@ export default function TripOptimizerScreen() {
    */
   const effectiveFuelPrice = useMemo(() => {
     // Precedence: manual > verified community > DOE > unavailable.
-    if (manualPriceValue != null) return manualPriceValue;
-    if (isManualVehicle) return null;
+    if (isManualVehicle || useCustomFuelPrice) return manualPriceValue;
     if (!tripFuelPrice || tripFuelPrice.status !== 'ok') return null;
     return tripFuelPrice.price.pricePerLiter;
-  }, [manualPriceValue, isManualVehicle, tripFuelPrice]);
+  }, [manualPriceValue, isManualVehicle, tripFuelPrice, useCustomFuelPrice]);
 
   /**
    * Own-vehicle cost breakdown, derived from the SAME numbers the calculator
@@ -437,9 +467,9 @@ export default function TripOptimizerScreen() {
    * rather than being multiplied out again.
    */
   const ownVehicleBreakdown = useMemo(() => {
-    if (!result || result.recommended.modeCode !== 'OWN_VEHICLE') return null;
+    if (!result?.recommended || result.recommended.modeCode !== 'OWN_VEHICLE') return null;
     if (routeDistanceKm == null || effectiveFuelPrice == null) return null;
-    const efficiencyKmPerLiter = parseFloat(efficiency);
+    const efficiencyKmPerLiter = Number(efficiency.trim());
     if (!Number.isFinite(efficiencyKmPerLiter) || efficiencyKmPerLiter <= 0) return null;
 
     const litersNeeded = routeDistanceKm / efficiencyKmPerLiter;
@@ -458,11 +488,11 @@ export default function TripOptimizerScreen() {
     if (manualPriceValue != null) {
       return { label: 'Your price', detail: 'Entered for this trip only' };
     }
-    if (tripFuelPrice?.status === 'ok') {
+    if (!useCustomFuelPrice && tripFuelPrice?.status === 'ok') {
       return { label: tripFuelPrice.price.sourceLabel, detail: tripFuelPrice.price.detail };
     }
     return null;
-  }, [manualPriceValue, tripFuelPrice]);
+  }, [manualPriceValue, tripFuelPrice, useCustomFuelPrice]);
 
   /**
    * Per-mode confidence line, straight from the fare configuration.
@@ -558,7 +588,7 @@ export default function TripOptimizerScreen() {
     let cancelled = false;
     setTripFuelPriceLoading(true);
     setTripFuelPrice(null);
-    void resolveTripFuelPrice({ fuelTypeId, regionCode: tripRegion, areaName: originArea })
+    void resolveTripFuelPrice({ fuelTypeId, regionCode: tripRegion, areaName: matchedOriginArea })
       .then((result) => {
         if (!cancelled) setTripFuelPrice(result);
       })
@@ -578,11 +608,11 @@ export default function TripOptimizerScreen() {
     return () => {
       cancelled = true;
     };
-  }, [isManualVehicle, selectedVehicle?.fuel_type_id, tripRegion, originArea]);
+  }, [isManualVehicle, selectedVehicle?.fuel_type_id, tripRegion, matchedOriginArea]);
 
   useEffect(() => {
-    if (!useCustomFuelPrice && !customFuelPriceError) return;
-    const raw = customFuelPriceInput.trim();
+    if (!isManualVehicle && !useCustomFuelPrice && !customFuelPriceError) return;
+    const raw = (isManualVehicle ? manualTripFuelPrice : customFuelPriceInput).trim();
     if (raw === '') {
       setCustomFuelPriceError(null);
       return;
@@ -595,7 +625,7 @@ export default function TripOptimizerScreen() {
     } else {
       setCustomFuelPriceError(null);
     }
-  }, [customFuelPriceInput, useCustomFuelPrice, customFuelPriceError]);
+  }, [customFuelPriceInput, useCustomFuelPrice, customFuelPriceError, isManualVehicle, manualTripFuelPrice]);
 
   const optimizeRequestId = useRef(0);
 
@@ -603,22 +633,21 @@ export default function TripOptimizerScreen() {
    * Inputs stay editable without recalculating. Changing them invalidates the
    * COMPARISON, so the stale result and sheet are cleared here.
    *
-   * It deliberately does NOT clear `routeDistanceKm` / `routeDurationMinutes`.
-   * It used to, and that was the source of a visible blink: every origin or
-   * destination keystroke wiped the distance, then the debounced preview
-   * restored it ~600ms later, so the row blinked out and back on each change.
-   * The route preview effect above now owns those two values and keeps the last
-   * good figure until its replacement genuinely arrives.
+   * The old preview may remain visible as "Updating", but its endpoint key
+   * must match before it can be scored, compared or saved.
    *
    * Weight changes still do not clear the route -- they live-rescore the
    * existing distance and time.
    */
   useEffect(() => {
     optimizeRequestId.current += 1;
+    optimizeAbort.current?.abort();
+    compareInFlight.current = null;
     setOptimizing(false);
     setResult(null);
     setRouteError(null);
     setLastOptimizeElapsedMs(null);
+    setHistoryError(null);
     setShowResultSheet(false);
   }, [
     destination,
@@ -626,7 +655,7 @@ export default function TripOptimizerScreen() {
     efficiency,
     isManualVehicle,
     effectiveFuelPrice,
-    manualLastRefillPrice,
+    manualTripFuelPrice,
     origin,
     originLocation,
     selectedVehicleId,
@@ -634,24 +663,32 @@ export default function TripOptimizerScreen() {
 
   // Live SAW rescore when priorities change after a successful Optimize.
   useEffect(() => {
-    if (routeDistanceKm == null || routeDurationMinutes == null) return;
+    if (resolvedRouteKey !== routeKey || routeDistanceKm == null || routeDurationMinutes == null) {
+      setResult(null);
+      return;
+    }
 
-    const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
+    const fuelEfficiencyKmPerLiter = Number(efficiency.trim());
     const price = effectiveFuelPrice;
-    if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) return;
-    if (price == null || price <= 0) return;
-    if (!weightsSumToOne(weights)) return;
+    if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0 ||
+        price == null || !Number.isFinite(price) || price <= 0 || !weightsSumToOne(weights)) {
+      setResult(null);
+      return;
+    }
 
-    setResult(
-      calculateTripRecommendation({
+    try {
+      setResult(calculateTripRecommendation({
         distanceKm: routeDistanceKm,
         fuelPricePerLiter: price,
         fuelEfficiencyKmPerLiter,
         weights,
         ownVehicleTravelTimeMinutes: routeDurationMinutes,
-      }),
-    );
-  }, [weights, routeDistanceKm, routeDurationMinutes, efficiency, effectiveFuelPrice]);
+      }));
+    } catch {
+      setResult(null);
+      setRouteError('These trip values could not be calculated. Check the distance, fuel price and efficiency.');
+    }
+  }, [weights, routeDistanceKm, routeDurationMinutes, efficiency, effectiveFuelPrice, routeKey, resolvedRouteKey]);
 
   /*
    * Resolve the driving route as soon as the endpoints are set.
@@ -689,6 +726,7 @@ export default function TripOptimizerScreen() {
     // the last valid distance on screen until its replacement arrives.
     if (!originText || !destinationText) {
       setRoutePreviewLoading(false);
+      setResolvedRouteKey(null);
       setRouteDistanceKm(null);
       setRouteDurationMinutes(null);
       return;
@@ -700,23 +738,27 @@ export default function TripOptimizerScreen() {
     const destinationForDirections = destinationRouteValue || destinationText;
 
     let cancelled = false;
+    const previewId = ++routePreviewRequestId.current;
     setRoutePreviewLoading(true);
 
     const timer = setTimeout(() => {
+      if (previewId !== routePreviewRequestId.current) return;
       void getDrivingRoute(originForDirections, destinationForDirections)
         .then((route) => {
-          if (cancelled) return;
+          if (cancelled || previewId !== routePreviewRequestId.current) return;
           // Both values land in the same commit, so the chip never shows a new
           // distance beside a stale duration.
+          setResolvedRouteKey(routeKey);
           setRouteDistanceKm(route.distanceKm);
           setRouteDurationMinutes(route.durationMinutes);
           setRoutePreviewLoading(false);
         })
-        .catch(() => {
-          if (cancelled) return;
-          // A failed replacement does NOT erase a preview that was working. The
-          // value simply stays as it was, and the compare action reports the
-          // failure properly if the route truly cannot be resolved.
+        .catch((error) => {
+          if (cancelled || previewId !== routePreviewRequestId.current) return;
+          setResolvedRouteKey(null);
+          setRouteDistanceKm(null);
+          setRouteDurationMinutes(null);
+          setRouteError(error instanceof DirectionsError ? error.userMessage : "Couldn’t load this route. Please try again.");
           setRoutePreviewLoading(false);
         });
     }, ROUTE_PREVIEW_DEBOUNCE_MS);
@@ -727,7 +769,7 @@ export default function TripOptimizerScreen() {
       // while the newer one is still in flight.
       clearTimeout(timer);
     };
-  }, [origin, destination, originLocation, destinationRouteValue]);
+  }, [origin, destination, originLocation, destinationRouteValue, routeKey]);
 
   /**
    * Every successful "Compare trip costs" writes Trip History automatically.
@@ -751,7 +793,7 @@ export default function TripOptimizerScreen() {
           recommendedModeCode: scored.recommended.modeCode,
         });
       } catch (error) {
-        console.warn('[Trip Optimizer] Auto-log to history failed', error);
+        if (mounted.current) setHistoryError('This comparison could not be saved to Trip History. Please try comparing again.');
       }
     },
     [destination, origin, selectedVehicleId, user, weights],
@@ -769,6 +811,7 @@ export default function TripOptimizerScreen() {
         setDestinationPoint(null);
       }
 
+      placeResolveRequestId.current += 1;
       placeSearchRequestId.current += 1;
       placeSearchAbort.current?.abort();
       placeSearchAbort.current = null;
@@ -916,6 +959,9 @@ export default function TripOptimizerScreen() {
 
   useEffect(() => {
     return () => {
+      optimizeRequestId.current += 1;
+      routePreviewRequestId.current += 1;
+      optimizeAbort.current?.abort();
       placeSearchRequestId.current += 1;
       placeResolveRequestId.current += 1;
       placeSearchAbort.current?.abort();
@@ -924,17 +970,19 @@ export default function TripOptimizerScreen() {
   }, []);
 
   const handleOptimize = useCallback(async () => {
-    if (optimizing) return;
+    if (optimizing || compareInFlight.current !== null) return;
 
     if (!origin.trim() || !destination.trim()) {
       setRouteError('Enter both an origin and a destination before optimizing.');
       return;
     }
 
-    const fuelEfficiencyKmPerLiter = parseFloat(efficiency);
+    const fuelEfficiencyKmPerLiter = Number(efficiency.trim());
     const price = effectiveFuelPrice;
     if (!Number.isFinite(fuelEfficiencyKmPerLiter) || fuelEfficiencyKmPerLiter <= 0) {
-      Alert.alert('Invalid fuel efficiency', 'Enter a fuel efficiency greater than zero.');
+      Alert.alert('Invalid fuel efficiency', isManualVehicle
+        ? 'Enter a fuel efficiency greater than zero.'
+        : 'Update this vehicle’s efficiency in Vehicles, or choose Other vehicle to enter details.');
       return;
     }
     if (!weightsSumToOne(weights)) {
@@ -945,7 +993,7 @@ export default function TripOptimizerScreen() {
       Alert.alert('Vehicle required', 'Select a registered vehicle before optimizing.');
       return;
     }
-    if (price == null || price <= 0) {
+    if (price == null || !Number.isFinite(price) || price <= 0) {
       // Refuse to score rather than inventing a cost. The MCDA still needs one
       // numeric fuel price, so a route with no trusted price simply is not
       // ranked until a current DOE, verified community, or user-entered price
@@ -977,15 +1025,21 @@ export default function TripOptimizerScreen() {
      * "Compare trip costs" should feel like — a second Directions round-trip
      * is unnecessary and was easy to cancel via optimizeRequestId races.
      */
-    if (routeDistanceKm != null && routeDurationMinutes != null) {
-      const next =
-        result?.recommended != null
-          ? result
-          : scoreTrip(routeDistanceKm, routeDurationMinutes);
-      if (!result?.recommended) setResult(next);
+    if (resolvedRouteKey === routeKey && routeDistanceKm != null && routeDurationMinutes != null) {
+      let next: ReturnType<typeof calculateTripRecommendation>;
+      try { next = scoreTrip(routeDistanceKm, routeDurationMinutes); }
+      catch {
+        setRouteError('These trip values could not be calculated. Check the distance, fuel price and efficiency.');
+        return;
+      }
+      setResult(next);
       setShowResultSheet(true);
       setRouteError(null);
-      void autoLogTripHistory(next, routeDistanceKm);
+      const compareId = ++optimizeRequestId.current;
+      compareInFlight.current = compareId;
+      setHistoryError(null);
+      try { await autoLogTripHistory(next, routeDistanceKm); }
+      finally { if (compareInFlight.current === compareId) compareInFlight.current = null; }
       return;
     }
 
@@ -994,7 +1048,12 @@ export default function TripOptimizerScreen() {
     let outcome: 'success' | 'error' = 'error';
     let routeResult: DirectionsRoute | null = null;
 
+    compareInFlight.current = requestId;
+    routePreviewRequestId.current += 1;
+    const controller = new AbortController();
+    optimizeAbort.current = controller;
     setOptimizing(true);
+    setHistoryError(null);
     setRouteError(null);
 
     try {
@@ -1003,15 +1062,16 @@ export default function TripOptimizerScreen() {
         : origin;
       const destinationForDirections = destinationRouteValue || destination;
 
-      routeResult = await getDrivingRoute(originForDirections, destinationForDirections);
+      routeResult = await getDrivingRoute(originForDirections, destinationForDirections, controller.signal);
       if (requestId !== optimizeRequestId.current) return;
 
       const scored = scoreTrip(routeResult.distanceKm, routeResult.durationMinutes);
+      setResolvedRouteKey(routeKey);
       setRouteDistanceKm(routeResult.distanceKm);
       setRouteDurationMinutes(routeResult.durationMinutes);
       setResult(scored);
       setShowResultSheet(true);
-      void autoLogTripHistory(scored, routeResult.distanceKm);
+      await autoLogTripHistory(scored, routeResult.distanceKm);
       outcome = 'success';
     } catch (error) {
       if (requestId !== optimizeRequestId.current) return;
@@ -1021,7 +1081,10 @@ export default function TripOptimizerScreen() {
           : "Couldn't retrieve a route. Check your connection and try again."
       );
     } finally {
+      if (compareInFlight.current === requestId) compareInFlight.current = null;
+      if (optimizeAbort.current === controller) optimizeAbort.current = null;
       if (requestId === optimizeRequestId.current) {
+        setRoutePreviewLoading(false);
         setOptimizing(false);
         const elapsedMs = Date.now() - startedAt;
         setLastOptimizeElapsedMs(elapsedMs);
@@ -1050,6 +1113,8 @@ export default function TripOptimizerScreen() {
     result,
     routeDistanceKm,
     routeDurationMinutes,
+    routeKey,
+    resolvedRouteKey,
     selectedVehicle,
     tripFuelPrice,
     weights,
@@ -1095,20 +1160,9 @@ export default function TripOptimizerScreen() {
    * 0.5 = Balanced, 1 = Fastest (travelTime 1). `calculateTripRecommendation`
    * still receives fuelCost + travelTime summing to 1.0.
    */
-  const applyWeightPair = useCallback((fuelCost: number, travelTime: number) => {
-    const fuel = Math.round(fuelCost * 100) / 100;
-    const time = Math.round(travelTime * 100) / 100;
-    setWeights({ fuelCost: fuel, travelTime: time });
+  const handlePriorityChange = useCallback((timeFocus: number) => {
+    setWeights(weightsForTimePriority(timeFocus));
   }, []);
-
-  /** Slider position 0..1 → complementary SAW weight pair. */
-  const handlePriorityChange = useCallback(
-    (timeFocus: number) => {
-      const clamped = Math.min(1, Math.max(0, timeFocus));
-      applyWeightPair(1 - clamped, clamped);
-    },
-    [applyWeightPair],
-  );
 
   /** Visual slider position: 0 cheapest → 1 fastest. */
   const priorityPosition = weights.travelTime;
@@ -1120,6 +1174,7 @@ export default function TripOptimizerScreen() {
   }, [router]);
 
   const handleSaveTemplate = useCallback(async () => {
+    if (saveInFlight.current) return;
     if (!user && !requireAuth()) return;
     if (!user) return;
 
@@ -1130,7 +1185,7 @@ export default function TripOptimizerScreen() {
       setTemplateNameError('Please enter a template name.');
       return;
     }
-    if (!result?.recommended || routeDistanceKm == null) {
+    if (!result?.recommended || routeDistanceKm == null || resolvedRouteKey !== routeKey) {
       Alert.alert('Optimize first', 'Run Optimize successfully before saving this trip template.');
       return;
     }
@@ -1139,6 +1194,7 @@ export default function TripOptimizerScreen() {
       return;
     }
 
+    saveInFlight.current = true;
     setSavingTemplate(true);
     try {
       await createSavedTrip({
@@ -1150,11 +1206,12 @@ export default function TripOptimizerScreen() {
         distanceKm: routeDistanceKm,
         weights,
       });
-      Alert.alert('Saved', 'Trip template saved. Re-run it anytime from Saved Trips.');
+      if (mounted.current) Alert.alert('Saved', 'Trip template saved. Re-run it anytime from Saved Trips.');
     } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save template');
+      if (mounted.current) Alert.alert('Couldn’t save template', 'We couldn’t save this trip. Check that your vehicle is still active and try again.');
     } finally {
-      setSavingTemplate(false);
+      saveInFlight.current = false;
+      if (mounted.current) setSavingTemplate(false);
     }
   }, [
     user,
@@ -1164,6 +1221,8 @@ export default function TripOptimizerScreen() {
     destination,
     result,
     routeDistanceKm,
+    routeKey,
+    resolvedRouteKey,
     selectedVehicleId,
     weights,
   ]);
@@ -1217,7 +1276,7 @@ export default function TripOptimizerScreen() {
                 value={origin}
                 onChangeText={(value) => handleRouteQueryChange('origin', value)}
                 onFocus={() => {
-                  if (origin.trim().length >= 2 && placeSearch.field !== 'origin') {
+                  if (!originLocation && origin.trim().length >= 2 && placeSearch.field !== 'origin') {
                     handleRouteQueryChange('origin', origin);
                   }
                 }}
@@ -1274,7 +1333,7 @@ export default function TripOptimizerScreen() {
                 onChangeText={(value) => handleRouteQueryChange('destination', value)}
                 onFocus={() => {
                   if (
-                    destination.trim().length >= 2 &&
+                    !destinationPoint && destination.trim().length >= 2 &&
                     placeSearch.field !== 'destination'
                   ) {
                     handleRouteQueryChange('destination', destination);
@@ -1363,6 +1422,10 @@ export default function TripOptimizerScreen() {
                 params: {
                   origin: origin.trim() || undefined,
                   destination: destination.trim() || undefined,
+                  originLatitude: originLocation ? String(originLocation.latitude) : undefined,
+                  originLongitude: originLocation ? String(originLocation.longitude) : undefined,
+                  destinationLatitude: destinationPoint ? String(destinationPoint.latitude) : undefined,
+                  destinationLongitude: destinationPoint ? String(destinationPoint.longitude) : undefined,
                 },
               })
             }
@@ -1384,6 +1447,7 @@ export default function TripOptimizerScreen() {
       */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Vehicle</Text>
+        {vehicleError ? <Text style={styles.error}>{vehicleError}</Text> : null}
         <View style={styles.sectionCard}>
           {hasRegisteredVehicles ? (
             <>
@@ -1530,7 +1594,7 @@ export default function TripOptimizerScreen() {
                 "Current location" is offered inside the map picker. The message
                 points at that existing path rather than introducing a second one.
               */}
-              {!tripRegion ? (
+              {!useCustomFuelPrice && !tripRegion ? (
                 <View style={styles.originNeededBox}>
                   <Text style={styles.originNeededTitle}>
                     Select an origin to load local fuel prices.
@@ -1540,7 +1604,7 @@ export default function TripOptimizerScreen() {
                     point, or pick your current location on the map.
                   </Text>
                 </View>
-              ) : missingFuelPrice || tripFuelPriceLoading ? (
+              ) : !useCustomFuelPrice && (missingFuelPrice || tripFuelPriceLoading) ? (
               <View style={styles.warnBox}>
                 <Text style={styles.warnTitle}>
                   {tripFuelPriceLoading ? 'Loading fuel price…' : 'Current fuel price unavailable'}
@@ -1556,23 +1620,6 @@ export default function TripOptimizerScreen() {
                   Costs are not estimated without a current, trusted price.
                 </Text>
               </View>
-            ) : isManualVehicle ? (
-              <>
-                <View style={styles.statRow}>
-                  <Text style={styles.statLabel}>Fuel efficiency</Text>
-                  <Text style={styles.statValue}>{efficiency} km/L</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statRow}>
-                  <Text style={styles.statLabel}>Fuel price</Text>
-                  <View style={styles.statValueBlock}>
-                    <Text style={styles.statValue}>
-                      {manualPriceValue != null ? `${formatPeso(manualPriceValue)}/L` : '—'}
-                    </Text>
-                    <Text style={styles.priceSource}>Entered for this trip</Text>
-                  </View>
-                </View>
-              </>
             ) : (
               <>
                 <View style={styles.statRow}>
@@ -1581,127 +1628,127 @@ export default function TripOptimizerScreen() {
                 </View>
                 <View style={styles.statDivider} />
                 <View style={styles.statRow}>
-                  <Text style={styles.statLabel}>Current fuel price</Text>
+                  <Text style={styles.statLabel}>{useCustomFuelPrice ? 'Trip fuel price' : 'Current fuel price'}</Text>
                   <View style={styles.statValueBlock}>
                     <Text style={styles.statValue}>
-                      {tripFuelPrice?.status === 'ok'
-                        ? `${formatPeso(tripFuelPrice.price.pricePerLiter)}/L`
+                      {effectiveFuelPrice != null
+                        ? `${formatPeso(effectiveFuelPrice)}/L`
                         : '—'}
                     </Text>
-                    {tripFuelPrice?.status === 'ok' ? (
+                    {fuelPriceProvenance ? (
                       <Text style={styles.priceSource} numberOfLines={2}>
-                        {tripFuelPrice.price.detail}
+                        {fuelPriceProvenance.detail}
                       </Text>
                     ) : null}
                   </View>
                 </View>
 
-                {/*
-                  Optional override. Off by default, so the trusted automatic
-                  price drives the cost unless the driver opts in. Toggling back
-                  re-runs the resolver immediately -- nothing is cleared or
-                  reopened.
-                */}
-                {useCustomFuelPrice ? (
-                  <View style={styles.overrideBlock}>
-                    <LabeledInput
-                      label="Price per liter"
-                      value={customFuelPriceInput}
-                      onChangeText={(text) => {
-                        setCustomFuelPriceInput(text);
-                        setCustomPriceConfirmed(false);
-                        if (customFuelPriceError) setCustomFuelPriceError(null);
-                      }}
-                      onFocus={() => setCustomPriceConfirmed(false)}
-                      keyboardType="decimal-pad"
-                      returnKeyType="done"
-                      onSubmitEditing={() => {
-                        Keyboard.dismiss();
-                        const raw = customFuelPriceInput.trim();
-                        if (raw) {
+              </>
+            )}
+              {/*
+                Optional override. Off by default, so the trusted automatic
+                price drives the cost unless the driver opts in. Toggling back
+                re-runs the resolver immediately -- nothing is cleared or
+                reopened.
+              */}
+              {useCustomFuelPrice ? (
+                <View style={styles.overrideBlock}>
+                  <LabeledInput
+                    label="Price per liter"
+                    value={customFuelPriceInput}
+                    onChangeText={(text) => {
+                      setCustomFuelPriceInput(text);
+                      setCustomPriceConfirmed(false);
+                      if (customFuelPriceError) setCustomFuelPriceError(null);
+                    }}
+                    onFocus={() => setCustomPriceConfirmed(false)}
+                    keyboardType="decimal-pad"
+                    returnKeyType="done"
+                    onSubmitEditing={() => {
+                      Keyboard.dismiss();
+                      const raw = customFuelPriceInput.trim();
+                      if (raw) {
+                        const val = Number(raw);
+                        if (!Number.isFinite(val) || val <= 0) {
+                          setCustomFuelPriceError('Enter a price greater than zero.');
+                          return;
+                        }
+                        setCustomPriceConfirmed(true);
+                      }
+                    }}
+                    placeholder="e.g. 80.00"
+                    error={customFuelPriceError ?? undefined}
+                  />
+                  <Text style={styles.overrideAuto}>
+                    Use a price you recently saw or paid. It applies to this trip only.
+                  </Text>
+                  {tripFuelPrice?.status === 'ok' ? (
+                    <Text style={styles.overrideAuto}>
+                      Automatic price: {formatPeso(tripFuelPrice.price.pricePerLiter)}/L ·{' '}
+                      {tripFuelPrice.price.sourceLabel}
+                    </Text>
+                  ) : null}
+                  {!customPriceConfirmed ? (
+                    <View style={styles.overrideButtonsRow}>
+                      <PrimaryButton
+                        label="Done"
+                        variant="primary"
+                        size="sm"
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          const raw = customFuelPriceInput.trim();
+                          if (!raw) {
+                            setCustomFuelPriceError('Enter a price, for example 80.00');
+                            return;
+                          }
                           const val = Number(raw);
                           if (!Number.isFinite(val) || val <= 0) {
                             setCustomFuelPriceError('Enter a price greater than zero.');
                             return;
                           }
+                          setCustomFuelPriceError(null);
                           setCustomPriceConfirmed(true);
-                        }
-                      }}
-                      placeholder="e.g. 80.00"
-                      error={customFuelPriceError ?? undefined}
-                    />
-                    <Text style={styles.overrideAuto}>
-                      Use a price you recently saw or paid. It applies to this trip only.
-                    </Text>
-                    {tripFuelPrice?.status === 'ok' ? (
-                      <Text style={styles.overrideAuto}>
-                        Automatic price: {formatPeso(tripFuelPrice.price.pricePerLiter)}/L ·{' '}
-                        {tripFuelPrice.price.sourceLabel}
-                      </Text>
-                    ) : null}
-                    {!customPriceConfirmed ? (
-                      <View style={styles.overrideButtonsRow}>
-                        <PrimaryButton
-                          label="Done"
-                          variant="primary"
-                          size="sm"
-                          onPress={() => {
-                            Keyboard.dismiss();
-                            const raw = customFuelPriceInput.trim();
-                            if (!raw) {
-                              setCustomFuelPriceError('Enter a price, for example 80.00');
-                              return;
-                            }
-                            const val = Number(raw);
-                            if (!Number.isFinite(val) || val <= 0) {
-                              setCustomFuelPriceError('Enter a price greater than zero.');
-                              return;
-                            }
-                            setCustomFuelPriceError(null);
-                            setCustomPriceConfirmed(true);
-                          }}
-                          style={styles.overrideDoneBtn}
-                        />
-                        <PrimaryButton
-                          label="Use automatic price"
-                          variant="secondary"
-                          size="sm"
-                          onPress={() => {
-                            Keyboard.dismiss();
-                            setUseCustomFuelPrice(false);
-                            setCustomFuelPriceInput('');
-                            setCustomPriceConfirmed(false);
-                            setCustomFuelPriceError(null);
-                          }}
-                          style={styles.overrideAutoBtn}
-                        />
-                      </View>
-                    ) : (
-                      <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
-                        <Pressable onPress={() => {
+                        }}
+                        style={styles.overrideDoneBtn}
+                      />
+                      <PrimaryButton
+                        label="Use automatic price"
+                        variant="secondary"
+                        size="sm"
+                        onPress={() => {
+                          Keyboard.dismiss();
                           setUseCustomFuelPrice(false);
                           setCustomFuelPriceInput('');
                           setCustomPriceConfirmed(false);
                           setCustomFuelPriceError(null);
-                        }} hitSlop={8}>
-                          <Text style={{ fontSize: 13, color: GasTaColors.textSoft, textDecorationLine: 'underline' }}>
-                            Revert to automatic price
-                          </Text>
-                        </Pressable>
-                      </View>
-                    )}
-                  </View>
-                ) : (
-                  <PrimaryButton
-                    label="Use my own price"
-                    variant="secondary"
-                    size="sm"
-                    onPress={() => setUseCustomFuelPrice(true)}
-                    style={styles.overrideToggle}
-                  />
-                )}
-              </>
-            )}
+                        }}
+                        style={styles.overrideAutoBtn}
+                      />
+                    </View>
+                  ) : (
+                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+                      <Pressable onPress={() => {
+                        setUseCustomFuelPrice(false);
+                        setCustomFuelPriceInput('');
+                        setCustomPriceConfirmed(false);
+                        setCustomFuelPriceError(null);
+                      }} hitSlop={8}>
+                        <Text style={{ fontSize: 13, color: GasTaColors.textSoft, textDecorationLine: 'underline' }}>
+                          Revert to automatic price
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <PrimaryButton
+                  label="Use my own price"
+                  variant="secondary"
+                  size="sm"
+                  onPress={() => setUseCustomFuelPrice(true)}
+                  style={styles.overrideToggle}
+                />
+              )}
           </>
         ) : (
           <>
@@ -1779,13 +1826,14 @@ export default function TripOptimizerScreen() {
 
             <LabeledInput
               label="Fuel price (₱/L)"
-              value={manualLastRefillPrice}
-              onChangeText={setManualLastRefillPrice}
+              value={manualTripFuelPrice}
+              onChangeText={setManualTripFuelPrice}
               keyboardType="decimal-pad"
               returnKeyType="done"
               onSubmitEditing={() => Keyboard.dismiss()}
               placeholder="62.50"
             />
+            {customFuelPriceError ? <Text style={styles.fieldError}>{customFuelPriceError}</Text> : null}
           </>
         )}
         </View>
@@ -1966,6 +2014,10 @@ export default function TripOptimizerScreen() {
               showsVerticalScrollIndicator={false}>
               <View style={styles.receiptTotal}>
                 <Text style={styles.receiptTotalLabel}>Recommended option · Total trip cost</Text>
+                <Text style={styles.hint}>Best match for your selected priority</Text>
+                <Text style={styles.hint}>
+                  Priority: {100 - Math.round(weights.travelTime * 100)}% fuel cost · {Math.round(weights.travelTime * 100)}% travel time
+                </Text>
                 <Text style={styles.receiptTotalMode}>
                   {result ? transportModeLabel(result.recommended.modeCode) : ''}
                 </Text>
@@ -2104,11 +2156,11 @@ export default function TripOptimizerScreen() {
                   label={savingTemplate ? 'Saving…' : 'Save as template'}
                   variant="secondary"
                   onPress={handleSaveTemplate}
-                  disabled={savingTemplate}
+                  disabled={savingTemplate || !result?.recommended || resolvedRouteKey !== routeKey}
                   style={styles.saveSecondaryBtn}
                 />
                 <Text style={styles.sheetHistoryNote}>
-                  This comparison is saved to Trip History automatically.
+                  {historyError ?? 'This comparison is saved to Trip History automatically.'}
                 </Text>
               </View>
             </ScrollView>

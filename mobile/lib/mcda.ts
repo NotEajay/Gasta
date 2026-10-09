@@ -1,3 +1,4 @@
+import { DEFAULT_MCDA_WEIGHTS } from '@/constants/mcda';
 import type { MCDACriterionKey, MCDAWeights, ModeEvaluation } from '@/types/mcda';
 import type { TransportModeCode } from '@/constants/transportModes';
 
@@ -11,6 +12,17 @@ export interface ModeRawScores {
 
 const CRITERION_KEYS: MCDACriterionKey[] = ['fuelCost', 'travelTime'];
 
+/** Slider position: left saves money, right saves time. Never round calculation weights. */
+export function clampTimePriority(value: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return DEFAULT_MCDA_WEIGHTS.travelTime;
+  return Math.min(1, Math.max(0, value));
+}
+
+export function weightsForTimePriority(value: number): MCDAWeights {
+  const travelTime = clampTimePriority(value);
+  return { fuelCost: 1 - travelTime, travelTime };
+}
+
 /** Inverted min-max normalization: (max - x) / (max - min). Lower raw = better. */
 export function normalizeCriterion(value: number, min: number, max: number): number {
   if (max === min) {
@@ -20,6 +32,7 @@ export function normalizeCriterion(value: number, min: number, max: number): num
 }
 
 export function weightsSumToOne(weights: MCDAWeights, tolerance = 0.001): boolean {
+  if (!CRITERION_KEYS.every((key) => Number.isFinite(weights[key]) && weights[key] >= 0 && weights[key] <= 1)) return false;
   const sum = weights.fuelCost + weights.travelTime;
   return Math.abs(sum - 1) <= tolerance;
 }
@@ -29,6 +42,10 @@ export function evaluateModes(
   modes: ModeRawScores[],
   weights: MCDAWeights
 ): ModeEvaluation[] {
+  if (!weightsSumToOne(weights)) throw new Error('Criterion weights must be between 0 and 1 and sum to 1.');
+  if (modes.some((mode) => CRITERION_KEYS.some((key) => !Number.isFinite(mode[key]) || mode[key] < 0))) {
+    throw new Error('Trip costs and travel times must be finite, non-negative numbers.');
+  }
   if (modes.length === 0) {
     return [];
   }

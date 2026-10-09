@@ -8,6 +8,7 @@ import {
   type GestureResponderEvent,
 } from 'react-native';
 
+import { clampTimePriority } from '@/lib/mcda';
 import { Text } from '@/components/Themed';
 import { HomeColors } from '@/constants/home';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
@@ -52,12 +53,8 @@ interface PriorityBalanceBarProps {
   tone?: 'light' | 'dark';
 }
 
-function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
-
 function snapToStep(value: number): number {
-  return Math.round(clamp01(value) / STEP) * STEP;
+  return Math.round(clampTimePriority(value) / STEP) * STEP;
 }
 
 /**
@@ -80,18 +77,33 @@ export default function PriorityBalanceBar({
   const trackWidthRef = useRef(0);
   const trackPageXRef = useRef(0);
   const trackRef = useRef<View>(null);
-  const valueRef = useRef(value);
-  valueRef.current = value;
+  const position = clampTimePriority(value);
+  const valueRef = useRef(position);
+  const previousPropValue = useRef(position);
+  if (previousPropValue.current !== position) {
+    previousPropValue.current = position;
+    valueRef.current = position;
+  }
+  const touchPageXRef = useRef<number | null>(null);
+  const gestureSequence = useRef(0);
+
+  const emitValue = useCallback((next: number) => {
+    const clamped = clampTimePriority(next);
+    if (Math.abs(clamped - valueRef.current) < 0.001) return;
+    // Gesture callbacks can be batched before the parent renders. Remember the
+    // last emitted value now so returning to the old prop is not discarded.
+    valueRef.current = clamped;
+    onChange(clamped);
+  }, [onChange]);
 
   const updateFromPageX = useCallback(
     (pageX: number) => {
       const width = trackWidthRef.current;
       if (width <= 0) return;
-      const next = snapToStep((pageX - trackPageXRef.current) / width);
-      if (Math.abs(next - valueRef.current) < 0.001) return;
-      onChange(next);
+      if (!Number.isFinite(pageX) || !Number.isFinite(width)) return;
+      emitValue(snapToStep((pageX - trackPageXRef.current) / width));
     },
-    [onChange],
+    [emitValue],
   );
 
   const pan = useMemo(
@@ -100,13 +112,27 @@ export default function PriorityBalanceBar({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (event: GestureResponderEvent) => {
+          touchPageXRef.current = event.nativeEvent.pageX;
+          const sequence = ++gestureSequence.current;
           trackRef.current?.measureInWindow((x) => {
+            if (sequence !== gestureSequence.current || touchPageXRef.current == null) return;
             trackPageXRef.current = x;
-            updateFromPageX(event.nativeEvent.pageX);
+            // Use the latest move, not the touch captured before native measure.
+            updateFromPageX(touchPageXRef.current);
           });
         },
         onPanResponderMove: (event: GestureResponderEvent) => {
+          touchPageXRef.current = event.nativeEvent.pageX;
           updateFromPageX(event.nativeEvent.pageX);
+        },
+        onPanResponderRelease: (event: GestureResponderEvent) => {
+          updateFromPageX(event.nativeEvent.pageX);
+          touchPageXRef.current = null;
+          gestureSequence.current += 1;
+        },
+        onPanResponderTerminate: () => {
+          touchPageXRef.current = null;
+          gestureSequence.current += 1;
         },
         onPanResponderTerminationRequest: () => false,
       }),
@@ -123,16 +149,21 @@ export default function PriorityBalanceBar({
   }, []);
 
   const thumbLeft =
-    trackWidth > 0 ? value * trackWidth - THUMB_SIZE / 2 : -THUMB_SIZE / 2;
+    trackWidth > 0 ? position * trackWidth - THUMB_SIZE / 2 : -THUMB_SIZE / 2;
 
-  const savingsPercent = Math.round((1 - value) * 100);
-  const timePercent = Math.round(value * 100);
+  const timePercent = Math.round(position * 100);
+  const savingsPercent = 100 - timePercent;
 
   return (
     <View
       accessible
       accessibilityRole="adjustable"
       accessibilityLabel={accessibilityLabel}
+      accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === 'increment') emitValue(valueRef.current + STEP);
+        if (event.nativeEvent.actionName === 'decrement') emitValue(valueRef.current - STEP);
+      }}
       accessibilityValue={{
         min: 0,
         max: 100,
@@ -144,8 +175,8 @@ export default function PriorityBalanceBar({
           style={[
             styles.endLabel,
             dark && styles.endLabelDark,
-            value <= 0.5 && styles.endLabelActive,
-            dark && value <= 0.5 && styles.endLabelActiveDark,
+            position <= 0.5 && styles.endLabelActive,
+            dark && position <= 0.5 && styles.endLabelActiveDark,
           ]}>
           Save money
         </Text>
@@ -153,10 +184,10 @@ export default function PriorityBalanceBar({
           style={[
             styles.endLabel,
             dark && styles.endLabelDark,
-            value >= 0.5 && styles.endLabelActive,
-            dark && value >= 0.5 && styles.endLabelActiveDark,
+            position >= 0.5 && styles.endLabelActive,
+            dark && position >= 0.5 && styles.endLabelActiveDark,
           ]}>
-          Faster trip
+          Save time
         </Text>
       </View>
 
@@ -166,7 +197,7 @@ export default function PriorityBalanceBar({
         style={styles.trackHit}
         {...pan.panHandlers}>
         <View style={[styles.track, dark && styles.trackDark]}>
-          <View style={[styles.trackFill, dark && styles.trackFillDark, { width: `${value * 100}%` }]} />
+          <View style={[styles.trackFill, dark && styles.trackFillDark, { width: `${position * 100}%` }]} />
         </View>
 
         {MARKS.map((mark) => (
@@ -189,13 +220,13 @@ export default function PriorityBalanceBar({
 
       <View style={styles.marksRow}>
         {MARKS.map((mark) => {
-          const selected = Math.abs(value - mark.position) < 0.06;
+          const selected = Math.abs(position - mark.position) < 0.06;
           return (
             <Pressable
               key={mark.key}
               accessibilityRole="button"
               accessibilityState={{ selected }}
-              onPress={() => onChange(mark.position)}
+              onPress={() => emitValue(mark.position)}
               style={[
                 styles.markPressable,
                 dark && styles.markPressableDark,
@@ -215,6 +246,9 @@ export default function PriorityBalanceBar({
         })}
       </View>
 
+      <Text style={[styles.weightSummary, dark && styles.endLabelDark]}>
+        Fuel cost {savingsPercent}% · Travel time {timePercent}%
+      </Text>
       <View style={styles.outcomeRow}>
         <View style={[styles.outcomeCard, dark && styles.outcomeCardDark]}>
           <Text
@@ -388,6 +422,11 @@ const styles = StyleSheet.create({
   markLabelSelected: {
     color: HomeColors.primaryDark,
     fontWeight: '800',
+  },
+  weightSummary: {
+    fontSize: 11,
+    color: HomeColors.muted,
+    marginBottom: spacing.sm,
   },
   outcomeRow: {
     flexDirection: 'row',

@@ -288,6 +288,18 @@ export async function fetchVehicles(userId: string): Promise<Vehicle[]> {
   return (retry.data ?? []).map(withArchivedAt);
 }
 
+/** Active owned and explicitly shared vehicles available for trip estimates. */
+export async function fetchTripVehicles(userId: string): Promise<Vehicle[]> {
+  const [owned, shared] = await Promise.all([fetchVehicles(userId), fetchSharedVehicles(userId)]);
+  const sharedIds = shared.map((vehicle) => vehicle.vehicleId).filter((id) => !owned.some((vehicle) => vehicle.id === id));
+  if (sharedIds.length === 0) return owned;
+  // The existing RLS read policy remains authoritative, including revocation.
+  const { data, error } = await supabase.from('vehicles').select('*')
+    .in('id', sharedIds).is('archived_at', null).order('created_at', { ascending: false });
+  if (error) throw error;
+  return [...owned, ...(data ?? []).map(withArchivedAt)];
+}
+
 /**
  * Archived vehicles for the owner's management section. Historical queries
  * (refills, trips, budget analytics) intentionally do NOT use this — they

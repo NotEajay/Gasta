@@ -1,3 +1,4 @@
+import { assertVehicleActive } from '@/lib/services/savedTrips';
 import { supabase } from '@/lib/supabase';
 import type { Json } from '@/types/database';
 import type { ModeEvaluation, MCDAWeights, TripRecord } from '@/types/mcda';
@@ -16,6 +17,7 @@ export interface LogTripHistoryInput {
 
 /** Append a completed SAW run to trip history (trip_records). */
 export async function logTripToHistory(input: LogTripHistoryInput) {
+  if (input.vehicleId) await assertVehicleActive(input.vehicleId);
   const { data, error } = await supabase
     .from('trip_records')
     .insert({
