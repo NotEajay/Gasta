@@ -25,13 +25,14 @@ const KNOWN_BRANDS: Array<{ key: string; label: string; color: string; terms: st
     key: 'cleanfuel',
     label: 'Cleanfuel',
     color: '#0F766E',
-    terms: ['cleanfuel', 'clean fuel'],
+    terms: ['cleanfuel', 'clean fuel', 'clean-fuel'],
   },
   { key: 'phoenix', label: 'Phoenix', color: '#DC2626', terms: ['phoenix'] },
   { key: 'unioil', label: 'UniOil', color: '#64748B', terms: ['unioil', 'uni oil'] },
   { key: 'total', label: 'Total', color: '#0284C7', terms: ['total'] },
   { key: 'ptt', label: 'PTT', color: '#7C3AED', terms: ['ptt'] },
   { key: 'jetti', label: 'Jetti', color: '#0369A1', terms: ['jetti'] },
+  { key: 'my-gas', label: 'My Gas', color: '#014421', terms: ['my gas', 'my-gas', 'mygas'] },
 ];
 
 function normalize(value: string | null | undefined): string {

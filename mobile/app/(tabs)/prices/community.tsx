@@ -1,778 +1,159 @@
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
-import BrandMark from '@/components/ui/BrandMark';
+import CommunityReportCard from '@/components/CommunityReportCard';
+import GeneralReportFlow from '@/components/GeneralReportFlow';
+import EmptyState from '@/components/ui/EmptyState';
 import LoadingState from '@/components/ui/LoadingState';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
-import { GasTaColors, radii, spacing } from '@/constants/Theme';
+import { GasTaColors as C, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
-import { formatCurrency, formatDate, formatRelativeReportAge } from '@/lib/format';
+import { formatCurrency } from '@/lib/format';
 import {
-  canDeleteCommunityReport,
-  communityReportMatchesRecency,
-  confirmationsLabel,
-  confirmCommunityReport,
-  deleteCommunityReport,
-  fetchCommunityReports,
-  fetchMyCommunityReports,
-  fetchPendingReports,
-  isHistoricalCommunityReport,
-  type CommunityRecency,
-  type PendingCommunityReport,
-  type CommunityReport,
+  canDeleteCommunityReport, communityReportMatchesRecency, confirmCommunityReport,
+  deleteCommunityReport, fetchCommunityReports, fetchCommunityReportStatus,
+  fetchMyCommunityReports, fetchPendingReports,
+  type CommunityRecency, type PendingCommunityReport, type CommunityReport,
 } from '@/lib/services/communityReports';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { Text } from '@/components/Themed';
 
-/*
- * Centred content column, matching the main Prices shell. On phones the cap
- * never binds, so the column is effectively full width.
- */
-const SHELL_MAX_WIDTH = 660;
 const RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = [
-  { value: 'recent', label: 'Recent' },
-  { value: '7days', label: 'Last 7 Days' },
-  { value: '30days', label: 'Last 30 Days' },
-  { value: 'past', label: 'Past' },
+  { value: 'recent', label: 'Recent' }, { value: '7days', label: 'Last 7 Days' },
+  { value: '30days', label: 'Last 30 Days' }, { value: 'past', label: 'Past' },
 ];
-
+type Result = { type: 'confirmation' | 'success' | 'error'; operation: 'confirm' | 'delete'; title: string; message: string };
 export default function CommunityPricesScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ report_flow?: string; report_company?: string; report_region?: string; report_area?: string; report_request?: string }>();
   const { user, loading: authLoading } = useAuth();
   const [reports, setReports] = useState<CommunityReport[]>([]);
-  // Confirmation queue is fetched without a period bound on purpose (see
-  // `load`): pending reports must stay confirmable in every period.
   const [pendingAwaiting, setPendingAwaiting] = useState<PendingCommunityReport[]>([]);
+  const [mine, setMine] = useState<PendingCommunityReport[]>([]);
   const [recency, setRecency] = useState<CommunityRecency>('recent');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  // Own reports, kept separate from the shared lists so withdrawing one never
-  // mutates verified/pending state that other users also depend on.
-  const [mine, setMine] = useState<PendingCommunityReport[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingCommunityReport | null>(null);
+  const [result, setResult] = useState<Result | null>(null);
+  const actionBusy = useRef(false);
+  const loadSequence = useRef(0);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportInitial, setReportInitial] = useState<{ company: string; region: string; area: string } | undefined>();
+  const lastResume = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (params.report_flow !== 'community-general' || !params.report_request || lastResume.current === params.report_request) return;
+    lastResume.current = params.report_request;
+    setReportInitial({ company: params.report_company ?? '', region: params.report_region ?? '', area: params.report_area ?? '' });
+    setReportOpen(true);
+  }, [params.report_flow, params.report_request, params.report_company, params.report_region, params.report_area]);
 
   const load = useCallback(async () => {
-    if (!isSupabaseConfigured) {
-      setLoading(false);
-      return;
-    }
+    if (!isSupabaseConfigured) { setLoading(false); return; }
+    const sequence = ++loadSequence.current;
+    let partialFailure = false;
     try {
       const [allReports, awaiting, own] = await Promise.all([
-        // Query-side period filter: each chip fetches only its own window, so
-        // the Past filter reaches rows older than 30 days even when newer
-        // reports would fill the row limit first.
         fetchCommunityReports(200, { recency }),
-        fetchPendingReports(50).catch((e) => {
-          console.warn('Pending community reports failed', e);
-          return [];
-        }),
-        user ? fetchMyCommunityReports(user.id).catch(() => []) : Promise.resolve([]),
+        // Confirmation queue intentionally stays independent of the period.
+        fetchPendingReports(50).catch(() => { partialFailure = true; return []; }),
+        user ? fetchMyCommunityReports(user.id).catch(() => { partialFailure = true; return []; }) : Promise.resolve([]),
       ]);
-      setReports(allReports);
-      setPendingAwaiting(awaiting);
-      setMine(own);
-    } catch (e) {
-      console.warn('Community prices load failed', e);
+      if (sequence !== loadSequence.current) return;
+      setReports(allReports); setPendingAwaiting(awaiting); setMine(own);
+      setLoadError(partialFailure ? "Couldn't load all community prices. Pull to refresh or try again." : null);
+    } catch {
+      if (sequence === loadSequence.current) setLoadError("Couldn't load community prices. Pull to refresh or try again.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (sequence === loadSequence.current) { setLoading(false); setRefreshing(false); }
     }
   }, [user, recency]);
-
-  const filteredReports = useMemo(
-    // Client-side safety mirror of the query-side bound in `fetchCommunityReports`.
-    () => reports.filter((report) => communityReportMatchesRecency(report.created_at, recency)),
-    [reports, recency]
-  );
-  const displayedReports = filteredReports.filter((report) => report.status !== 'pending');
-
-  useFocusEffect(
-    useCallback(() => {
-      // Reload on every focus AND whenever the period changes (this callback's
-      // identity includes `recency`, which re-runs the query-side fetch). No
-      // clearing up-front: the previous rows stay on screen until replacements
-      // land, so switching chips never flashes the empty state.
-      void load();
-    }, [load])
-  );
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  const displayedReports = useMemo(() => reports.filter((report) => communityReportMatchesRecency(report.created_at, recency)).filter((report) => report.status !== 'pending'), [reports, recency]);
 
   const handleConfirm = async (report: PendingCommunityReport) => {
-    if (!user) {
-      router.push('/login');
-      return;
-    }
-    setConfirmingId(report.id);
+    if (!user) { router.push('/login'); return; }
+    if (actionBusy.current || report.reported_by === user.id) return;
+    actionBusy.current = true; setConfirmingId(report.id);
     try {
       await confirmCommunityReport(report.id);
-      Alert.alert(
-        'Confirmed',
-        report.confirmation_count + 1 >= VERIFY_CONFIRMATIONS_REQUIRED
-          ? 'Report is now verified for display.'
-          : confirmationsLabel(report.confirmation_count + 1)
-      );
+      const updated = await fetchCommunityReportStatus(report.id).catch(() => null);
       await load();
-    } catch (e) {
-      Alert.alert('Could not confirm', e instanceof Error ? e.message : 'Unknown error');
-    } finally {
-      setConfirmingId(null);
-    }
+      setResult(updated?.status === 'verified'
+        ? { type: 'success', operation: 'confirm', title: 'Price verified', message: 'This report now has enough independent confirmations.' }
+        : { type: 'success', operation: 'confirm', title: 'Price confirmed', message: `Your confirmation was recorded.${updated?.status === 'pending' ? ` ${updated.confirmation_count} of ${VERIFY_CONFIRMATIONS_REQUIRED} confirmations received.` : ''}` });
+    } catch {
+      setResult({ type: 'error', operation: 'confirm', title: "Couldn't confirm price", message: "Couldn't confirm this price. Please try again." });
+    } finally { actionBusy.current = false; setConfirmingId(null); }
   };
-
-  const handleDelete = (report: PendingCommunityReport) => {
-    // Guard before the dialog too: a second tap while a delete is in flight
-    // must not open a second dialog for the same row.
-    if (deletingId) return;
-
-    Alert.alert(
-      'Delete price report?',
-      `This will remove your reported price of ${formatCurrency(report.reported_price)} for ${
-        report.station?.name ?? 'this station'
-      }.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            void runDelete(report);
-          },
-        },
-      ]
-    );
+  const requestDelete = (report: PendingCommunityReport) => {
+    if (actionBusy.current || !canDeleteCommunityReport(report.status) || report.reported_by !== user?.id) return;
+    setPendingDelete(report);
+    setResult({ type: 'confirmation', operation: 'delete', title: 'Delete price report?', message: `Your ${formatCurrency(report.reported_price)}/L report for ${report.station?.name ?? 'this station'} will be removed.` });
   };
-
-  const runDelete = async (report: PendingCommunityReport) => {
-    setDeletingId(report.id);
-    setDeleteError(null);
+  const runDelete = async () => {
+    const report = pendingDelete;
+    if (!report || actionBusy.current || !canDeleteCommunityReport(report.status) || report.reported_by !== user?.id) return;
+    actionBusy.current = true; setDeletingId(report.id);
     try {
       await deleteCommunityReport(report.id);
-      // Drop it locally so the row disappears immediately, then refetch so the
-      // shared lists settle to whatever the database now says.
-      setMine((prev) => prev.filter((r) => r.id !== report.id));
-      Alert.alert('Report deleted', 'Your reported price was removed.');
+      setMine((rows) => rows.filter((row) => row.id !== report.id));
       await load();
-    } catch (e) {
-      // A normal failed withdrawal is not a full-screen error. The row stays put
-      // and an inline message explains it.
-      setDeleteError(e instanceof Error ? e.message : 'Could not delete this report.');
-    } finally {
-      setDeletingId(null);
-    }
+      setResult({ type: 'success', operation: 'delete', title: 'Report deleted', message: 'Your reported price was removed.' });
+    } catch {
+      setResult({ type: 'error', operation: 'delete', title: "Couldn't delete report", message: "Couldn't delete this report. Please try again." });
+    } finally { actionBusy.current = false; setDeletingId(null); }
   };
-
-  if (!isSupabaseConfigured) {
-    return (
-      <View style={styles.flex}>
-        <SupabaseSetupBanner />
-      </View>
-    );
-  }
-
+  const closeResult = () => { if (!actionBusy.current) { setResult(null); setPendingDelete(null); } };
+  if (!isSupabaseConfigured) return <View style={styles.flex}><SupabaseSetupBanner /></View>;
   if (authLoading || loading) return <LoadingState message="Loading community prices…" />;
-
-  return (
-    <ScrollView
-      style={styles.flex}
-      contentContainerStyle={[
-        styles.padding,
-        { maxWidth: SHELL_MAX_WIDTH, alignSelf: 'center', width: '100%' },
-      ]}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            load();
-          }}
-          tintColor={GasTaColors.forest}
-        />
-      }>
-      {/* Header carries the report action so it is reachable from the top of
-          the screen rather than only at the bottom. Route is unchanged. */}
-      <Pressable
-        accessibilityLabel="Go back"
-        accessibilityRole="button"
-        hitSlop={8}
-        onPress={() => router.back()}
-        style={styles.backBtn}>
-        <Ionicons name="chevron-back" size={18} color={GasTaColors.forest} />
-        <Text style={styles.backText}>Back</Text>
-      </Pressable>
-      <View style={styles.headerRow}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Community Prices</Text>
-          <Text style={styles.headerMeta}>
-            Verified by {VERIFY_CONFIRMATIONS_REQUIRED} users within ±₱0.50/L
-          </Text>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Report a price"
-          hitSlop={8}
-          onPress={() => router.push('/(tabs)/prices/report')}
-          style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}>
-          <Text style={styles.headerActionText}>+ Report a price</Text>
-        </Pressable>
+  return <>
+    <ScrollView style={styles.flex} contentContainerStyle={styles.padding} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(); }} tintColor={C.forest} />}>
+      <Pressable accessibilityLabel="Go back" accessibilityRole="button" hitSlop={8} onPress={() => router.back()} style={styles.back}><Ionicons name="chevron-back" size={18} color={C.forest} /><Text style={styles.backText}>Back</Text></Pressable>
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}><Text style={styles.title}>Community Prices</Text><Text style={styles.meta}>Verified by {VERIFY_CONFIRMATIONS_REQUIRED} users within ±₱0.50/L</Text></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Report a price" onPress={() => { setReportInitial(undefined); setReportOpen(true); }} style={({ pressed }) => [styles.reportButton, pressed && styles.pressed]}><Ionicons name="add" size={16} color={C.white} /><Text style={styles.reportText}>Report a price</Text></Pressable>
       </View>
-
       <Text style={styles.filterLabel}>Report period</Text>
-      <View style={styles.filterRow}>
-        {RECENCY_OPTIONS.map((option) => {
-          const active = recency === option.value;
-          return (
-            <Pressable
-              key={option.value}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: active }}
-              onPress={() => setRecency(option.value)}
-              style={[styles.filterChip, active && styles.filterChipActive]}>
-              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      <Text style={styles.sectionTitle}>Community Station Reports</Text>
-      {displayedReports.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>No verified community reports are available for this period.</Text>
-          <Text style={styles.emptyLine}>
-            Report a price you saw, then ask others to confirm it at the station. Historical reports remain
-            available through the Past filter.
-          </Text>
-        </View>
-      ) : (
-        <View style={[styles.list, styles.verifiedList]}>
-          {displayedReports.map((row, index) => (
-            <View
-              key={row.id}
-              style={[
-                styles.row,
-                index < displayedReports.length - 1 && styles.divider,
-              ]}>
-              <BrandMark
-                brand={row.station?.brand_label ?? row.station?.oil_company?.name}
-                slug={row.station?.oil_company?.slug}
-                stationName={row.station?.name}
-                size="md"
-              />
-              <View style={styles.rowMain}>
-                <Text style={styles.station} numberOfLines={1}>
-                  {row.station?.name ?? 'Station'}
-                </Text>
-                <View style={styles.metaRow}>
-                  <View style={styles.verifiedPill}>
-                    <MaterialCommunityIcons
-                      name="shield-check"
-                      size={10}
-                      color={GasTaColors.forest}
-                    />
-                    <Text style={styles.verifiedText}>
-                      {/* Older than the 7-day recommendation freshness window
-                          (verified_at): still readable for monitoring/history,
-                          but never labelled as a current price input. */}
-                      {row.status === 'verified'
-                        ? isHistoricalCommunityReport(row)
-                          ? 'Verified · Historical'
-                          : `✓ Verified · ${row.confirmation_count} confirmation${
-                              row.confirmation_count === 1 ? '' : 's'
-                            }`
-                        : row.status === 'needs_review'
-                          ? 'Needs Review'
-                          : 'Rejected'}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.meta}>
-                  {row.fuel_type?.name ?? 'Fuel'} · {formatRelativeReportAge(row.created_at)}
-                  {isHistoricalCommunityReport(row) ? ` · ${formatDate(row.created_at)}` : ''}
-                </Text>
-              </View>
-              <Text style={styles.price}>
-                {formatCurrency(row.reported_price)}
-                <Text style={styles.priceUnit}>/L</Text>
-              </Text>
-            </View>
-          ))}
-        </View>
-      )}
-
-      {/* Own reports live in their own compact block above the shared lists, so
-          withdrawal is contextual and the main lists stay uncluttered. */}
-      {user ? (
-        <>
-          <Text style={styles.sectionTitleTop}>My reports</Text>
-          {deleteError ? (
-            <View style={styles.inlineError}>
-              <MaterialCommunityIcons
-                name="alert-circle-outline"
-                size={14}
-                color={GasTaColors.error}
-              />
-              <Text style={styles.inlineErrorText}>{deleteError}</Text>
-            </View>
-          ) : null}
-          {mine.length === 0 ? (
-            <View style={styles.emptyBox}>
-              <Text style={styles.emptyTitle}>You haven&apos;t reported a price yet</Text>
-              <Text style={styles.emptyLine}>
-                Reports you submit appear here so you can withdraw them.
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.list, styles.ownList]}>
-              {mine.map((report, index) => {
-                const canDelete = canDeleteCommunityReport(report.status);
-                const busy = deletingId === report.id;
-                return (
-                  <View
-                    key={report.id}
-                    style={[
-                      styles.row,
-                      styles.rowStacked,
-                      index < mine.length - 1 && styles.divider,
-                    ]}>
-                    <View style={styles.rowHead}>
-                      <BrandMark
-                        brand={report.station?.brand_label ?? report.station?.oil_company?.name}
-                        slug={report.station?.oil_company?.slug}
-                        stationName={report.station?.name}
-                        size="sm"
-                      />
-                      <View style={styles.rowMain}>
-                        <View style={styles.ownTitleRow}>
-                          <Text style={styles.station} numberOfLines={1}>
-                            {report.station?.name ?? 'Station'}
-                          </Text>
-                          <View style={styles.yoursPill}>
-                            <Text style={styles.yoursPillText}>Your report</Text>
-                          </View>
-                        </View>
-                        <Text style={styles.meta} numberOfLines={1}>
-                          {report.fuel_type?.name ?? 'Fuel'} · {formatRelativeReportAge(report.created_at)} ·{' '}
-                          {report.confirmation_count === 0
-                            ? 'Pending · No confirmations yet'
-                            : `Pending · ${report.confirmation_count}/${VERIFY_CONFIRMATIONS_REQUIRED} confirmations`}
-                        </Text>
-                      </View>
-                      <View style={styles.ownPriceCol}>
-                        <Text style={[styles.price, canDelete && styles.pricePending]}>
-                          {formatCurrency(report.reported_price)}
-                          <Text style={styles.priceUnit}>/L</Text>
-                        </Text>
-                        <Text
-                          style={[
-                            styles.ownStatus,
-                            canDelete ? styles.ownStatusPending : styles.ownStatusVerified,
-                          ]}>
-                          {canDelete ? 'Pending' : 'Verified'}
-                        </Text>
-                      </View>
-                    </View>
-                    {canDelete ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Delete your ${formatCurrency(
-                          report.reported_price
-                        )} report at ${report.station?.name ?? 'this station'}`}
-                        accessibilityState={{ disabled: busy }}
-                        hitSlop={8}
-                        disabled={busy || deletingId !== null}
-                        onPress={() => handleDelete(report)}
-                        style={({ pressed }) => [
-                          styles.deleteBtn,
-                          pressed && styles.pressed,
-                          busy && styles.busy,
-                        ]}>
-                        <MaterialCommunityIcons
-                          name="trash-can-outline"
-                          size={13}
-                          color={GasTaColors.error}
-                        />
-                        <Text style={styles.deleteBtnText}>
-                          {busy ? 'Deleting…' : 'Delete'}
-                        </Text>
-                      </Pressable>
-                    ) : (
-                      <Text style={styles.ownLockedNote}>
-                        Verified reports can&apos;t be withdrawn — other drivers rely on them.
-                      </Text>
-                    )}
-                  </View>
-                );
-              })}
-            </View>
-          )}
-        </>
-      ) : null}
-
-      <Text style={styles.sectionTitleTop}>Needs confirmation</Text>
-      {!user ? (
-        <AuthPrompt
-          message="Sign in to confirm community price reports."
-          onSignIn={() => router.push('/login')}
-        />
-      ) : pendingAwaiting.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>Nothing waiting for confirmation</Text>
-          <Text style={styles.emptyLine}>
-            There are no pending reports waiting for confirmation right now.
-          </Text>
-        </View>
-      ) : (
-        <View style={[styles.list, styles.pendingList]}>
-          {pendingAwaiting.map((report, index) => {
-            const isLast = index === pendingAwaiting.length - 1;
-            return (
-              <View
-                key={report.id}
-                style={[styles.row, styles.rowStacked, !isLast && styles.divider]}>
-                <View style={styles.rowHead}>
-                  <BrandMark
-                    brand={report.station?.brand_label ?? report.station?.oil_company?.name}
-                    slug={report.station?.oil_company?.slug}
-                    stationName={report.station?.name}
-                    size="sm"
-                  />
-                  <View style={styles.rowMain}>
-                    <Text style={styles.station} numberOfLines={1}>
-                      {report.station?.name ?? 'Station'}
-                    </Text>
-                    <Text style={styles.meta} numberOfLines={1}>
-                      {report.fuel_type?.name ?? 'Fuel'} ·{' '}
-                      {confirmationsLabel(report.confirmation_count)} ·{' '}
-                      {formatDate(report.created_at)}
-                    </Text>
-                  </View>
-                  <Text style={[styles.price, styles.pricePending]}>
-                    {formatCurrency(report.reported_price)}
-                    <Text style={styles.priceUnit}>/L</Text>
-                  </Text>
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Confirm the price at ${report.station?.name ?? 'this station'}`}
-                  disabled={confirmingId === report.id}
-                  onPress={() => handleConfirm(report)}
-                  style={({ pressed }) => [
-                    styles.confirmBtn,
-                    pressed && styles.pressed,
-                    confirmingId === report.id && styles.busy,
-                  ]}>
-                  <Text style={styles.confirmBtnText}>
-                    {confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}
-                  </Text>
-                </Pressable>
-              </View>
-            );
-          })}
-        </View>
-      )}
+      <View style={styles.chips}>{RECENCY_OPTIONS.map((option) => <Pressable key={option.value} accessibilityRole="tab" accessibilityState={{ selected: recency === option.value }} onPress={() => setRecency(option.value)} style={[styles.chip, recency === option.value && styles.chipActive]}><Text style={[styles.chipText, recency === option.value && styles.chipTextActive]}>{option.label}</Text></Pressable>)}</View>
+      {loadError ? <View style={styles.notice}><Text style={styles.meta}>{loadError}</Text><Pressable accessibilityRole="button" onPress={() => void load()}><Text style={styles.link}>Try again</Text></Pressable></View> : null}
+      <Text style={styles.section}>Community Station Reports</Text>
+      {!displayedReports.length ? <EmptyState variant="canonical" title="No community prices yet" message="No verified reports are available for this period." /> : displayedReports.map((report) => <CommunityReportCard key={report.id} report={report} />)}
+      {user ? <>
+        <Text style={styles.sectionTop}>My reports</Text>
+        {!mine.length ? <EmptyState variant="canonical" title="No reports yet" message="Prices you report will appear here." /> : mine.map((report) => <CommunityReportCard key={report.id} report={report} own action={canDeleteCommunityReport(report.status) ? <Pressable accessibilityRole="button" accessibilityLabel={`Delete your report at ${report.station?.name ?? 'this station'}`} disabled={deletingId !== null || confirmingId !== null} onPress={() => requestDelete(report)} style={styles.deleteButton}><Ionicons name="trash-outline" size={14} color={C.error} /><Text style={styles.deleteText}>{deletingId === report.id ? 'Deleting…' : 'Delete report'}</Text></Pressable> : <Text style={styles.meta}>{report.status === 'verified' ? "Verified reports can't be withdrawn — other drivers rely on them." : 'Only pending reports can be withdrawn.'}</Text>} />)}
+      </> : null}
+      <Text style={styles.sectionTop}>Needs confirmation</Text>
+      {!user ? <AuthPrompt message="Sign in to confirm community price reports." onSignIn={() => router.push('/login')} /> : !pendingAwaiting.length ? <EmptyState variant="canonical" title="All caught up" message="There are no reports waiting for confirmation." /> : pendingAwaiting.map((report) => <CommunityReportCard key={report.id} report={report} awaiting action={report.reported_by === user.id ? <Text style={styles.meta}>You reported this price. Other drivers can confirm it.</Text> : <Pressable accessibilityRole="button" accessibilityLabel={`Confirm the price at ${report.station?.name ?? 'this station'}`} accessibilityState={{ busy: confirmingId === report.id }} disabled={confirmingId !== null || deletingId !== null} onPress={() => void handleConfirm(report)} style={styles.confirmButton}>{confirmingId === report.id ? <ActivityIndicator size="small" color={C.white} /> : <Ionicons name="checkmark" size={16} color={C.white} />}<Text style={styles.confirmText}>{confirmingId === report.id ? 'Confirming…' : 'Price is accurate'}</Text></Pressable>} />)}
     </ScrollView>
-  );
+    <GeneralReportFlow open={reportOpen} initial={reportInitial} onClose={() => setReportOpen(false)} />
+    <Modal visible={result !== null} transparent animationType="fade" onRequestClose={closeResult}>
+      <Pressable style={styles.backdrop} onPress={closeResult}><Pressable style={styles.modalCard} onPress={(event) => event.stopPropagation()}>
+        <View style={[styles.resultIcon, result?.type === 'confirmation' || result?.type === 'error' ? { backgroundColor: palette.dangerSoft } : null]}><Ionicons name={result?.type === 'confirmation' ? 'trash-outline' : result?.type === 'error' ? 'alert-circle-outline' : 'checkmark-circle-outline'} size={27} color={result?.type === 'confirmation' || result?.type === 'error' ? C.error : C.forest} /></View>
+        <Text style={styles.modalTitle}>{result?.title}</Text><Text style={styles.modalMessage}>{result?.message}</Text>
+        <View style={styles.modalActions}>
+          {result?.type === 'confirmation' ? <Pressable accessibilityRole="button" disabled={deletingId !== null} onPress={closeResult} style={styles.cancel}><Text style={styles.link}>Cancel</Text></Pressable> : null}
+          <Pressable accessibilityRole="button" disabled={deletingId !== null} onPress={() => result?.type === 'confirmation' ? void runDelete() : closeResult()} style={[styles.modalPrimary, result?.type === 'confirmation' && { backgroundColor: C.error }]}>{deletingId ? <ActivityIndicator color={C.white} /> : <Text style={styles.confirmText}>{result?.type === 'confirmation' ? 'Delete' : result?.type === 'error' ? 'Try again' : 'Done'}</Text>}</Pressable>
+        </View>
+      </Pressable></Pressable>
+    </Modal>
+  </>;
 }
-
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  pressed: { opacity: 0.7 },
-  busy: { opacity: 0.5 },
-  // `xxl` is the deepest step in GasTaSpacing -- there is no `xxxl`. This
-  // bottom padding clears the floating tab bar.
-  padding: { padding: spacing.lg, paddingBottom: spacing.xxl },
-
-  /* ---- header ---- */
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 2,
-    paddingVertical: 4,
-    marginBottom: spacing.sm,
-  },
-  backText: {
-    color: GasTaColors.forest,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  headerCopy: { flex: 1, minWidth: 0 },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    color: GasTaColors.textPrimary,
-  },
-  headerMeta: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: GasTaColors.textSoft,
-    marginTop: 2,
-  },
-  headerAction: {
-    flexShrink: 0,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radii.pill,
-    backgroundColor: GasTaColors.forest,
-  },
-  headerActionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: GasTaColors.textOnForest,
-  },
-
-  /* ---- sections ---- */
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: GasTaColors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  sectionTitleTop: {
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: GasTaColors.textPrimary,
-    marginTop: spacing.xl,
-    marginBottom: spacing.sm,
-  },
-  filterLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
-    marginBottom: spacing.xs,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginBottom: spacing.lg,
-  },
-  filterChip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs + 1,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  filterChipActive: {
-    borderColor: GasTaColors.forestDark,
-    backgroundColor: GasTaColors.forest,
-  },
-  filterChipText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-  filterChipTextActive: { color: GasTaColors.textOnForest },
-
-  /* ---- rows ----
-     Not every section is a white card. Verified data gets a pale forest cast;
-     pending data gets a pale amber cast, so the two read apart at a glance
-     without any extra text. */
-  list: {
-    backgroundColor: GasTaColors.creamLight,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    overflow: 'hidden',
-  },
-  verifiedList: {
-    backgroundColor: 'rgba(46, 125, 50, 0.07)',
-    borderColor: 'rgba(46, 125, 50, 0.26)',
-  },
-  pendingList: {
-    backgroundColor: 'rgba(180, 83, 9, 0.07)',
-    borderColor: 'rgba(180, 83, 9, 0.24)',
-  },
-  ownList: {
-    backgroundColor: GasTaColors.creamLight,
-    borderColor: GasTaColors.forestBorder,
-  },
-  ownTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  yoursPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 999,
-    backgroundColor: GasTaColors.forestGlow,
-  },
-  yoursPillText: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-    textTransform: 'uppercase',
-    color: GasTaColors.forest,
-  },
-  ownPriceCol: { alignItems: 'flex-end' },
-  ownStatus: {
-    fontSize: 10,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  ownStatusPending: { color: 'rgba(180, 83, 9, 1)' },
-  ownStatusVerified: { color: GasTaColors.forest },
-  /* Restrained, contextual action -- not a full-width red button. */
-  deleteBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 4,
-    marginTop: spacing.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(220, 38, 38, 0.24)',
-    backgroundColor: 'rgba(220, 38, 38, 0.10)',
-  },
-  deleteBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: GasTaColors.error,
-  },
-  ownLockedNote: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.textSoft,
-    marginTop: spacing.sm,
-  },
-  inlineError: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(220, 38, 38, 0.24)',
-    backgroundColor: 'rgba(220, 38, 38, 0.10)',
-  },
-  inlineErrorText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: '600',
-    color: GasTaColors.error,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  rowStacked: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: spacing.sm,
-  },
-  rowHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  rowMain: { flex: 1, minWidth: 0 },
-  divider: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: GasTaColors.forestGlow,
-  },
-  station: {
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 19,
-    color: GasTaColors.textPrimary,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginTop: 2,
-  },
-  meta: {
-    fontSize: 11,
-    lineHeight: 15,
-    color: GasTaColors.textSoft,
-    marginTop: 1,
-  },
-  sourceLabel: {
-    fontSize: 10,
-    color: GasTaColors.textMuted,
-    marginTop: 4,
-  },
-  verifiedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: radii.pill,
-    backgroundColor: GasTaColors.forestGlow,
-  },
-  verifiedText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: GasTaColors.forest,
-  },
-  price: {
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-    color: GasTaColors.forestDark,
-  },
-  /* Pending stays amber so it never reads as a confirmed figure. */
-  pricePending: { color: '#9A6700' },
-  priceUnit: { fontSize: 10, fontWeight: '700', opacity: 0.7 },
-
-  confirmBtn: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forest,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  confirmBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-
-  /* ---- quiet empty states ---- */
-  emptyBox: { paddingVertical: spacing.sm },
-  emptyTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: GasTaColors.textPrimary,
-    marginBottom: 2,
-  },
-  emptyLine: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: GasTaColors.textSoft,
-  },
+  flex: { flex: 1, backgroundColor: C.creamLight }, padding: { padding: spacing.lg, paddingBottom: spacing.xxl, maxWidth: 660, width: '100%', alignSelf: 'center' },
+  back: { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start', marginBottom: 12 }, backText: { color: C.forest, fontSize: 14, fontWeight: '600' },
+  header: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }, title: { color: C.forestDark, fontSize: 24, fontWeight: '700' }, meta: { color: C.forestMuted, fontSize: 12, lineHeight: 18 },
+  reportButton: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.forest, borderRadius: radii.pill, paddingHorizontal: 12, paddingVertical: 9 }, reportText: { color: C.white, fontSize: 12, fontWeight: '600' },
+  filterLabel: { color: C.forestMuted, fontSize: 10, fontWeight: '600', marginBottom: 8 }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 }, chip: { borderRadius: radii.pill, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: C.forestBorder, backgroundColor: C.white }, chipActive: { backgroundColor: C.forest }, chipText: { color: C.forest, fontSize: 11, fontWeight: '600' }, chipTextActive: { color: C.creamLight },
+  section: { color: C.forestDark, fontSize: 17, fontWeight: '700', marginBottom: 10 }, sectionTop: { color: C.forestDark, fontSize: 17, fontWeight: '700', marginTop: 24, marginBottom: 10 },
+  notice: { backgroundColor: C.cream, borderRadius: 12, padding: 12, gap: 8, marginBottom: 16 }, link: { color: C.forest, fontSize: 12, fontWeight: '600' },
+  deleteButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 5, paddingVertical: 6, paddingHorizontal: 10, borderRadius: radii.pill, borderWidth: 1, borderColor: C.glassBorderSubtle }, deleteText: { color: C.error, fontSize: 11, fontWeight: '600' },
+  confirmButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, backgroundColor: C.forest, borderRadius: radii.pill, paddingHorizontal: 14, paddingVertical: 9 }, confirmText: { color: C.white, fontSize: 12, fontWeight: '600' }, pressed: { opacity: 0.75 },
+  backdrop: { flex: 1, backgroundColor: C.forestMuted, justifyContent: 'center', padding: 24 }, modalCard: { backgroundColor: C.creamLight, borderRadius: 22, padding: 24, maxWidth: 420, width: '100%', alignSelf: 'center', gap: 14 }, resultIcon: { width: 52, height: 52, borderRadius: 26, backgroundColor: C.forestGlow, alignItems: 'center', justifyContent: 'center' }, modalTitle: { color: C.forestDark, fontSize: 20, fontWeight: '700' }, modalMessage: { color: C.forestMuted, fontSize: 14, lineHeight: 21 }, modalActions: { flexDirection: 'row', alignItems: 'center', gap: 12 }, modalPrimary: { flex: 1, minHeight: 46, backgroundColor: C.forest, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, cancel: { paddingHorizontal: 12, paddingVertical: 12 },
 });

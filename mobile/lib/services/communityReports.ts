@@ -74,6 +74,7 @@ export interface PendingCommunityReport {
   reported_by: string;
   station: {
     name: string;
+    address?: string | null;
     brand_label: string | null;
     oil_company: { name: string; slug: string } | null;
     region: { code: string };
@@ -374,10 +375,11 @@ export async function fetchPendingReports(
       fuel_type_id,
       station:fuel_stations!inner (
         name,
+        address,
         brand_label,
         region_id,
         oil_company:oil_companies ( name, slug ),
-        region:regions!inner ( code )
+        ${filters?.regionCode ? 'region:regions!inner' : 'region:regions'} ( code )
       ),
       fuel_type:fuel_types ( code, name )
     `
@@ -412,12 +414,14 @@ export async function fetchPendingReports(
     station:
       | {
           name: string;
+          address?: string | null;
           brand_label: string | null;
           oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
           region: { code: string } | { code: string }[] | null;
         }
       | {
           name: string;
+          address?: string | null;
           brand_label: string | null;
           oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
           region: { code: string } | { code: string }[] | null;
@@ -441,6 +445,7 @@ export async function fetchPendingReports(
       station: station
         ? {
             name: station.name,
+            address: station.address ?? null,
             brand_label: station.brand_label ?? null,
             oil_company: oilCompany
               ? { name: oilCompany.name, slug: oilCompany.slug }
@@ -482,10 +487,11 @@ export async function fetchCommunityReports(
       fuel_type_id,
       station:fuel_stations!inner (
         name,
+        address,
         brand_label,
         region_id,
         oil_company:oil_companies ( name, slug ),
-        region:regions!inner ( code )
+        ${filters?.regionCode ? 'region:regions!inner' : 'region:regions'} ( code )
       ),
       fuel_type:fuel_types ( code, name )
     `;
@@ -532,12 +538,14 @@ export async function fetchCommunityReports(
     station:
       | {
           name: string;
+          address?: string | null;
           brand_label: string | null;
           oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
           region: { code: string } | { code: string }[] | null;
         }
       | {
           name: string;
+          address?: string | null;
           brand_label: string | null;
           oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
           region: { code: string } | { code: string }[] | null;
@@ -561,6 +569,7 @@ export async function fetchCommunityReports(
       station: station
         ? {
             name: station.name,
+            address: station.address ?? null,
             brand_label: station.brand_label ?? null,
             oil_company: oilCompany
               ? { name: oilCompany.name, slug: oilCompany.slug }
@@ -641,7 +650,7 @@ async function fetchPendingReportsFallback(
   const [stationsRes, fuelTypesRes] = await Promise.all([
     supabase
       .from('fuel_stations')
-      .select('id, name, brand_label, oil_company:oil_companies ( name, slug ), region:regions ( code )')
+      .select('id, name, address, brand_label, oil_company:oil_companies ( name, slug ), region:regions ( code )')
       .in('id', reportStationIds),
     supabase.from('fuel_types').select('id, code, name').in('id', fuelTypeIds),
   ]);
@@ -659,6 +668,7 @@ async function fetchPendingReportsFallback(
   type StationWithRegionRow = {
     id: string;
     name: string;
+    address?: string | null;
     brand_label: string | null;
     oil_company: { name: string; slug: string } | { name: string; slug: string }[] | null;
     region: unknown;
@@ -672,6 +682,7 @@ async function fetchPendingReportsFallback(
         station.id,
         {
           name: station.name,
+          address: station.address ?? null,
           brand_label: station.brand_label ?? null,
           oil_company: oilCompany
             ? { name: oilCompany.name, slug: oilCompany.slug }
@@ -767,10 +778,11 @@ export async function fetchMyCommunityReports(userId: string): Promise<PendingCo
       fuel_type_id,
       station:fuel_stations!inner (
         name,
+        address,
         brand_label,
         region_id,
         oil_company:oil_companies ( name, slug ),
-        region:regions!inner ( code )
+        region:regions ( code )
       ),
       fuel_type:fuel_types ( code, name )
     `
@@ -821,4 +833,12 @@ export function confirmationsLabel(count: number): string {
 
 export function usersConfirmedLabel(count: number): string {
   return count === 1 ? '1 user confirmed' : `${count} users confirmed`;
+}
+
+/** Display feedback from actual server status, never predict verification locally. */
+export async function fetchCommunityReportStatus(id: string): Promise<{ status: string; confirmation_count: number } | null> {
+  const { data, error } = await supabase.from('community_fuel_reports')
+    .select('status, confirmation_count').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data;
 }

@@ -1,0 +1,470 @@
+{
+  "version": 1,
+  "company_slug": "seaoil",
+  "source": "Official SEAOIL listing/detail HTML only",
+  "records": [
+    {
+      "source_station_id": "bmf-gasoline-station-97055",
+      "source_url": "https://www.seaoil.com.ph/stations/bmf-gasoline-station-97055",
+      "station_name": "CABAROAN TAYUM - ABRA",
+      "address": "CABAROAN, TAYUM, ABRA",
+      "pair": "CABAROAN TAYUM - ABRA",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "48ed685b1dec0966b896e58d9ed515444616b0504ec9896fdf3717177f54054d",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=4",
+        "detail_html_sha256": "b66613ccf3dfff7875e27d5fe6a6ec80cc9a5771ba901e6808ee725001615122",
+        "fuels": [
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ],
+          "payments": [
+            "Paymaya",
+            "Gcash"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "bmf-gasoline-station-97055"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "CABAROAN, TAYUM, ABRA",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "bmf-gasoline-station",
+      "source_url": "https://www.seaoil.com.ph/stations/bmf-gasoline-station",
+      "station_name": "CABAROAN TAYUM - ABRA",
+      "address": "CABAROAN, TAYUM, ABRA",
+      "pair": "CABAROAN TAYUM - ABRA",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "e0c0ec8c80f0c24352033ca112bd3abf7a34a263466482d3133f2fb45ad1e7ac",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=4",
+        "detail_html_sha256": "a1aedeed52872b872744e60275faa419110c155d2b5cc7fb2ff1dff0607c56d4",
+        "fuels": [
+          "Extreme 91",
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme 91",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ],
+          "payments": [
+            "Paymaya",
+            "Gcash",
+            "SEAOIL Gift Cards"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "bmf-gasoline-station"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "CABAROAN, TAYUM, ABRA",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "freida-s-seaoil-station",
+      "source_url": "https://www.seaoil.com.ph/stations/freida-s-seaoil-station",
+      "station_name": "KABANKALAN - NEGROS",
+      "address": "NATIONAL HIGHWAY BINIQUIL KABANKALAN NEGROS OCCIDENTAL",
+      "pair": "KABANKALAN - NEGROS",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "5aa4f611e455be6a318272fba5ced053d149bbbd3fa6c20d83a9c42c93fc0c70",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=8",
+        "detail_html_sha256": "f87d612d4b95fad55888407b56eef82deab307f304283d67af8ccc94b88acab2",
+        "fuels": [
+          "Extreme 91",
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme 91",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ],
+          "payments": [
+            "VIP Card",
+            "SEAOIL Gift Cards"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "freida-s-seaoil-station"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "NATIONAL HIGHWAY BINIQUIL KABANKALAN NEGROS OCCIDENTAL",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "freida-s-seaoil-station-14fef",
+      "source_url": "https://www.seaoil.com.ph/stations/freida-s-seaoil-station-14fef",
+      "station_name": "KABANKALAN - NEGROS",
+      "address": "NATIONAL HIGHWAY BINIQUIL KABANKALAN NEGROS OCCIDENTAL",
+      "pair": "KABANKALAN - NEGROS",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "0ca986da3d306d2c13037f821e71c5c60d2723d138f036bc60893e2ed7e89347",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=8",
+        "detail_html_sha256": "815ab5c127438ad07d3f1d3887a5f73a2e6e97c4679c21633781128899870369",
+        "fuels": [
+          "Extreme 91",
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme 91",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "freida-s-seaoil-station-14fef"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "NATIONAL HIGHWAY BINIQUIL KABANKALAN NEGROS OCCIDENTAL",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "serv-central-inc-palatiw",
+      "source_url": "https://www.seaoil.com.ph/stations/serv-central-inc-palatiw",
+      "station_name": "PALATIW - PASIG",
+      "address": "CORNER MARKET AVE AND BALTAZAR STS PALATIW PASIG CITY",
+      "pair": "PALATIW - PASIG",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "9befe41cfef90cec02ef91329f6760734c21afa3667a05232ffa99d2ee180d1b",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=12",
+        "detail_html_sha256": "b9ea73efbe8d72f6a50288d6f32f4a9a738996ca4f39021c03c35c848f414a04",
+        "fuels": [
+          "Extreme 91",
+          "Extreme 97",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 97",
+            "Extreme 91",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ],
+          "payments": [
+            "Shopee Pay",
+            "Fleet Cards",
+            "Paymaya",
+            "Gcash",
+            "Debit Card",
+            "Credit Card",
+            "QRPH",
+            "PLB",
+            "PLC",
+            "Pantawid Pasada"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "serv-central-inc-palatiw"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "CORNER MARKET AVE AND BALTAZAR STS PALATIW PASIG CITY",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "lotus-dragon-opc-palatiw",
+      "source_url": "https://www.seaoil.com.ph/stations/lotus-dragon-opc-palatiw",
+      "station_name": "PALATIW - PASIG",
+      "address": "CORNER MARKET AVE AND BALTAZAR STS PALATIW PASIG CITY",
+      "pair": "PALATIW - PASIG",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "8773a51aba44939442e7725b825432555f082d968d1a96da100583d893056f35",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=12",
+        "detail_html_sha256": "bccd444909a365138426b516fb39d25cb0a109060f2f3f126be6e0f11c270268",
+        "fuels": [
+          "Extreme 97",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 97",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "lotus-dragon-opc-palatiw"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "CORNER MARKET AVE AND BALTAZAR STS PALATIW PASIG CITY",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "sychar-gas-station-325ae",
+      "source_url": "https://www.seaoil.com.ph/stations/sychar-gas-station-325ae",
+      "station_name": "POB MAGPET - NORTH COTABATO",
+      "address": "POBLACION, MAGPET, NORTH COTABATO",
+      "pair": "POB MAGPET - NORTH COTABATO",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "04f41891be80e15420bd446a73ac6598075e4581071a04e779d43d6b935b31fb",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=14",
+        "detail_html_sha256": "8f1e080a515e4787511258ef7ca829db5de548449dd9217a7ac81afd70d40987",
+        "fuels": [
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "sychar-gas-station-325ae"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "POBLACION, MAGPET, NORTH COTABATO",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "sychar-gas-station",
+      "source_url": "https://www.seaoil.com.ph/stations/sychar-gas-station",
+      "station_name": "POB MAGPET - NORTH COTABATO",
+      "address": "POBLACION, MAGPET, NORTH COTABATO",
+      "pair": "POB MAGPET - NORTH COTABATO",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "458ab855858c8544c4c6773fbd1f211eea63f9fe82aece83eb1bbf3055caf8ac",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=14",
+        "detail_html_sha256": "cb6dd7871c612014613a863fb1dc4781543b3f42cbcb3a1dff47bb22a2b053f4",
+        "fuels": [
+          "Extreme 91",
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme 91",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ],
+          "payments": [
+            "SEAOIL Gift Cards"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "sychar-gas-station"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "POBLACION, MAGPET, NORTH COTABATO",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "lji888-gas-refilling-station",
+      "source_url": "https://www.seaoil.com.ph/stations/lji888-gas-refilling-station",
+      "station_name": "PUROK 1B APOKON TAGUM - DAVAO",
+      "address": "PUROK 1B BARANGAY APOKON TAGUM CITY DAVAO DEL NORTE",
+      "pair": "PUROK 1B APOKON TAGUM - DAVAO",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "217534ffb53f4ba6c3378b4e7674e49155b1a24ff9fbad6223a5eab2e8ad15fd",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=15",
+        "detail_html_sha256": "b9cced3fef94214534297fb3dfcbb57bbe0c0956bc61e20d65feebbbfff8062d",
+        "fuels": [
+          "Extreme 91",
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme 91",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ],
+          "payments": [
+            "SEAOIL Gift Cards"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "lji888-gas-refilling-station"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "PUROK 1B BARANGAY APOKON TAGUM CITY DAVAO DEL NORTE",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    },
+    {
+      "source_station_id": "lji888-gas-refilling-station-7e9ff",
+      "source_url": "https://www.seaoil.com.ph/stations/lji888-gas-refilling-station-7e9ff",
+      "station_name": "PUROK 1B APOKON TAGUM - DAVAO",
+      "address": "PUROK 1B BARANGAY APOKON TAGUM CITY DAVAO DEL NORTE",
+      "pair": "PUROK 1B APOKON TAGUM - DAVAO",
+      "reason": "Duplicate normalized name/address under distinct official source IDs; official detail differences do not establish physical distinctness or a historical relationship",
+      "status": "pending_review",
+      "listing_fingerprint": "1f169cf816c0f43ea404892672ee2bb807bfeb4011835a8646001939eaf62bda",
+      "evidence": {
+        "captured_at": "2026-10-09T00:21:43.558518+00:00",
+        "listing_page": "https://www.seaoil.com.ph/station-locations?1a2d56f2_page=15",
+        "detail_html_sha256": "9c843b6b8f51a8d0112e70dd206957df2e6ad664d21bc6ae003a04d4cd5c9a90",
+        "fuels": [
+          "Extreme 95",
+          "Extreme Diesel"
+        ],
+        "operating_hours": "Open 24 hours",
+        "collection_fields": {
+          "fuels": [
+            "Extreme 95",
+            "Extreme Diesel",
+            "SEAOIL Lubricants"
+          ]
+        },
+        "html_identity": {
+          "data-wf-domain": "www.seaoil.com.ph",
+          "data-wf-page": "654faf364d1a59b887e1ab71",
+          "data-wf-site": "61c12536f0981bde81950ac0",
+          "data-wf-collection": "654faf364d1a59b887e1ac8b",
+          "data-wf-item-slug": "lji888-gas-refilling-station-7e9ff"
+        },
+        "phone_links": [],
+        "contact_links": [],
+        "coordinates_present": false,
+        "historical_status_markers": [],
+        "landmark_text": "PUROK 1B BARANGAY APOKON TAGUM CITY DAVAO DEL NORTE",
+        "landmark_note": "Only the published address; no additional landmark was exposed in detail HTML"
+      },
+      "decision": "unresolved",
+      "reviewed_at": "2026-10-09T00:21:43.558518+00:00"
+    }
+  ]
+}

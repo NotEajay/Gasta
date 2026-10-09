@@ -1,9 +1,11 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
+import BrandMark from '@/components/ui/BrandMark';
+import { fetchReportStation, type ReportStation } from '@/lib/services/stationDirectory';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import ChipSelect from '@/components/ui/ChipSelect';
@@ -28,7 +30,6 @@ import {
   type FuelStationOption,
 } from '@/lib/services/communityReports';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
 
 type SubmittedReport = {
   region: string;
@@ -43,11 +44,14 @@ export default function ReportPriceScreen() {
   const params = useLocalSearchParams<{
     station_id?: string;
     station_name?: string;
+    station_address?: string;
     brand?: string;
     fuel_type?: string;
     region?: string;
+    source?: string;
+    company_slug?: string;
+    area?: string;
   }>();
-  const theme = useTheme();
   const { user, loading: authLoading } = useAuth();
   const initialRegion =
     typeof params.region === 'string' &&
@@ -63,6 +67,8 @@ export default function ReportPriceScreen() {
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>(initialFuelType);
   const [stations, setStations] = useState<FuelStationOption[]>([]);
   const [companies, setCompanies] = useState<{ id: string; name: string; slug: string }[]>([]);
+  const selectedStationId = typeof params.station_id === 'string' ? params.station_id : null;
+  const [selectedStation, setSelectedStation] = useState<ReportStation | null>(null);
   const [listedStationId, setListedStationId] = useState<string | null>(null);
   const [stationName, setStationName] = useState('');
   const [stationType, setStationType] = useState('');
@@ -73,6 +79,50 @@ export default function ReportPriceScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<SubmittedReport | null>(null);
+  const submitInFlight = useRef(false);
+  const [priceFocused, setPriceFocused] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollOffset = useRef(0);
+  const priceFieldRef = useRef<View>(null);
+  const notesFieldRef = useRef<View>(null);
+  const focusedField = useRef<View | null>(null);
+  const scrollFrame = useRef<number | null>(null);
+  const revealField = useCallback((target: View | null) => {
+    focusedField.current = target;
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    if (!target || !Keyboard.isVisible()) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const scroll = scrollRef.current;
+      if (!scroll || focusedField.current !== target) return;
+      scroll.getNativeScrollRef()?.measureInWindow((_x, top, _width, height) => {
+        target.measureInWindow((_fieldX, fieldTop, _fieldWidth, fieldHeight) => {
+          if (focusedField.current !== target || !Keyboard.isVisible()) return;
+          const bottom = Math.min(top + height, Keyboard.metrics()?.screenY ?? top + height) - spacing.md;
+          const overflow = fieldTop + fieldHeight - bottom;
+          if (overflow > 0) scroll.scrollTo({ y: scrollOffset.current + overflow, animated: true });
+        });
+      });
+    });
+  }, []);
+  useEffect(() => {
+    const shown = Keyboard.addListener('keyboardDidShow', () => revealField(focusedField.current));
+    const hidden = Keyboard.addListener('keyboardDidHide', () => { focusedField.current = null; });
+    return () => {
+      shown.remove(); hidden.remove();
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    };
+  }, [revealField]);
+  const changeStation = () => {
+    Keyboard.dismiss();
+    if (params.source === 'community-general') {
+      router.navigate({ pathname: '/(tabs)/prices/community', params: {
+        report_flow: 'community-general', report_company: params.company_slug ?? '',
+        report_region: region, report_area: params.area ?? '', report_request: String(Date.now()),
+      } });
+    } else if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/prices');
+  };
 
   const loadStations = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -80,17 +130,29 @@ export default function ReportPriceScreen() {
       return;
     }
     try {
-      const [list, brands] = await Promise.all([
-        fetchFuelStationsByRegion(region),
+      const [list, brands, picked] = await Promise.all([
+        selectedStationId ? Promise.resolve([] as FuelStationOption[]) : fetchFuelStationsByRegion(region),
         fetchOilCompanies(),
+        selectedStationId ? fetchReportStation(selectedStationId) : Promise.resolve(null),
       ]);
       setStations(list);
       setCompanies(brands);
-      setListedStationId((prev) => (list.some((s) => s.id === prev) ? prev : null));
+      setSelectedStation(picked);
+      if (picked) {
+        setListedStationId(picked.id);
+        setStationName(picked.name);
+        setCompanyId(picked.company.id);
+        setStationType(picked.brand_label || picked.company.name);
+      } else {
+        setListedStationId((prev) => (list.some((s) => s.id === prev) ? prev : null));
+      }
+      setFormError(null);
+    } catch {
+      setFormError(selectedStationId ? "We couldn't load the selected station. Please choose the station again." : "We couldn't load stations. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [region]);
+  }, [region, selectedStationId]);
 
   useEffect(() => {
     setLoading(true);
@@ -98,12 +160,7 @@ export default function ReportPriceScreen() {
   }, [loadStations]);
 
   useEffect(() => {
-    if (!stations.length) return;
-    const stationId = typeof params.station_id === 'string' ? params.station_id : null;
-    if (stationId && stations.some((station) => station.id === stationId)) {
-      applyListedStation(stationId);
-      return;
-    }
+    if (selectedStationId) return;
     if (typeof params.brand === 'string' && params.brand.trim() && !stationName) {
       const company = companies.find(
         (candidate) =>
@@ -113,7 +170,7 @@ export default function ReportPriceScreen() {
       setStationType(company?.name ?? params.brand.trim());
       setCompanyId(company?.id ?? null);
     }
-  }, [companies, params.brand, params.station_id, stationName, stations]);
+  }, [companies, params.brand, params.station_id, selectedStationId, stationName, stations]);
 
   const applyListedStation = (id: string) => {
     const station = stations.find((s) => s.id === id);
@@ -125,8 +182,14 @@ export default function ReportPriceScreen() {
   };
 
   const handleSubmit = async () => {
+    if (submitInFlight.current) return;
     if (!user) {
       router.push('/login');
+      return;
+    }
+
+    if (selectedStationId && !selectedStation) {
+      setFormError("We couldn't load the selected station. Please choose the station again.");
       return;
     }
 
@@ -152,18 +215,19 @@ export default function ReportPriceScreen() {
       return;
     }
 
-    const { data: fuelRow, error: fuelError } = await supabase
-      .from('fuel_types')
-      .select('id')
-      .eq('code', fuelType)
-      .single();
-    if (fuelError) {
-      setFormError(fuelError.message);
-      return;
-    }
-
+    submitInFlight.current = true;
     setSubmitting(true);
     try {
+      const { data: fuelRow, error: fuelError } = await supabase
+        .from('fuel_types')
+        .select('id')
+        .eq('code', fuelType)
+        .single();
+      if (fuelError) {
+        setFormError("We couldn't load this fuel type. Please try again.");
+        return;
+      }
+
       const knownId =
         companyId ?? (brand ? await findOilCompanyByName(brand) : null);
       const isCatalogBrand = Boolean(knownId);
@@ -174,6 +238,7 @@ export default function ReportPriceScreen() {
         (s) => s.name.trim().toLowerCase() === name.toLowerCase()
       );
       const stationId =
+        selectedStation?.id ??
         listedStationId ??
         match?.id ??
         (await createFuelStation({
@@ -201,9 +266,10 @@ export default function ReportPriceScreen() {
         fuel: fuelLabel,
         price: priceNum,
       });
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : 'Failed to submit report. Please try again.');
+    } catch {
+      setFormError("We couldn't submit your report right now. Please try again.");
     } finally {
+      submitInFlight.current = false;
       setSubmitting(false);
     }
   };
@@ -211,10 +277,10 @@ export default function ReportPriceScreen() {
   const resetForm = () => {
     setSubmitted(null);
     setFormError(null);
-    setStationType('');
-    setCompanyId(null);
-    setListedStationId(null);
-    setStationName('');
+    setStationType(selectedStation ? selectedStation.brand_label || selectedStation.company.name : '');
+    setCompanyId(selectedStation?.company.id ?? null);
+    setListedStationId(selectedStation?.id ?? null);
+    setStationName(selectedStation?.name ?? '');
     setPrice('');
     setNotes('');
   };
@@ -247,8 +313,7 @@ export default function ReportPriceScreen() {
    * Per-field errors, derived from exactly the checks `handleSubmit` already
    * runs. The order here mirrors the submit order (brand -> station -> price),
    * and only the first failing check surfaces, so this is presentation of the
-   * existing rules -- no rule is added, removed, or reordered, and the submit
-   * path itself is untouched.
+   * existing rules -- no validation rule is added, removed, or reordered.
    */
   const trimmedName = stationName.trim();
   const trimmedBrand = stationType.trim();
@@ -267,29 +332,21 @@ export default function ReportPriceScreen() {
       ? 'Enter a valid price per liter.'
       : undefined;
 
+  const StationContainer = selectedStationId ? View : FormSection;
+
   return (
-    <ScrollView
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled"
+      keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      onScroll={(event) => { scrollOffset.current = event.nativeEvent.contentOffset.y; }}
+      scrollEventThrottle={16}
       style={styles.flex}
       contentContainerStyle={styles.padding}>
       <SubPageHeader
         module="community"
-        title="Report a price"
-        subtitle="Help drivers see more recent fuel prices."
+        title={selectedStationId ? "Report station price" : "Report a price"}
+        subtitle={selectedStationId ? "Share the price you observed at this station." : "Help drivers see more recent fuel prices."}
       />
-
-      {/* Sets expectations up front so a submission is never read as instantly
-          trusted. The full rule is repeated on the success sheet. */}
-      <View style={styles.expectRow}>
-        <MaterialCommunityIcons
-          name="shield-check-outline"
-          size={13}
-          color={GasTaColors.forestMuted}
-        />
-        <Text style={styles.expectText}>
-          Reports are checked by other drivers, not by GasTa. A report stays Unverified until{' '}
-          {VERIFY_CONFIRMATIONS_REQUIRED} people confirm the price.
-        </Text>
-      </View>
 
       {/* WHERE */}
       {/*
@@ -297,7 +354,7 @@ export default function ReportPriceScreen() {
         reads as a fuel report rather than a generic form. `FormSection` is
         shared, so the identity is added around it instead of changing it.
       */}
-      <View style={styles.sectionHead}>
+      {selectedStationId ? <Text style={styles.fieldLabel}>Selected station</Text> : <View style={styles.sectionHead}>
         <View style={styles.sectionIcon}>
           <MaterialCommunityIcons name="map-marker-outline" size={14} color={GasTaColors.forest} />
         </View>
@@ -307,10 +364,27 @@ export default function ReportPriceScreen() {
             Region, brand, and the station you filled up at.
           </Text>
         </View>
-      </View>
-      <FormSection
-        module="community"
-        style={styles.formBlock}>
+      </View>}
+      <StationContainer style={selectedStationId ? styles.selectedCard : styles.formBlock}>
+        {selectedStationId ? (
+          selectedStation ? <View style={styles.stationDetails}>
+            <View style={styles.stationHeading}>
+              <BrandMark brand={selectedStation.company.name} slug={selectedStation.company.slug} size="sm" />
+              <View style={{ flex: 1 }}><Text style={styles.stationName}>{selectedStation.name}</Text><Text style={styles.sectionHint}>{selectedStation.brand_label || selectedStation.company.name}</Text></View>
+              <MaterialCommunityIcons name="lock-outline" size={16} color={GasTaColors.forestMuted} />
+            </View>
+            {selectedStation.address ? <View style={styles.stationHeading}><MaterialCommunityIcons name="map-marker-outline" size={15} color={GasTaColors.forestMuted} /><Text style={styles.stationAddress}>{selectedStation.address}</Text></View> : null}
+            <View style={styles.stationFooter}>
+              <Text style={styles.sectionHint}>{DOE_REGIONS.find((item) => item.code === region)?.name}</Text>
+              {selectedStation.source_type === 'official_directory' ? <Text style={styles.provenance}>Official directory</Text> : null}
+            </View>
+            <Pressable accessibilityRole="button" onPress={changeStation} style={styles.changeStation}><Text style={styles.changeStationText}>Change station</Text></Pressable>
+          </View> : <View style={styles.stationDetails}>
+            <Text style={styles.stationAddress}>We couldn't load the selected station. Please choose the station again.</Text>
+            <PrimaryButton label="Change station" variant="secondary" onPress={changeStation} />
+            <PrimaryButton label="Try again" variant="secondary" onPress={() => { setLoading(true); void loadStations(); }} />
+          </View>
+        ) : <>
         <ChipSelect
           label="Region"
           options={DOE_REGIONS.map((r) => ({ value: r.code, label: r.name }))}
@@ -368,19 +442,15 @@ export default function ReportPriceScreen() {
             New stations are saved only for this region. They will not appear in other regions.
           </Text>
         )}
-      </FormSection>
+        </>}
+      </StationContainer>
 
-      {/* WHAT */}
-      <View style={styles.sectionHead}>
-        <View style={styles.sectionIcon}>
-          <MaterialCommunityIcons name="gas-station" size={14} color={GasTaColors.forest} />
-        </View>
-        <View style={styles.sectionHeadCopy}>
-          <Text style={styles.sectionTitle}>What</Text>
-          <Text style={styles.sectionHint}>Fuel grade and the price per liter.</Text>
-        </View>
+      <View style={styles.expectRow}>
+        <MaterialCommunityIcons name="shield-check-outline" size={18} color={GasTaColors.forest} />
+        <Text style={styles.expectText}>Your report will appear as Unverified until {VERIFY_CONFIRMATIONS_REQUIRED} other drivers confirm the price.</Text>
       </View>
-      <FormSection module="community" style={styles.formBlock}>
+
+      <View>
         <ChipSelect
           label="Fuel type"
           options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
@@ -388,34 +458,26 @@ export default function ReportPriceScreen() {
           onChange={setFuelType}
           module="community"
         />
-        <LabeledInput
-          label="Price you paid (₱/L)"
-          value={price}
-          error={priceError}
-          onChangeText={setPrice}
-          keyboardType="decimal-pad"
-          placeholder="e.g. 62.50"
-        />
-      </FormSection>
-
-      {/* OPTIONAL */}
-      <View style={styles.sectionHead}>
-        <View style={styles.sectionIcon}>
-          <MaterialCommunityIcons name="note-text-outline" size={14} color={GasTaColors.textSoft} />
-        </View>
-        <View style={styles.sectionHeadCopy}>
-          <Text style={[styles.sectionTitle, styles.sectionTitleMuted]}>Optional</Text>
-          <Text style={styles.sectionHint}>Anything that helps others confirm this price.</Text>
-        </View>
       </View>
-      <FormSection module="community" style={styles.formBlock}>
-        <LabeledInput
-          label="Notes"
-          value={notes}
-          onChangeText={setNotes}
-          placeholder="Cash price, promo, etc."
-        />
-      </FormSection>
+
+      <View ref={priceFieldRef} collapsable={false} style={styles.priceSection}>
+        <Text style={styles.priceLabel}>OBSERVED PRICE</Text>
+        <View style={[styles.priceInputRow, priceFocused && styles.priceInputFocused, priceError && styles.priceInputError]}>
+          <Text style={styles.priceUnit}>₱</Text>
+          <TextInput accessibilityLabel="Observed price per liter" value={price} onChangeText={setPrice}
+            onFocus={() => { setPriceFocused(true); revealField(priceFieldRef.current); }} onBlur={() => setPriceFocused(false)}
+            keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={GasTaColors.textSoft} style={styles.priceInput} />
+          <Text style={styles.priceUnit}>/ L</Text>
+        </View>
+        {priceError ? <Text style={styles.fieldError}>{priceError}</Text> : null}
+      </View>
+
+      <View ref={notesFieldRef} collapsable={false}>
+        <LabeledInput label="Notes (optional)" value={notes} onChangeText={setNotes}
+          onFocus={() => revealField(notesFieldRef.current)} multiline
+          placeholder="Cash price, promo, landmark, or other useful detail"
+          style={styles.notesInput} />
+      </View>
 
       {/* Non-field failures (fuel-type lookup, submit errors) still surface as
           a single notice; field-level messages render inline above. */}
@@ -426,11 +488,13 @@ export default function ReportPriceScreen() {
         </View>
       ) : null}
 
-      <PrimaryButton
-        label={submitting ? 'Submitting…' : 'Submit report'}
-        onPress={handleSubmit}
-        disabled={submitting}
-      />
+      <Pressable accessibilityRole="button" accessibilityLabel={submitting ? 'Submitting…' : 'Submit report'}
+        accessibilityState={{ disabled: submitting || (!!selectedStationId && !selectedStation), busy: submitting }}
+        onPress={handleSubmit} disabled={submitting || (!!selectedStationId && !selectedStation)}
+        style={({ pressed }) => [styles.submitButton, pressed && styles.submitPressed, (submitting || (!!selectedStationId && !selectedStation)) && styles.submitDisabled]}>
+        {submitting ? <ActivityIndicator color={GasTaColors.white} /> : <MaterialCommunityIcons name="send-outline" size={18} color={GasTaColors.white} />}
+        <Text style={styles.submitLabel}>{submitting ? 'Submitting…' : 'Submit report'}</Text>
+      </Pressable>
 
       <Modal
         visible={submitted !== null}
@@ -440,22 +504,23 @@ export default function ReportPriceScreen() {
         <Pressable style={styles.modalBackdrop} onPress={resetForm}>
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.successBadge}>
-              <Text style={styles.successCheck}>✓</Text>
+              <MaterialCommunityIcons name="shield-check-outline" size={25} color={GasTaColors.forest} />
             </View>
-            <Text style={[styles.successTitle, { color: theme.text }]}>
+            <Text style={styles.successTitle}>
               Submitted for community verification
             </Text>
-            <Text style={[styles.successBody, { color: theme.textSecondary }]}>
+            <Text style={styles.successBody}>
               GasTa hasn&apos;t verified this yet. It appears as Unverified until{' '}
               {VERIFY_CONFIRMATIONS_REQUIRED} other drivers confirm the price.
             </Text>
             {submitted ? (
-              <View style={[styles.summary, { backgroundColor: theme.overlay }]}>
-                <Text style={[styles.summaryLine, { color: theme.text }]}>{submitted.station}</Text>
-                <Text style={[styles.summaryMeta, { color: theme.textSecondary }]}>
+              <View style={styles.summary}>
+                <Text style={styles.unverifiedBadge}>Unverified</Text>
+                <Text style={styles.summaryLine}>{submitted.station}</Text>
+                <Text style={styles.summaryMeta}>
                   {submitted.brand} · {submitted.fuel} · {submitted.region}
                 </Text>
-                <Text style={[styles.summaryPrice, { color: theme.text }]}>
+                <Text style={styles.summaryPrice}>
                   {formatCurrency(submitted.price)}/L
                 </Text>
               </View>
@@ -473,11 +538,36 @@ export default function ReportPriceScreen() {
         </Pressable>
       </Modal>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  flex: { flex: 1, backgroundColor: GasTaColors.creamLight },
+  fieldLabel: { fontSize: 12, fontWeight: '600', color: GasTaColors.forestMuted, marginBottom: 8 },
+  selectedCard: { backgroundColor: GasTaColors.glassFillStrong, borderColor: GasTaColors.forestBorder, borderWidth: 1, borderRadius: radii.md, padding: spacing.md, shadowColor: GasTaColors.forest, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6 },
+  stationDetails: { gap: 10 },
+  stationHeading: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stationName: { color: GasTaColors.forestDark, fontSize: 16, lineHeight: 22, fontWeight: '700' },
+  stationAddress: { flexShrink: 1, color: GasTaColors.forestMuted, fontSize: 12, lineHeight: 18 },
+  stationFooter: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  provenance: { backgroundColor: GasTaColors.forestGlow, color: GasTaColors.forest, paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill, fontSize: 10 },
+  changeStation: { alignSelf: 'flex-start', paddingVertical: 4 },
+  changeStationText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '600' },
+  priceSection: { marginVertical: spacing.md },
+  priceLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, color: GasTaColors.forestMuted, marginBottom: 8 },
+  priceInputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, borderRadius: 16, paddingHorizontal: 16 },
+  priceInputFocused: { borderColor: GasTaColors.forest },
+  priceInputError: { borderColor: GasTaColors.error },
+  priceInput: { flex: 1, minWidth: 0, minHeight: 58, paddingVertical: 12, color: GasTaColors.forestDark, fontSize: 28, fontWeight: '700' },
+  priceUnit: { color: GasTaColors.forestMuted, fontSize: 16, fontWeight: '600' },
+  fieldError: { color: GasTaColors.error, fontSize: 12, marginTop: 6 },
+  notesInput: { minHeight: 74, textAlignVertical: 'top', backgroundColor: GasTaColors.white, borderColor: GasTaColors.glassBorderSubtle, color: GasTaColors.forestDark },
+  submitButton: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, minHeight: 50, borderRadius: 16, backgroundColor: GasTaColors.forest, shadowColor: GasTaColors.forest, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12, shadowRadius: 6 },
+  submitPressed: { backgroundColor: GasTaColors.forestDark },
+  submitDisabled: { opacity: 0.5 },
+  submitLabel: { color: GasTaColors.white, fontSize: 15, fontWeight: '700' },
+  unverifiedBadge: { alignSelf: 'flex-start', color: GasTaColors.forest, backgroundColor: GasTaColors.forestGlow, fontSize: 10, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill, marginBottom: 10 },
   // The form keeps a narrower column than the list screens, since inputs and
   // chip rows read worse when they get too wide.
   padding: {
@@ -499,7 +589,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.xs,
-    marginBottom: spacing.md,
+    marginVertical: spacing.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radii.sm,
@@ -541,7 +631,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     color: GasTaColors.forestDark,
   },
-  sectionTitleMuted: { color: GasTaColors.textMuted },
   sectionHint: {
     fontSize: 11,
     lineHeight: 15,
@@ -593,40 +682,43 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: GasTaColors.forest,
+    backgroundColor: GasTaColors.forestGlow,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.md,
   },
-  successCheck: {
-    color: GasTaColors.textOnForest,
-    fontSize: 24,
-    fontWeight: '800',
-  },
   successTitle: {
+    color: GasTaColors.forestDark,
     fontSize: 20,
     fontWeight: '800',
     marginBottom: spacing.xs,
   },
   successBody: {
+    color: GasTaColors.forestMuted,
     fontSize: 14,
     lineHeight: 20,
     marginBottom: spacing.md,
   },
   summary: {
+    backgroundColor: GasTaColors.creamLight,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
     borderRadius: 12,
     padding: spacing.md,
     marginBottom: spacing.md,
   },
   summaryLine: {
+    color: GasTaColors.forestDark,
     fontSize: 16,
     fontWeight: '700',
   },
   summaryMeta: {
+    color: GasTaColors.forestMuted,
     fontSize: 13,
     marginTop: 4,
   },
   summaryPrice: {
+    color: GasTaColors.forestDark,
     fontSize: 20,
     fontWeight: '800',
     marginTop: spacing.sm,

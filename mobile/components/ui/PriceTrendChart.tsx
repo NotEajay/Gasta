@@ -3,10 +3,12 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
+import { formatDoeTimelineDate } from '@/lib/doeCoverage';
 import { formatCurrency } from '@/lib/format';
 
 export type TrendPoint = {
   bulletin_date: string;
+  coverage_end: string | null;
   price_per_liter: number;
 };
 
@@ -59,19 +61,21 @@ const Y_AXIS_W = 52;
  * on (x2, y2), so consecutive segments join seamlessly without gaps.
  */
 export default function PriceTrendChart({
-  points,
+  points: allPoints,
   caption,
   height = 150,
   downColor = GasTaColors.forest,
   upColor = '#E0533D',
 }: Props) {
+  const points = allPoints.filter((point) => point.coverage_end != null)
+    .sort((a, b) => a.coverage_end!.localeCompare(b.coverage_end!));
+  const unresolvedCount = allPoints.length - points.length;
   if (points.length < 2) {
     return (
       <View style={styles.empty}>
         <Text style={styles.emptyTitle}>Not enough history yet</Text>
         <Text style={styles.emptyBody}>
-          DOE bulletins build up over time. Once a second week is loaded, the real price trend
-          appears here.
+          {unresolvedCount ? 'Coverage dates are unavailable for some bulletins. At least two confirmed periods are needed to plot this trend.' : 'DOE bulletins build up over time. Once a second week is loaded, the real price trend appears here.'}
         </Text>
       </View>
     );
@@ -110,6 +114,7 @@ export default function PriceTrendChart({
   });
 
   return (
+    <View>
     <PlotCanvas
       sampled={sampled}
       height={height}
@@ -123,6 +128,8 @@ export default function PriceTrendChart({
       max={max}
       yTicks={yTicks}
     />
+    {unresolvedCount ? <Text style={styles.emptyBody}>{unresolvedCount} bulletin{unresolvedCount === 1 ? '' : 's'} not plotted: coverage end date unavailable.</Text> : null}
+    </View>
   );
 }
 
@@ -173,7 +180,7 @@ function PlotCanvas({
       x: (i / (sampled.length - 1)) * plotWidth,
       y: yPx(pt.price_per_liter),
       value: pt.price_per_liter,
-      date: pt.bulletin_date,
+      date: pt.coverage_end!,
     }));
   }, [plotWidth, sampled, yPx]);
 
@@ -350,7 +357,7 @@ function PlotCanvas({
                     key={`xl${idx}`}
                     style={[styles.xTickText, { left: dot.x - 16 }]}
                   >
-                    {formatXDate(sampled[idx].bulletin_date)}
+                    {formatDoeTimelineDate(sampled[idx].coverage_end!)}
                   </Text>
                 );
               })}
@@ -394,12 +401,6 @@ function MovementTag({ delta }: { delta: number }) {
       </Text>
     </View>
   );
-}
-
-function formatXDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────

@@ -1,3 +1,7 @@
+import { useEffect, useState } from 'react';
+import ReportStationSelector, { type ReportStationContext } from '@/components/ReportStationSelector';
+import CompanyEstimateCard from '@/components/ui/CompanyEstimateCard';
+import OfficialStationDirectory from '@/components/OfficialStationDirectory';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -22,7 +26,7 @@ export type AreaPriceRow = {
   slug: string;
   brand: string;
   areaName: string;
-  price: number;
+  price: number | null;
   source: 'doe_area';
   status?: string;
 };
@@ -32,6 +36,7 @@ type Props = {
   areaRows?: AreaPriceRow[];
   fuelType?: string;
   region?: string;
+  selectedArea?: string;
 };
 
 const PRICE_FOREST = GasTaColors.forestDark;
@@ -72,8 +77,19 @@ export default function StationPriceTable({
   areaRows = [],
   fuelType,
   region,
+  selectedArea,
 }: Props) {
   const router = useRouter();
+  const filterKey = JSON.stringify([region ?? '', selectedArea ?? '', fuelType ?? '']);
+  const [unavailableScope, setUnavailableScope] = useState<string | null>(null);
+  const showUnavailable = unavailableScope === filterKey;
+  useEffect(() => { setUnavailableScope(null); }, [filterKey]);
+  const hasPrice = (row: AreaPriceRow) => typeof row.price === 'number' && Number.isFinite(row.price);
+  const availableRows = areaRows.filter(hasPrice);
+  const unavailableRows = areaRows.filter((row) => !hasPrice(row));
+  const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
+  useEffect(() => { setExpandedCompany(null); }, [region, selectedArea, fuelType]);
+  const [reportContext, setReportContext] = useState<ReportStationContext | null>(null);
   const reportFor = (params: Record<string, string>) => {
     router.push({
       pathname: '/(tabs)/prices/report',
@@ -93,8 +109,40 @@ export default function StationPriceTable({
     );
   }
 
+  const renderCompany = (row: AreaPriceRow) => {
+    const reportCompany = () => setReportContext({
+      company: row.brand, slug: row.slug,
+      area: selectedArea ?? (row.areaName === region || row.areaName === 'Region-wide DOE price' ? '' : row.areaName),
+      region: region ?? '', fuelType: fuelType ?? '',
+      doeContext: row.status ?? 'DOE Area/Brand Estimate',
+    });
+    if (row.slug === 'seaoil') {
+      return <OfficialStationDirectory key={row.id}
+        selectedRegion={region}
+        selectedArea={selectedArea ?? (row.areaName === region ? '' : row.areaName)}
+        doeSummary={{ price: hasPrice(row) ? row.price : null, sourceLabel: row.status ?? 'DOE Area/Brand Estimate' }}
+        unavailableLabel={`No available price in this ${selectedArea ? 'area' : 'region'}`}
+        expanded={expandedCompany === row.slug}
+        onToggle={() => setExpandedCompany((current) => current === row.slug ? null : row.slug)}
+        onReport={reportCompany} />;
+    }
+    return <CompanyEstimateCard key={row.id}
+      company={row.brand} slug={row.slug} price={hasPrice(row) ? row.price : null}
+      unavailableLabel={`No available price in this ${selectedArea ? 'area' : 'region'}`}
+      sourceLabel={row.status ?? 'DOE Area/Brand Estimate'}
+      expanded={expandedCompany === row.slug}
+      onToggle={() => setExpandedCompany((current) => current === row.slug ? null : row.slug)}
+      onReport={reportCompany}>
+      <Text style={styles.directoryTitle}>Station directory</Text>
+      <Text style={styles.directoryCopy}>Official branch directory not available yet.</Text>
+      <Text style={styles.directoryCopy}>You can still report a price for a known station.</Text>
+    </CompanyEstimateCard>;
+
+  };
+
   return (
-    <View style={styles.list}>
+    <>
+    <View style={rows.length ? styles.list : undefined}>
       {/*
         Flat rows: logo, station name, price right-aligned, source/status
         underneath. No column header row -- "Brand / Station / Price" repeats
@@ -186,81 +234,38 @@ export default function StationPriceTable({
         );
       })}
 
-      {/*
-        DOE area rows reuse the same row language as the station rows so they
-        read as a continuation of the list rather than a second competing
-        table. The dashed logo frame and the note above keep the source
-        distinction visible without reintroducing a section header block.
-      */}
-      {areaRows.length > 0 ? (
-        <>
-          <View style={styles.areaNote}>
-            <MaterialCommunityIcons
-              name="storefront-outline"
-              size={13}
-              color={GasTaColors.textSoft}
-            />
-            <Text style={styles.areaNoteText}>
-              Exact branch price unavailable · Showing DOE area or region-wide estimate
-            </Text>
-          </View>
-          {areaRows.map((row, index) => {
-            const areaLabel = row.areaName;
-            const isLast = index === areaRows.length - 1;
-            return (
-              <View
-                key={row.id}
-                style={[styles.row, !isLast && styles.divider, styles.areaRow]}>
-                <BrandMark brand={row.brand} slug={row.slug} size="sm" />
-
-                <View style={styles.rowMain}>
-                  <Text style={styles.station} numberOfLines={1}>
-                    {row.brand} · {areaLabel}
-                  </Text>
-                  <Text style={styles.areaSub} numberOfLines={1}>
-                    {row.status ?? 'DOE Area/Brand Estimate'}
-                  </Text>
-                </View>
-
-                <View style={styles.areaRight}>
-                  <Text style={styles.areaPrice}>
-                    {formatCurrency(row.price)}
-                    <Text style={styles.priceUnit}>/L</Text>
-                  </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Report a price for ${row.brand}`}
-                    hitSlop={6}
-                    onPress={() =>
-                      reportFor({
-                        brand: row.brand,
-                        area: areaLabel,
-                        ...(fuelType ? { fuel_type: fuelType } : {}),
-                        ...(region ? { region } : {}),
-                      })
-                    }
-                    style={({ pressed }) => [
-                      styles.reportButton,
-                      pressed && styles.reportButtonPressed,
-                    ]}>
-                    <MaterialCommunityIcons
-                      name="map-marker-plus-outline"
-                      size={12}
-                      color={GasTaColors.forest}
-                    />
-                    <Text style={styles.reportButtonText}>Report station price</Text>
-                  </Pressable>
-                </View>
-              </View>
-            );
-          })}
-        </>
-      ) : null}
     </View>
+      {/* Exact DOE company cards remain separate from branch observations. */}
+      {areaRows.length > 0 ? (
+        <View style={styles.companySection}>
+          {!availableRows.length ? <Text style={styles.noPrices}>No DOE prices available for this {selectedArea ? 'area' : 'region'}</Text> : null}
+          <View style={styles.companyStack}>{availableRows.map(renderCompany)}</View>
+          {unavailableRows.length ? <>
+            <Pressable accessibilityRole="button"
+              accessibilityLabel={showUnavailable ? 'Hide companies without available prices' : availableRows.length ? 'Show companies without available prices' : 'View supported companies'}
+              accessibilityState={{ expanded: showUnavailable }}
+              onPress={() => { setUnavailableScope(showUnavailable ? null : filterKey); setExpandedCompany(null); }}
+              style={({ pressed }) => [styles.disclosure, pressed && { opacity: 0.7 }]}>
+              <Text style={styles.disclosureText}>{showUnavailable ? 'Hide companies without available prices' : availableRows.length ? `Show companies without available prices (${unavailableRows.length})` : `View supported companies (${unavailableRows.length})`}</Text>
+              <MaterialCommunityIcons name={showUnavailable ? 'chevron-up' : 'chevron-down'} size={18} color={GasTaColors.forest} />
+            </Pressable>
+            {showUnavailable ? <View style={styles.companyStack}>{unavailableRows.map(renderCompany)}</View> : null}
+          </> : null}
+        </View>
+      ) : null}
+    <ReportStationSelector context={reportContext} onClose={() => setReportContext(null)} />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
+  companySection: { gap: spacing.sm, marginBottom: spacing.md },
+  companyStack: { gap: spacing.sm },
+  noPrices: { color: GasTaColors.forestMuted, fontSize: 13, lineHeight: 19, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  disclosure: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 40, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginTop: spacing.xs, borderRadius: radii.md, borderWidth: StyleSheet.hairlineWidth, borderColor: GasTaColors.forestBorder, backgroundColor: GasTaColors.creamLight },
+  disclosureText: { flex: 1, color: GasTaColors.forest, fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  directoryTitle: { fontSize: 14, fontWeight: '600', color: GasTaColors.forestDark },
+  directoryCopy: { fontSize: 12, lineHeight: 18, color: GasTaColors.forestMuted },
   /*
    * A grouped ledger rather than a stack of white cards. The section surface is
    * a warm creamLight so the page keeps its cream identity; white is reserved
@@ -347,22 +352,6 @@ const styles = StyleSheet.create({
   },
 
   /* ---- DOE area rows, same list language ---- */
-  areaNote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.xs,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: GasTaColors.forestBorder,
-  },
-  areaNoteText: {
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '700',
-    color: GasTaColors.textSoft,
-  },
   areaRow: { backgroundColor: GasTaColors.cream },
   areaSub: {
     fontSize: 11,

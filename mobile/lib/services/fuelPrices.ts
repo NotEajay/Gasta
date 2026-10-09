@@ -1,3 +1,4 @@
+import { resolveDoeCoverage, type DoeCoverageMetadata } from '@/lib/doeCoverage';
 import { supabase } from '@/lib/supabase';
 import type { FuelPriceBulletin } from '@/types';
 
@@ -239,11 +240,17 @@ export async function fetchBulletinAreas(
   return [...new Set((data ?? []).map((row) => row.area_name).filter(Boolean))];
 }
 
+export type PriceTrendPoint = {
+  bulletin_date: string;
+  coverage_end: string | null;
+  price_per_liter: number;
+};
+
 export async function fetchPriceTrend(
   regionCode: string,
   fuelTypeCode: string,
   oilCompanySlug: string
-): Promise<{ bulletin_date: string; price_per_liter: number }[]> {
+): Promise<PriceTrendPoint[]> {
   const [regionId, fuelTypeId] = await Promise.all([
     resolveRegionId(regionCode),
     resolveFuelTypeId(fuelTypeCode),
@@ -261,7 +268,7 @@ export async function fetchPriceTrend(
     .select(
       `
       price_per_liter,
-      bulletin:fuel_price_bulletins ( bulletin_date )
+      bulletin:fuel_price_bulletins ( bulletin_date, notes, source_urls, source_pdf_url )
     `
     )
     .eq('region_id', regionId)
@@ -271,7 +278,7 @@ export async function fetchPriceTrend(
 
   if (error) throw error;
 
-  type TrendRow = { price_per_liter: number; bulletin: { bulletin_date: string } | null };
+  type TrendRow = { price_per_liter: number; bulletin: DoeCoverageMetadata | null };
 
   const today = new Date();
   const todayIso = [
@@ -284,17 +291,17 @@ export async function fetchPriceTrend(
     .map((row) => ({
       bulletin_date: row.bulletin?.bulletin_date ?? '',
       price_per_liter: row.price_per_liter,
+      coverage_end: row.bulletin ? resolveDoeCoverage(row.bulletin, regionCode)?.coverage_end ?? null : null,
     }))
     .filter((row) => row.bulletin_date && row.bulletin_date <= todayIso);
 
   // One point per bulletin week for this region + company + fuel (newest last).
-  const byWeek = new Map<string, number>();
+  const byWeek = new Map<string, PriceTrendPoint>();
   for (const row of rows) {
-    byWeek.set(row.bulletin_date, row.price_per_liter);
+    byWeek.set(row.bulletin_date, row);
   }
-  return [...byWeek.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([bulletin_date, price_per_liter]) => ({ bulletin_date, price_per_liter }));
+  return [...byWeek.values()]
+    .sort((a, b) => (a.coverage_end ?? a.bulletin_date).localeCompare(b.coverage_end ?? b.bulletin_date));
 }
 
 /** Cheapest brand for a region in its most recent DOE week. */

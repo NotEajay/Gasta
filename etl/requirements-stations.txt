@@ -1,0 +1,2 @@
+# Install alongside requirements.txt; no browser or geocoding dependency.
+lxml>=5.0,<7

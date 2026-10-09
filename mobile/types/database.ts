@@ -423,10 +423,21 @@ export interface Database {
           id: string;
           name: string;
           address: string | null;
-          region_id: string;
+          region_id: string | null;
           oil_company_id: string;
           latitude: number | null;
           longitude: number | null;
+          brand_label: string | null;
+          source_type: 'community' | 'official_directory';
+          source_url: string | null;
+          source_station_id: string | null;
+          directory_key: string | null;
+          city: string | null;
+          province: string | null;
+          directory_region: string | null;
+          fuel_types: Json | null;
+          operating_hours: string | null;
+          last_synced_at: string | null;
           created_at: string;
         };
         Insert: {

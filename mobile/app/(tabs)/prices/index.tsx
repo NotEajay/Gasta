@@ -47,6 +47,7 @@ import {
   communityReportMatchesRecency,
   confirmCommunityReport,
   fetchCommunityReports,
+  fetchOilCompanies,
   fetchConfirmedReportIds,
   fetchPendingReports,
   fetchFreshVerifiedPrices,
@@ -68,8 +69,10 @@ import {
   fetchPriceTrend,
   type BulletinWeek,
   type FuelPriceRow,
+  type PriceTrendPoint,
 } from '@/lib/services/fuelPrices';
 import { matchBulletinArea, resolveCurrentPlace } from '@/lib/services/location';
+import { buildOfficialDoeRows, type SupportedFuelCompany } from '@/lib/officialCompanyRows';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useTheme } from '@/lib/useTheme';
 
@@ -193,22 +196,6 @@ function buildStationPriceRows(
   areaRows.sort((a, b) => a.brand.localeCompare(b.brand));
 
   return { stationRows, areaRows };
-}
-
-function buildOfficialDoeRows(doePrices: FuelPriceRow[]): AreaPriceRow[] {
-  return doePrices
-    .map((row) => ({
-      id: `doe-${row.id}`,
-      slug: row.oil_company.slug,
-      brand: row.oil_company.name,
-      areaName: row.area_name || row.region.code,
-      price: row.price_per_liter,
-      source: 'doe_area' as const,
-      status: row.area_name
-        ? 'DOE Area/Brand Estimate'
-        : 'DOE Region-Wide Estimate',
-    }))
-    .sort((a, b) => a.brand.localeCompare(b.brand));
 }
 
 type PricesView = 'now' | 'history';
@@ -491,8 +478,9 @@ export default function FuelPricesScreen() {
   const [pastBulletins, setPastBulletins] = useState<BulletinWeek[]>([]);
   const [selectedPastDate, setSelectedPastDate] = useState<string | null>(null);
   const [prices, setPrices] = useState<FuelPriceRow[]>([]);
+  const [supportedCompanies, setSupportedCompanies] = useState<SupportedFuelCompany[]>([]);
   const [pastWeekPrices, setPastWeekPrices] = useState<FuelPriceRow[]>([]);
-  const [trend, setTrend] = useState<{ bulletin_date: string; price_per_liter: number }[]>([]);
+  const [trend, setTrend] = useState<PriceTrendPoint[]>([]);
   /**
    * Explicit history lifecycle. The chart used to render "Not enough history
    * yet" purely because `trend` was still `[]`, which conflated "not requested
@@ -590,7 +578,7 @@ export default function FuelPricesScreen() {
       // confirmation queue and the station-row inputs keep showing every
       // pending report (pre-existing behaviour), while the period-scoped
       // community feed is loaded separately by `loadCommunityReports`.
-      const [latest, pendingReports, regionStations] = await Promise.all([
+      const [latest, pendingReports, regionStations, companies] = await Promise.all([
         fetchLatestBulletinForRegion(region),
         fetchPendingReports(50, { regionCode: region }).catch((e) => {
           console.warn('Pending community reports failed', e);
@@ -600,8 +588,11 @@ export default function FuelPricesScreen() {
           console.warn('Fuel stations failed', e);
           return [];
         }),
+        // Canonical catalog is independent of DOE coverage in the active area.
+        fetchOilCompanies(),
       ]);
 
+      setSupportedCompanies(companies);
       setBulletin(latest);
       setPendingCommunity(pendingReports);
       setStations(regionStations);
@@ -707,6 +698,7 @@ export default function FuelPricesScreen() {
 
     let cancelled = false;
     setPricesLoading(true);
+    setPrices([]);
 
     const run = async () => {
       try {
@@ -864,8 +856,10 @@ export default function FuelPricesScreen() {
   );
 
   const officialRows = useMemo(
-    () => ({ stationRows: [], areaRows: buildOfficialDoeRows(prices) }),
-    [prices]
+    () => ({ stationRows: [], areaRows: buildOfficialDoeRows(supportedCompanies, prices, {
+      bulletinId: bulletin?.id ?? null, region, area: areaName, fuelType,
+    }) }),
+    [supportedCompanies, prices, bulletin, region, areaName, fuelType]
   );
 
   const communityForFuel = useMemo(
@@ -1561,82 +1555,19 @@ export default function FuelPricesScreen() {
             </>
           ) : null}
 
-          {/* Official DOE data stays separate from station observations. */}
+          {/* DOE estimates stay separate from branch observations. */}
+          <View style={styles.doeInfoStrip}>
+            <MaterialCommunityIcons name="information-outline" size={15} color={GasTaColors.forestMuted} />
+            <Text style={styles.doeInfoBody}>
+              <Text style={styles.doeInfoLead}>DOE prices are area or regional estimates.</Text>{' '}
+              Exact branch prices may differ.
+            </Text>
+          </View>
           <View style={styles.listHead}>
             <Text style={styles.sectionTitle}>Official DOE Prices</Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Report a price"
-              hitSlop={8}
-              onPress={() => router.push('/(tabs)/prices/report')}
-              style={({ pressed }) => [styles.reportCta, pressed && styles.pressed]}>
-              <MaterialCommunityIcons
-                name="plus-circle-outline"
-                size={15}
-                color={GasTaColors.forest}
-              />
-              <Text style={styles.reportCtaText}>Report a price</Text>
-            </Pressable>
-          </View>
-          <View style={styles.doeInfoStrip}>
-            <View style={styles.doeInfoIcon}>
-              <MaterialCommunityIcons
-                name="file-document-outline"
-                size={16}
-                color={GasTaColors.forest}
-              />
-            </View>
-            <View style={styles.doeInfoCopy}>
-              <Text style={styles.doeEyebrow}>DOE WEEKLY BASELINE</Text>
-              <Text style={styles.doePrimaryMeta} numberOfLines={1}>
-                {fuelLabel} · {regionDisplay}
-              </Text>
-              <Text style={styles.doeSecondaryMeta} numberOfLines={1}>
-                {areaName || 'Region-wide'}
-                {bulletin ? ` · ${formatBulletinRange(bulletin.bulletin_date)}` : ''}
-              </Text>
-              <Text style={styles.doeDisclaimerText} numberOfLines={1}>
-                Official bulletin · Not exact branch pump prices
-              </Text>
-            </View>
           </View>
 
-          {/*
-            Three distinct empties, kept separate so none of them lies:
-
-              - still loading        -> nothing rendered yet (handled by the
-                                        surrounding loaders)
-              - bulletin has no price
-                                    -> say which fuel and which bulletin, and
-                                        point at the selector
-              - no stations at all   -> the existing "filters" message
-
-            The middle case is the one that used to leak a table of em-dashes.
-            Region, fuel and bulletin are all read from state, so this is
-            honest for any region and any week, not just North Luzon.
-
-            `pricesLoading` is part of the guard on purpose. A fuel switch
-            re-runs the price fetch, and `hasAnyPrice` goes false in the window
-            before the new rows land; without this the message would flash on
-            every switch, including switches that do have data. Gating on the
-            fetch actually settling means the message only ever describes a
-            result, never a gap.
-          */}
-          {!hasAnyPrice && bulletin && !loading && !pricesLoading ? (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyCardTitle}>
-                No {fuelLabel} prices in this bulletin
-              </Text>
-              <Text style={styles.emptyCardBody}>
-                The {formatBulletinRange(bulletin.bulletin_date)} bulletin for {regionLabel} does not
-                include prices for this fuel type. Try another fuel.
-              </Text>
-              <Text style={styles.emptyCardHint}>
-                You can still browse past prices below, and report a price you see at the
-                station.
-              </Text>
-            </View>
-          ) : officialRows.stationRows.length === 0 && officialRows.areaRows.length === 0 ? (
+          {officialRows.areaRows.length === 0 ? (
             <Text style={styles.emptyLine}>
               No DOE prices for these filters. Try another area or fuel type.
             </Text>
@@ -1646,6 +1577,7 @@ export default function FuelPricesScreen() {
               areaRows={officialRows.areaRows}
               fuelType={fuelType}
               region={region}
+              selectedArea={areaName}
             />
           )}
 
@@ -2338,52 +2270,24 @@ const styles = StyleSheet.create({
   doeInfoStrip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    minHeight: 82,
+    gap: 7,
+    minHeight: 44,
     marginBottom: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: 'rgba(1, 68, 33, 0.05)',
-  },
-  doeInfoIcon: {
-    width: 30,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: radii.sm,
-    backgroundColor: GasTaColors.forestGlow,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.creamLight,
   },
-  doeInfoCopy: {
+  doeInfoBody: {
     flex: 1,
     minWidth: 0,
-  },
-  doeEyebrow: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    color: GasTaColors.forest,
-    marginBottom: 2,
-  },
-  doePrimaryMeta: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: GasTaColors.textPrimary,
-  },
-  doeSecondaryMeta: {
     fontSize: 11,
-    lineHeight: 15,
-    color: GasTaColors.textMuted,
-    marginTop: 1,
+    lineHeight: 16,
+    color: GasTaColors.forestMuted,
   },
-  doeDisclaimerText: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: GasTaColors.textSoft,
-    marginTop: 3,
-  },
+  doeInfoLead: { fontWeight: '500' },
   communityFilters: {
     flexDirection: 'row',
     gap: 6,
