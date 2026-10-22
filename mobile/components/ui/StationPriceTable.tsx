@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { designSystem as D, GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
 import BrandMark from '@/components/ui/BrandMark';
 
@@ -118,6 +118,7 @@ export default function StationPriceTable({
     });
     if (row.slug === 'seaoil') {
       return <OfficialStationDirectory key={row.id}
+        fuelCode={fuelType}
         selectedRegion={region}
         selectedArea={selectedArea ?? (row.areaName === region ? '' : row.areaName)}
         doeSummary={{ price: hasPrice(row) ? row.price : null, sourceLabel: row.status ?? 'DOE Area/Brand Estimate' }}
@@ -128,6 +129,7 @@ export default function StationPriceTable({
     }
     return <CompanyEstimateCard key={row.id}
       company={row.brand} slug={row.slug} price={hasPrice(row) ? row.price : null}
+      fuelCode={fuelType}
       unavailableLabel={`No available price in this ${selectedArea ? 'area' : 'region'}`}
       sourceLabel={row.status ?? 'DOE Area/Brand Estimate'}
       expanded={expandedCompany === row.slug}
@@ -247,7 +249,7 @@ export default function StationPriceTable({
               onPress={() => { setUnavailableScope(showUnavailable ? null : filterKey); setExpandedCompany(null); }}
               style={({ pressed }) => [styles.disclosure, pressed && { opacity: 0.7 }]}>
               <Text style={styles.disclosureText}>{showUnavailable ? 'Hide companies without available prices' : availableRows.length ? `Show companies without available prices (${unavailableRows.length})` : `View supported companies (${unavailableRows.length})`}</Text>
-              <MaterialCommunityIcons name={showUnavailable ? 'chevron-up' : 'chevron-down'} size={18} color={GasTaColors.forest} />
+              <MaterialCommunityIcons name={showUnavailable ? 'chevron-up' : 'chevron-down'} size={14} color={D.color.textSecondary} />
             </Pressable>
             {showUnavailable ? <View style={styles.companyStack}>{unavailableRows.map(renderCompany)}</View> : null}
           </> : null}
@@ -259,13 +261,13 @@ export default function StationPriceTable({
 }
 
 const styles = StyleSheet.create({
-  companySection: { gap: spacing.sm, marginBottom: spacing.md },
-  companyStack: { gap: spacing.sm },
+  companySection: { gap: 8, marginBottom: 12 },
+  companyStack: { overflow: 'hidden', borderRadius: 12, backgroundColor: D.color.surface },
   noPrices: { color: GasTaColors.forestMuted, fontSize: 13, lineHeight: 19, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  disclosure: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 40, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginTop: spacing.xs, borderRadius: radii.md, borderWidth: StyleSheet.hairlineWidth, borderColor: GasTaColors.forestBorder, backgroundColor: GasTaColors.creamLight },
-  disclosureText: { flex: 1, color: GasTaColors.forest, fontSize: 12, lineHeight: 17, fontWeight: '600' },
-  directoryTitle: { fontSize: 14, fontWeight: '600', color: GasTaColors.forestDark },
-  directoryCopy: { fontSize: 12, lineHeight: 18, color: GasTaColors.forestMuted },
+  disclosure: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 4, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
+  disclosureText: { flex: 1, ...D.type.supporting, color: D.color.textSecondary },
+  directoryTitle: { ...D.type.bodyDense, fontWeight: '600', color: D.color.textPrimary },
+  directoryCopy: { ...D.type.metadata, fontWeight: '400', color: D.color.textSecondary },
   /*
    * A grouped ledger rather than a stack of white cards. The section surface is
    * a warm creamLight so the page keeps its cream identity; white is reserved

@@ -1,27 +1,58 @@
 import type { TextStyle, ViewStyle } from 'react-native';
 
-/**
- * ============================================================================
- * CANONICAL IN-APP PALETTE  (Phase 1 foundation)
- * ============================================================================
- *
- * This is the single source of truth for in-app colour. New work imports
- * `colors` from here — or the `HomeColors` alias in `constants/home.ts`, which
- * is re-exported from these same values.
- *
- * Why it lives in Theme.ts rather than in constants/home.ts: every shared UI
- * component already imports from `constants/Theme`, so putting the canonical
- * tokens there avoids a circular import (home.ts -> Theme.ts) and keeps one
- * import site for both the modern and legacy components.
- *
- * Deliberately NOT changed in this pass: `GasTaColors`, `palette`, `getTheme`
- * and the `typography` object. Those still drive ~23 legacy files (including
- * `pick-map`, which is map-protected). Mutating them would restyle five
- * unfinished screens at once. See the Phase 1 report for the migration list.
- *
- * Cream is intentionally retained on auth/branding screens only
- * (GasTaColors.cream) — see the approved design decision.
- */
+/** Quiet Confidence foundation. Existing exports below are frozen compatibility
+ * tokens: opt components in with appearance="standard" during screen migration. */
+const color = {
+  structure: '#142235', action: '#2563EB', actionPressed: '#1D4ED8', actionSoft: '#EBF2FF',
+  brand: '#2E7D32', canvas: '#F8F7F4', surface: '#FFFFFF', surfaceElevated: '#FFFFFF',
+  textPrimary: '#172B4D', textSecondary: '#526176', textTertiary: '#637083', onDark: '#FFFDF8',
+  borderSubtle: '#E1E5EB', borderControl: '#7F8DA0', success: '#166534', warning: '#92400E',
+  error: '#B42318', errorPressed: '#912018', info: '#1D4ED8', neutral: '#526176',
+  warmAccent: '#8A611B', scrim: 'rgba(20,34,53,0.42)',
+  successSoft: '#EAF5EE', warningSoft: '#FFF4DE', errorSoft: '#FDEDEB', neutralSoft: '#EEF1F4',
+  disabledSurface: '#E9EDF2',
+} as const;
+
+export const designSystem = {
+  color,
+  type: {
+    metricHero: { fontSize: 32, lineHeight: 40, fontWeight: '700', letterSpacing: -0.4 },
+    pageTitle: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.3 },
+    pageTitleCompact: { fontSize: 24, lineHeight: 30, fontWeight: '700', letterSpacing: -0.2 },
+    sectionTitle: { fontSize: 20, lineHeight: 28, fontWeight: '600' },
+    cardTitle: { fontSize: 16, lineHeight: 24, fontWeight: '600' },
+    body: { fontSize: 16, lineHeight: 24, fontWeight: '400' },
+    bodyDense: { fontSize: 14, lineHeight: 20, fontWeight: '400' },
+    supporting: { fontSize: 13, lineHeight: 20, fontWeight: '400' },
+    metadata: { fontSize: 12, lineHeight: 16, fontWeight: '500' },
+    control: { fontSize: 15, lineHeight: 20, fontWeight: '600' },
+    fieldLabel: { fontSize: 14, lineHeight: 20, fontWeight: '500' },
+    eyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '600', letterSpacing: 0.3 },
+  } satisfies Record<string, TextStyle>,
+  space: { 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32, 10: 40, 12: 48 },
+  radius: { small: 8, control: 12, card: 16, featured: 20, overlay: 24 },
+  elevation: {
+    0: { shadowOpacity: 0, elevation: 0 },
+    1: { shadowColor: color.structure, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, shadowOpacity: 0.05, elevation: 2 },
+    2: { shadowColor: color.structure, shadowOffset: { width: 0, height: 8 }, shadowRadius: 20, shadowOpacity: 0.10, elevation: 6 },
+  } satisfies Record<number, ViewStyle>,
+  control: { mobileHeight: 48, desktopHeight: 44, minTarget: 44, fieldHeight: 48, icon: 20 },
+  motion: { interaction: 150, content: 180, overlay: 220, maxTranslate: 8 },
+  focusRing: { outlineColor: color.action, outlineStyle: 'solid', outlineWidth: 2, outlineOffset: 2 } as ViewStyle,
+  status: {
+    success: { foreground: color.success, background: color.successSoft, icon: 'checkmark-circle-outline' },
+    warning: { foreground: color.warning, background: color.warningSoft, icon: 'alert-circle-outline' },
+    error: { foreground: color.error, background: color.errorSoft, icon: 'close-circle-outline' },
+    info: { foreground: color.info, background: color.actionSoft, icon: 'information-circle-outline' },
+    neutral: { foreground: color.neutral, background: color.neutralSoft, icon: 'ellipse-outline' },
+  },
+} as const;
+
+export type DesignAppearance = 'legacy' | 'standard';
+export type StatusTone = keyof typeof designSystem.status;
+
+/** Compatibility palette for unmigrated screens, HomeColors and navigation.
+ * Values intentionally stay stable; new standard components use designSystem. */
 export const colors = {
   // Brand
   /** Primary green: actions, active states, money-positive values. */
@@ -142,14 +173,8 @@ export const BrandColors = {
   border: GasTaColors.glassBorderSubtle,
 } as const;
 
-/**
- * Canonical 8-step type scale (Phase 1).
- *
- * The repo currently uses 17 distinct font sizes. These tokens are additive:
- * existing screens still use the legacy `typography` object below, which is
- * intentionally untouched so no screen shifts. Migrated screens import
- * `typeScale` and the 17 sizes collapse to these eight.
- */
+/** Compatibility type scale. New standard components use designSystem.type;
+ * retain these values until their screen consumers migrate explicitly. */
 export const typeScale = {
   /** The one authoritative number on a screen. Reserve for results. */
   display: { fontSize: 28, fontWeight: '800', letterSpacing: -0.6 } satisfies TextStyle,
@@ -169,7 +194,7 @@ export const typeScale = {
   label: { fontSize: 12, fontWeight: '700', letterSpacing: 0.4 } satisfies TextStyle,
 } as const;
 
-/** Canonical icon sizes (Ionicons). No other values should be needed. */
+/** Existing icon sizes, retained for compatibility. */
 export const iconSize = {
   /** Inline, next to a word. */
   inline: 16,

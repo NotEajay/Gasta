@@ -20,6 +20,8 @@ import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
 import PriceTrendChart from '@/components/ui/PriceTrendChart';
+import FuelTypeFilter from '@/components/prices/FuelTypeFilter';
+import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import SelectField from '@/components/ui/SelectField';
 import BrandMark from '@/components/ui/BrandMark';
 import StationPriceTable, {
@@ -27,13 +29,15 @@ import StationPriceTable, {
   type StationPriceRow,
 } from '@/components/ui/StationPriceTable';
 import { useResponsive } from '@/hooks/useResponsive';
+import { useFuelPriceDefault } from '@/hooks/useFuelPriceDefault';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import {
   DOE_REGIONS,
   type DoeRegionCode,
 } from '@/constants/regions';
-import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { designSystem as D, palette } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import {
@@ -74,7 +78,7 @@ import {
 import { matchBulletinArea, resolveCurrentPlace } from '@/lib/services/location';
 import { buildOfficialDoeRows, type SupportedFuelCompany } from '@/lib/officialCompanyRows';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 function matchesCityFilter(station: FuelStationOption, city: string): boolean {
   if (!city) return true;
@@ -202,8 +206,8 @@ type PricesView = 'now' | 'history';
 
 const COMMUNITY_RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = [
   { value: 'recent', label: 'Recent' },
-  { value: '7days', label: 'Last 7 Days' },
-  { value: '30days', label: 'Last 30 Days' },
+  { value: '7days', label: '7 days' },
+  { value: '30days', label: '30 days' },
   { value: 'past', label: 'Past' },
 ];
 
@@ -216,8 +220,8 @@ const HISTORY_WEEKS = 52;
  */
 const SHELL_MAX_WIDTH = 660;
 
-const PRICE_GREEN = GasTaColors.forest;
-const PRICE_GREEN_SOFT = GasTaColors.forestGlow;
+const PRICE_ACTION = D.color.action;
+const PRICE_ACTION_SOFT = D.color.actionSoft;
 
 type PriceFilterOption<T extends string = string> = {
   value: T;
@@ -248,23 +252,13 @@ function PriceFilterField<T extends string>({
   error = null,
   style,
 }: PriceFilterFieldProps<T>) {
-  const theme = useTheme();
+  const reduced = useReducedMotion();
   const [open, setOpen] = useState(false);
   const selected = options.find((option) => option.value === value)?.label ?? placeholder;
-  // Location / place / fuel each get a faint, distinct cast.
-  const tint =
-    icon === 'map-marker-outline'
-      ? styles.filterIconRegion
-      : icon === 'office-building-outline'
-        ? styles.filterIconCity
-        : styles.filterIconFuel;
 
   return (
     <View style={[styles.filterField, style]}>
       <View style={styles.filterLabelRow}>
-        <View style={[styles.filterIcon, tint]}>
-          <MaterialCommunityIcons name={icon} size={12} color={GasTaColors.forestDark} />
-        </View>
         <Text style={styles.filterLabel}>{label}</Text>
       </View>
       <Pressable
@@ -273,27 +267,28 @@ function PriceFilterField<T extends string>({
         onPress={() => setOpen(true)}
         style={({ pressed }) => [
           styles.filterControl,
-          pressed && { backgroundColor: GasTaColors.cream },
+          pressed && { backgroundColor: D.color.canvas },
         ]}>
-        <Text style={styles.filterValue} numberOfLines={1}>
+        <MaterialCommunityIcons name={icon} size={14} color={D.color.textSecondary} accessible={false} />
+        <Text style={styles.filterValue} numberOfLines={1} accessibilityLabel={selected}>
           {selected}
         </Text>
-        <MaterialCommunityIcons name="chevron-down" size={16} color={GasTaColors.textSoft} />
+        <MaterialCommunityIcons name="chevron-down" size={14} color={D.color.textTertiary} />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal visible={open} transparent animationType={reduced ? 'none' : 'fade'} onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.filterBackdrop} onPress={() => setOpen(false)}>
           <Pressable
-            style={[styles.filterSheet, { backgroundColor: GasTaColors.creamLight }]}
+            style={[styles.filterSheet, { backgroundColor: D.color.surface }]}
             onPress={(event) => event.stopPropagation()}>
             <View style={styles.filterSheetHeader}>
-              <Text style={[styles.filterSheetTitle, { color: theme.text }]}>{label}</Text>
+              <Text style={[styles.filterSheetTitle, { color: D.color.textPrimary }]}>{label}</Text>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Close ${label} options`}
-                hitSlop={8}
+                style={styles.filterClose}
                 onPress={() => setOpen(false)}>
-                <MaterialCommunityIcons name="close" size={20} color={theme.textSecondary} />
+                <MaterialCommunityIcons name="close" size={20} color={D.color.textSecondary} />
               </Pressable>
             </View>
             <FlatList
@@ -302,18 +297,18 @@ function PriceFilterField<T extends string>({
               style={styles.filterOptionList}
               ListEmptyComponent={
                 loading ? (
-                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
+                  <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
                     Loading available areas…
                   </Text>
                 ) : error ? (
-                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
+                  <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
                     {error}
                   </Text>
                 ) : null
               }
               ListFooterComponent={
                 options.length > 0 && (loading || error) ? (
-                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
+                  <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
                     {loading ? 'Refreshing available areas…' : error}
                   </Text>
                 ) : null
@@ -330,17 +325,17 @@ function PriceFilterField<T extends string>({
                     }}
                     style={({ pressed }) => [
                       styles.filterOption,
-                      (isSelected || pressed) && { backgroundColor: PRICE_GREEN_SOFT },
+                      (isSelected || pressed) && { backgroundColor: PRICE_ACTION_SOFT },
                     ]}>
                     <Text
                       style={[
                         styles.filterOptionText,
-                        { color: theme.text, fontWeight: isSelected ? '800' : '500' },
+                        { color: D.color.textPrimary, fontWeight: isSelected ? '800' : '500' },
                       ]}>
                       {item.label}
                     </Text>
                     {isSelected ? (
-                      <MaterialCommunityIcons name="check-circle" size={19} color={PRICE_GREEN} />
+                      <MaterialCommunityIcons name="check-circle" size={19} color={PRICE_ACTION} />
                     ) : null}
                   </Pressable>
                 );
@@ -355,7 +350,6 @@ function PriceFilterField<T extends string>({
 
 export default function FuelPricesScreen() {
   const router = useRouter();
-  const theme = useTheme();
   const { user } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
   // Below ~360px three filter columns are too tight to read, so the row wraps
@@ -364,7 +358,7 @@ export default function FuelPricesScreen() {
   const { isCompact } = useResponsive();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
-  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
+  const { fuelType, selectFuelType, vehicleLabel } = useFuelPriceDefault(user?.id ?? null);
   const [areaName, setAreaName] = useState('');
   const [doeAreas, setDoeAreas] = useState<string[]>([]);
   const [areasFromDoe, setAreasFromDoe] = useState(false);
@@ -537,6 +531,7 @@ export default function FuelPricesScreen() {
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
   const regionDisplay = DOE_REGIONS.find((r) => r.code === region)?.code ?? regionLabel;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
+  const fuelPresentation = getFuelTypePresentation(fuelType);
   const areaLabel = areaName || 'Region-wide DOE price';
   const selectedBulletinForAreas = selectedPastDate
     ? pastBulletins.find((week) => week.bulletin_date === selectedPastDate) ?? bulletin
@@ -546,10 +541,6 @@ export default function FuelPricesScreen() {
 
   const regionOptions = useMemo(
     () => DOE_REGIONS.map((r) => ({ value: r.code, label: r.name })),
-    []
-  );
-  const fuelOptions = useMemo(
-    () => DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name })),
     []
   );
   const areaOptions = useMemo(
@@ -699,6 +690,7 @@ export default function FuelPricesScreen() {
     let cancelled = false;
     setPricesLoading(true);
     setPrices([]);
+    setVerifiedCommunity([]);
 
     const run = async () => {
       try {
@@ -918,10 +910,13 @@ export default function FuelPricesScreen() {
     }
     const selected = pastBulletins.find((b) => b.bulletin_date === selectedPastDate);
     if (!selected) return;
+    let cancelled = false;
+    setPastWeekPrices([]);
     const areaForDoe = areaName;
     void fetchFuelPricesForBulletin(selected.id, region, fuelType, areaForDoe)
-      .then(setPastWeekPrices)
-      .catch(() => setPastWeekPrices([]));
+      .then((rows) => { if (!cancelled) setPastWeekPrices(rows); })
+      .catch(() => { if (!cancelled) setPastWeekPrices([]); });
+    return () => { cancelled = true; };
   }, [selectedPastDate, pastBulletins, region, fuelType, areaName]);
 
   const historySummary = useMemo(() => {
@@ -1111,6 +1106,7 @@ export default function FuelPricesScreen() {
 
   return (
     <ScrollView
+      testID="fuel-prices-screen"
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
       style={styles.flex}
@@ -1119,7 +1115,7 @@ export default function FuelPricesScreen() {
         // Centred responsive shell. On phones this is transparent and the
         // column simply fills the width; on tablet/web it stops the content
         // from stretching edge to edge.
-        { maxWidth: SHELL_MAX_WIDTH, alignSelf: 'center', width: '100%' },
+        { maxWidth: SHELL_MAX_WIDTH, alignSelf: 'center', width: '100%', paddingHorizontal: isCompact ? 16 : 20 },
       ]}
       refreshControl={
         <RefreshControl
@@ -1129,7 +1125,7 @@ export default function FuelPricesScreen() {
             void loadRegion();
             void communityLoaderRef.current();
           }}
-          tintColor={GasTaColors.forest}
+          tintColor={D.color.action}
         />
       }>
       {/*
@@ -1138,7 +1134,7 @@ export default function FuelPricesScreen() {
         post day (week start + 7) and the bulletin week start — not the ETL
         run timestamp, which confused "when we synced" with "when DOE posted".
       */}
-      <View style={styles.headerRow}>
+      <View testID="prices-header" style={styles.headerRow}>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Fuel Prices</Text>
           {bulletin ? (
@@ -1171,7 +1167,7 @@ export default function FuelPricesScreen() {
               <MaterialCommunityIcons
                 name="crosshairs-gps"
                 size={13}
-                color={GasTaColors.forest}
+                color={D.color.action}
               />
               <Text style={styles.nearMeText} numberOfLines={1}>
                 Near you · {nearMePlace.city ?? nearMePlace.regionCode}
@@ -1182,7 +1178,7 @@ export default function FuelPricesScreen() {
               <MaterialCommunityIcons
                 name="map-marker-off-outline"
                 size={13}
-                color={GasTaColors.textSoft}
+                color={D.color.textTertiary}
               />
               <Text style={styles.nearMeText} numberOfLines={2}>
                 Location access is off. Choose your area manually.
@@ -1244,7 +1240,7 @@ export default function FuelPricesScreen() {
             </Text>
           </View>
           <Text style={styles.freshnessMeta} numberOfLines={1}>
-            DOE bulletin · {formatBulletinRange(bulletin.bulletin_date)}
+            DOE bulletin
           </Text>
         </View>
       ) : null}
@@ -1254,7 +1250,7 @@ export default function FuelPricesScreen() {
         control is a full-width block, and Prices wants a short pill on the
         right of the header row. Same two options, same `view` state.
       */}
-      <View style={styles.viewToggle} accessibilityRole="tablist">
+      <View testID="prices-period" style={styles.viewToggle} accessibilityRole="tablist" accessibilityLabel="Price period">
         {(
           [
             { value: 'now', label: 'This week' },
@@ -1285,12 +1281,9 @@ export default function FuelPricesScreen() {
         })}
       </View>
 
-      {/* Filters as one compact row. The "Find prices" accent header and the
-        wrapping Card are gone -- the fields are self-describing, and they were
-        costing more vertical space than the first price. Same values, same
-        modals, no behaviour change.
-      */}
-      <View style={[styles.filterRow, isCompact && styles.filterRowWrap]}>
+      {/* Location filters retain their existing controls; fuel gets a compact
+          row of common choices with the remaining supported types under More. */}
+      <View testID="prices-location-filters" style={[styles.filterRow, isCompact && styles.filterRowWrap]}>
         <PriceFilterField
           label="Region"
           value={region}
@@ -1310,15 +1303,15 @@ export default function FuelPricesScreen() {
           error={doeAreasError}
           style={isCompact ? styles.filterFieldWrap : undefined}
         />
-        <PriceFilterField
-          label="Fuel"
-          value={fuelType}
-          options={fuelOptions}
-          onChange={setFuelType}
-          icon="gas-station"
-          style={isCompact ? styles.filterFieldWrap : undefined}
-        />
       </View>
+      <FuelTypeFilter label="Fuel" value={fuelType} onChange={selectFuelType} context={
+        vehicleLabel ? <View testID="prices-default-context" accessible accessibilityLabel={`Using ${vehicleLabel} · ${fuelLabel}`} style={styles.fuelContext}>
+        <MaterialCommunityIcons name="car-outline" size={12} color={D.color.textSecondary} accessible={false} />
+        <Text style={styles.contextText}>Using {vehicleLabel} ·</Text>
+        <View style={[styles.contextDot, { backgroundColor: fuelPresentation.accent }]} />
+        <Text style={styles.contextText}>{fuelLabel}</Text>
+      </View> : null
+      } />
 
       {nearMePlace?.city && !areaName ? (
         <Text style={styles.hintText}>
@@ -1343,19 +1336,21 @@ export default function FuelPricesScreen() {
 
       {loading ? (
         <View style={styles.inlineLoading}>
-          <ActivityIndicator size="large" color={GasTaColors.forest} />
+          <ActivityIndicator size="large" color={D.color.action} />
           <Text style={styles.hintText}>Loading fuel prices…</Text>
         </View>
       ) : (
         <>
           {/*
-            THE HERO. The single strongest element on the screen, on a forest
-            surface, so the page reads as a fuel dashboard rather than a stack of
-            white cards. Same minimum the list already highlights -- derived from
-            rows in memory, no extra fetch, precedence untouched.
+            Selected fuel identity comes from the shared presentation helper.
+            The displayed minimum and provenance remain derived from the same
+            rows in memory, with no extra fetch or precedence changes.
           */}
           {cheapest ? (
-            <View style={styles.heroCard}>
+            <View testID="current-lowest-card" accessibilityLabel={`${fuelLabel} current lowest`} style={[styles.heroCard, {
+              backgroundColor: fuelPresentation.cardBackground,
+              borderColor: `${fuelPresentation.accent}66`,
+            }]}>
               <View style={styles.heroTopRow}>
                 <Text style={styles.heroLabel}>Current lowest</Text>
                 {/*
@@ -1374,7 +1369,7 @@ export default function FuelPricesScreen() {
                           : 'file-document-outline'
                     }
                     size={11}
-                    color={GasTaColors.forestDark}
+                    color="#0E2A52"
                   />
                   <Text style={styles.heroPillText}>
                     {cheapest.status === 'Unverified'
@@ -1393,10 +1388,12 @@ export default function FuelPricesScreen() {
                 <Text style={styles.heroUnit}>/L</Text>
               </View>
 
-              <Text numberOfLines={1} style={styles.heroStation}>
-                {cheapest.brand} ·{' '}
-                {'station' in cheapest ? cheapest.station || areaLabel : cheapest.areaName}
-              </Text>
+              <View style={styles.heroIdentity}>
+                <View style={styles.heroIdentityCopy}>
+                  <Text style={styles.heroStation}>{cheapest.brand}</Text>
+                  <Text style={styles.heroArea}>{'station' in cheapest ? cheapest.station || areaLabel : cheapest.areaName}</Text>
+                </View>
+              </View>
 
               {/*
                 Real movement only. On a first visit the screen holds exactly one
@@ -1407,7 +1404,7 @@ export default function FuelPricesScreen() {
                 <View style={styles.heroMovement}>
                   <HeroDelta delta={heroMovement.delta} />
                   <Text numberOfLines={1} style={styles.heroMovementNote}>
-                    vs {formatShortDate(heroMovement.prevDate)} · {fuelLabel}
+                    vs {formatShortDate(heroMovement.prevDate)}
                   </Text>
                 </View>
               ) : null}
@@ -1420,31 +1417,29 @@ export default function FuelPricesScreen() {
             describe.
           */}
           {priceRange ? (
-            <View style={styles.rangeCard}>
+            <View testID="prices-range" style={styles.rangeCard}>
               <View style={styles.rangeHead}>
                 <Text style={styles.rangeTitle}>Price range</Text>
                 <Text style={styles.rangeCount}>{priceRange.count} listed</Text>
               </View>
               <View style={styles.rangeEnds}>
                 <View>
-                  <Text style={styles.rangeEndLabel}>Lowest</Text>
                   <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.low)}</Text>
+                  <Text style={styles.rangeEndLabel}>Lowest</Text>
                 </View>
                 <View style={styles.rangeMid}>
+                  <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.spread)}<Text style={styles.rangeUnit}>/L</Text></Text>
                   <Text style={styles.rangeEndLabel}>Spread</Text>
-                  <Text style={styles.rangeEndValue}>
-                    {formatCurrency(priceRange.spread)}/L
-                  </Text>
                 </View>
                 <View style={styles.rangeEndRight}>
-                  <Text style={styles.rangeEndLabel}>Highest</Text>
                   <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.high)}</Text>
+                  <Text style={styles.rangeEndLabel}>Highest</Text>
                 </View>
               </View>
               <View style={styles.rangeBar}>
                 <View style={styles.rangeTrack} />
-                <View style={[styles.rangeDot, { left: 0 }]} />
-                <View style={[styles.rangeDot, { right: 0 }]} />
+                <View style={[styles.rangeDot, { left: 0, backgroundColor: fuelPresentation.accent }]} />
+                <View style={[styles.rangeDot, { right: 0, backgroundColor: fuelPresentation.accent }]} />
               </View>
             </View>
           ) : null}
@@ -1457,12 +1452,12 @@ export default function FuelPricesScreen() {
             have two competing mode switches. The page header above is the one
             canonical control; this section only renders what it selects.
           */}
-          <Text style={styles.sectionTitle}>Price trend</Text>
-
-          <View style={styles.trendPanel}>
+          <View testID="prices-trend" style={styles.trendPanel}>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>Price trend</Text>
             {view === 'history' && companyOptions.length > 0 ? (
               <View style={styles.trendBrandRow}>
                 <SelectField
+                  appearance="standard"
                   label="Brand"
                   value={trendCompanySlug}
                   options={companyOptions}
@@ -1510,12 +1505,13 @@ export default function FuelPricesScreen() {
             ) : (
               <PriceTrendChart
                 points={trend}
+                fuelCode={fuelType}
                 caption={
                   view === 'history'
                     ? `${fuelLabel} · ${companyName}`
                     : `${fuelLabel} · ${regionLabel}`
                 }
-                height={isCompact ? 104 : view === 'history' ? 148 : 126}
+                height={isCompact ? 124 : view === 'history' ? 156 : 144}
               />
             )}
 
@@ -1557,14 +1553,14 @@ export default function FuelPricesScreen() {
 
           {/* DOE estimates stay separate from branch observations. */}
           <View style={styles.doeInfoStrip}>
-            <MaterialCommunityIcons name="information-outline" size={15} color={GasTaColors.forestMuted} />
+            <MaterialCommunityIcons name="information-outline" size={15} color={D.color.textSecondary} />
             <Text style={styles.doeInfoBody}>
               <Text style={styles.doeInfoLead}>DOE prices are area or regional estimates.</Text>{' '}
               Exact branch prices may differ.
             </Text>
           </View>
           <View style={styles.listHead}>
-            <Text style={styles.sectionTitle}>Official DOE Prices</Text>
+            <Text style={styles.sectionTitle}>Official DOE prices</Text>
           </View>
 
           {officialRows.areaRows.length === 0 ? (
@@ -1584,9 +1580,9 @@ export default function FuelPricesScreen() {
           <View style={styles.communitySection}>
             <View style={styles.listHead}>
               <View style={styles.communityHeading}>
-                <Text style={styles.sectionTitle}>Community Station Reports</Text>
+                <Text style={styles.sectionTitle}>Community reports</Text>
                 <Text style={styles.sourceDescription}>
-                  User-observed station prices, separate from the official DOE baseline.
+                  User-observed station prices
                 </Text>
               </View>
               <Pressable
@@ -1599,10 +1595,7 @@ export default function FuelPricesScreen() {
                 </Text>
               </Pressable>
             </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.communityFilters}>
+            <View style={styles.communityFilters} accessibilityRole="tablist" accessibilityLabel="Community report period">
               {COMMUNITY_RECENCY_OPTIONS.map((option) => {
                 const active = communityRecency === option.value;
                 return (
@@ -1618,19 +1611,17 @@ export default function FuelPricesScreen() {
                   </Pressable>
                 );
               })}
-            </ScrollView>
+            </View>
             {communityForFuel.length === 0 ? (
               <View style={styles.communityEmpty}>
                 <MaterialCommunityIcons
                   name="map-marker-off-outline"
-                  size={24}
-                  color={GasTaColors.textSoft}
+                  size={20}
+                  color={D.color.textTertiary}
                 />
                 <View style={styles.communityEmptyCopy}>
-                  <Text style={styles.emptyTitle}>No reports in this period</Text>
-                  <Text style={styles.emptyLine}>
-                    Try another recency filter or report a price you saw at a station.
-                  </Text>
+                  <Text style={styles.emptyTitle}>No recent reports</Text>
+                  <Text style={styles.communityEmptyHint}>Try another period or report a station price.</Text>
                 </View>
               </View>
             ) : (
@@ -1660,17 +1651,17 @@ export default function FuelPricesScreen() {
                           brand={report.station?.brand_label ?? report.station?.oil_company?.name}
                           slug={report.station?.oil_company?.slug}
                           stationName={report.station?.name}
-                          size="md"
+                          size="sm"
                         />
                         <View style={styles.communityCardMain}>
                           <Text numberOfLines={1} style={styles.communityStation}>
                             {report.station?.name ?? 'Station'}
                           </Text>
                           <Text style={styles.communityMeta}>
-                            {report.fuel_type?.name ?? 'Fuel'} ·{' '}
                             {formatRelativeReportAge(report.created_at)}
                             {isHistorical ? ` · ${formatDate(report.created_at)}` : ''}
                           </Text>
+                          <FuelTypeBadge appearance="standard" fuelCode={report.fuel_type?.code} label={report.fuel_type?.name} />
                         </View>
                         <Text style={styles.communityPrice}>
                           {formatCurrency(report.reported_price)}
@@ -1682,7 +1673,7 @@ export default function FuelPricesScreen() {
                           <MaterialCommunityIcons
                             name={isVerified ? 'shield-check' : 'clock-outline'}
                             size={11}
-                            color={isVerified ? GasTaColors.forest : '#9A6700'}
+                            color={isVerified ? D.status.success.foreground : D.status.warning.foreground}
                           />
                           <Text style={[styles.communityBadgeText, isVerified && styles.communityBadgeTextVerified]}>
                             {statusLabel}
@@ -1723,7 +1714,7 @@ export default function FuelPricesScreen() {
 }
 
 /**
- * Movement indicator for the forest hero.
+ * Movement indicator, independent of the selected fuel's card color.
  *
  * Colour follows the consumer's interest: a falling price is good news and
  * reads green, a rising price reads warm red. The arrow and the peso value are
@@ -1740,7 +1731,7 @@ function HeroDelta({ delta }: { delta: number }) {
   const down = delta < 0;
   return (
     <View style={[styles.heroDeltaTag, down ? styles.heroDeltaDown : styles.heroDeltaUp]}>
-      <Text style={[styles.heroDeltaText, { color: down ? '#7BE3A8' : '#FFB4A2' }]}>
+      <Text style={[styles.heroDeltaText, { color: down ? D.status.success.foreground : D.status.error.foreground }]}>
         {down ? '↓' : '↑'} {formatCurrency(Math.abs(delta))}
       </Text>
     </View>
@@ -1748,811 +1739,133 @@ function HeroDelta({ delta }: { delta: number }) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  pressed: { opacity: 0.7 },
-  padding: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xxl,
-  },
-
-  /* ---- header ---- */
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
+  flex: { flex: 1, backgroundColor: D.color.canvas },
+  padding: { paddingTop: 8, paddingBottom: 48 },
+  pressed: { opacity: 0.88 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerCopy: { flex: 1, minWidth: 0 },
-  headerTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    letterSpacing: -0.6,
-    color: GasTaColors.textPrimary,
-  },
-  headerMeta: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: GasTaColors.textSoft,
-    marginTop: 2,
-  },
-  /* ---- location status ---- */
-  nearMeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  nearMeText: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.textSoft,
-  },
-  nearMeAction: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: GasTaColors.forest,
-  },
-  /* ---- freshness metadata ---- */
-  freshnessRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  freshnessPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.forestGlow,
-  },
-  freshnessPillAging: {
-    borderColor: 'rgba(180, 83, 9, 0.24)',
-    backgroundColor: 'rgba(180, 83, 9, 0.10)',
-  },
-  freshnessPillStale: {
-    borderColor: 'rgba(220, 38, 38, 0.24)',
-    backgroundColor: 'rgba(220, 38, 38, 0.10)',
-  },
-  freshnessPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: GasTaColors.forest,
-  },
-  freshnessPillTextStale: {
-    color: GasTaColors.error,
-  },
-  freshnessMeta: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.textSoft,
-  },
-  /* ---- history placeholder ---- */
-  historyNote: {
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.md,
-    alignItems: 'center',
-  },
-  historyNoteTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: GasTaColors.textSoft,
-  },
-  historyNoteBody: {
-    fontSize: 12,
-    lineHeight: 17,
-    textAlign: 'center',
-    color: GasTaColors.textMuted,
-    marginTop: 2,
-  },
-  headerAction: {
-    flexShrink: 0,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forest,
-    backgroundColor: GasTaColors.white,
-  },
-  headerActionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-
-  /* ---- view toggle ---- */
-  viewToggle: {
-    flexDirection: 'row',
-    alignSelf: 'flex-start',
-    gap: spacing.xs,
-    marginTop: spacing.md,
-    marginBottom: spacing.md,
-  },
-  viewToggleItem: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forest,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  viewToggleItemActive: {
-    backgroundColor: GasTaColors.forest,
-    borderColor: GasTaColors.forestDark,
-  },
-  viewToggleText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-  viewToggleTextActive: {
-    color: GasTaColors.textOnForest,
-  },
-
-  /* ---- compact filters ---- */
-  filterRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  /* Narrow phones: 2+1 instead of three cramped columns. The flex-basis is
-     what actually forces the wrap -- `flex: 1` alone would shrink all three
-     onto one line and squeeze the labels. */
+  headerTitle: { ...D.type.pageTitle, color: D.color.structure },
+  headerMeta: { ...D.type.supporting, color: D.color.textSecondary, marginTop: 2 },
+  headerAction: { minHeight: 44, paddingLeft: 8, justifyContent: 'center' },
+  headerActionText: { ...D.type.supporting, fontWeight: '600', color: D.color.action },
+  nearMeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  nearMeText: { flex: 1, minWidth: 0, ...D.type.metadata, color: D.color.textSecondary },
+  nearMeAction: { ...D.type.metadata, fontWeight: '600', color: D.color.action, paddingVertical: 6 },
+  freshnessRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  freshnessPill: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: D.color.neutralSoft },
+  freshnessPillStale: { backgroundColor: D.status.error.background },
+  freshnessPillText: { ...D.type.metadata, color: D.color.textSecondary },
+  freshnessPillTextStale: { color: D.status.error.foreground },
+  freshnessMeta: { flex: 1, minWidth: 0, ...D.type.metadata, color: D.color.textTertiary },
+  viewToggle: { flexDirection: 'row', alignSelf: 'flex-start', backgroundColor: D.color.neutralSoft, padding: 2, borderRadius: 10, marginVertical: 8 },
+  viewToggleItem: { minHeight: 40, paddingHorizontal: 16, justifyContent: 'center', borderRadius: 8 },
+  viewToggleItemActive: { backgroundColor: D.color.surface },
+  viewToggleText: { ...D.type.supporting, fontWeight: '500', color: D.color.textSecondary },
+  viewToggleTextActive: { color: D.color.structure, fontWeight: '600' },
+  filterRow: { flexDirection: 'row', gap: 8 },
   filterRowWrap: { flexWrap: 'wrap' },
   filterFieldWrap: { flexBasis: '46%' },
   filterField: { flex: 1, minWidth: 0 },
-  filterLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 3,
-  },
-  filterIcon: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  /* Each filter gets a faint, distinct cast so the row reads as
-     location / place / fuel rather than three identical dropdowns. */
-  filterIconRegion: { backgroundColor: 'rgba(1, 68, 33, 0.08)' },
-  filterIconCity: { backgroundColor: 'rgba(1, 68, 33, 0.12)' },
-  /* Fuel keeps a faint amber-green cast -- fuel, but still on-palette. */
-  filterIconFuel: { backgroundColor: 'rgba(180, 83, 9, 0.12)' },
-  filterLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
-  },
-  filterControl: {
-    minHeight: 40,
-    borderWidth: 1,
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.sm + 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.xs,
-    backgroundColor: GasTaColors.white,
-    borderColor: GasTaColors.forestGlow,
-  },
-  filterValue: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '700',
-    color: GasTaColors.textPrimary,
-  },
-  filterBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(26, 42, 31, 0.45)',
-    justifyContent: 'flex-end',
-  },
-  filterSheet: {
-    maxHeight: '72%',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.xl,
-  },
-  filterSheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  filterSheetTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: GasTaColors.textPrimary,
-  },
-  filterOptionList: {
-    paddingHorizontal: spacing.md,
-  },
-  filterLoadingText: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.lg,
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  filterOption: {
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  filterOptionText: {
-    flex: 1,
-    fontSize: 15,
-    paddingRight: spacing.sm,
-    color: GasTaColors.textPrimary,
-  },
-
-  /* ---- hero: the primary data surface ---- */
-  heroCard: {
-    marginTop: spacing.md,
-    padding: spacing.lg,
-    borderRadius: radii.xl,
-    backgroundColor: GasTaColors.forestDark,
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  heroLabel: {
-    flexShrink: 1,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    color: 'rgba(248, 240, 229, 0.72)',
-  },
-  heroPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flexShrink: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-    backgroundColor: GasTaColors.cream,
-  },
-  heroPillText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: GasTaColors.forestDark,
-  },
-  heroPriceRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 3,
-    marginTop: spacing.sm,
-  },
-  heroPrice: {
-    fontSize: 44,
-    fontWeight: '800',
-    letterSpacing: -1.6,
-    color: GasTaColors.cream,
-    flexShrink: 1,
-  },
-  heroUnit: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: 'rgba(248, 240, 229, 0.7)',
-  },
-  heroStation: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: 'rgba(248, 240, 229, 0.78)',
-    marginTop: 2,
-  },
-  heroMovement: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(248, 240, 229, 0.2)',
-  },
-  heroDeltaTag: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: radii.pill,
-  },
-  heroDeltaDown: { backgroundColor: 'rgba(123, 227, 168, 0.18)' },
-  heroDeltaUp: { backgroundColor: 'rgba(255, 180, 162, 0.18)' },
-  heroDeltaText: { fontSize: 13, fontWeight: '800' },
-  heroDeltaFlat: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: radii.pill,
-    backgroundColor: 'rgba(248, 240, 229, 0.14)',
-  },
-  heroDeltaFlatText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: 'rgba(248, 240, 229, 0.8)',
-  },
-  heroMovementNote: {
-    flex: 1,
-    fontSize: 11,
-    color: 'rgba(248, 240, 229, 0.6)',
-  },
-
-  /* ---- price range ---- */
-  rangeCard: {
-    marginTop: spacing.md,
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    backgroundColor: GasTaColors.creamLight,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-  },
-  rangeHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-  },
-  rangeTitle: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: GasTaColors.textMuted,
-  },
-  rangeCount: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: GasTaColors.textSoft,
-  },
-  rangeEnds: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-  },
-  rangeEndLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-    color: GasTaColors.textSoft,
-  },
-  rangeEndValue: {
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-    color: GasTaColors.forestDark,
-    marginTop: 1,
-  },
-  rangeMid: { alignItems: 'center' },
-  rangeEndRight: { alignItems: 'flex-end' },
-  rangeBar: {
-    height: 6,
-    marginTop: spacing.md,
-    justifyContent: 'center',
-  },
-  rangeTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: GasTaColors.forestGlow,
-  },
-  rangeDot: {
-    position: 'absolute',
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: GasTaColors.forest,
-  },
-
-  /* ---- trend ---- */
-  trendHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.xl,
-    marginBottom: spacing.sm,
-  },
-  trendPanel: {
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    backgroundColor: GasTaColors.creamLight,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
-  },
-  trendBrandRow: { marginBottom: spacing.md },
-  summaryStrip: {
-    marginBottom: spacing.md,
-    paddingBottom: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: GasTaColors.forestGlow,
-  },
-  summaryStripText: {
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: GasTaColors.forestDark,
-  },
-  summaryStripMeta: {
-    fontSize: 11,
-    color: GasTaColors.textSoft,
-    marginTop: 1,
-  },
-  weekList: {
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: GasTaColors.forestGlow,
-  },
-
-  /* ---- list heading + report CTA ---- */
-  listHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.xl,
-    marginBottom: spacing.sm,
-  },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: GasTaColors.textPrimary,
-  },
-  sectionTitleTop: {
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: GasTaColors.textPrimary,
-    marginTop: spacing.xl,
-  },
-  confirmHeading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.xl,
-  },
-  confirmTitle: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-    color: GasTaColors.textPrimary,
-  },
-  reportCta: {
-    flexShrink: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forest,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  reportCtaText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-  communitySection: {
-    marginTop: spacing.lg,
-    paddingTop: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: GasTaColors.forestGlow,
-  },
+  filterLabelRow: { marginBottom: 4 },
+  filterLabel: { ...D.type.metadata, color: D.color.textSecondary, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5 },
+  filterControl: { minHeight: 46, borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: D.color.surface, borderColor: D.color.borderSubtle },
+  filterValue: { flex: 1, minWidth: 0, ...D.type.supporting, fontWeight: '500', color: D.color.textPrimary },
+  filterBackdrop: { flex: 1, backgroundColor: D.color.scrim, justifyContent: 'flex-end' },
+  filterSheet: { maxHeight: '72%', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingBottom: 32 },
+  filterSheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 8 },
+  filterClose: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
+  filterSheetTitle: { ...D.type.sectionTitle, color: D.color.textPrimary },
+  filterOptionList: { paddingHorizontal: 16 },
+  filterLoadingText: { paddingHorizontal: 16, paddingVertical: 24, ...D.type.bodyDense, textAlign: 'center' },
+  filterOption: { minHeight: 48, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  filterOptionText: { flex: 1, ...D.type.bodyDense, paddingRight: 8, color: D.color.textPrimary },
+  fuelContext: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1, maxWidth: '100%' },
+  contextText: { maxWidth: '100%', flexShrink: 1, ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400' },
+  contextDot: { width: 5, height: 5, borderRadius: 3, marginLeft: 2 },
+  heroCard: { marginTop: 8, padding: 16, borderRadius: 20, borderWidth: 1, shadowColor: D.color.structure, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  heroLabel: { ...D.type.metadata, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', color: D.color.onDark },
+  heroPill: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: '#FFF5E7' },
+  heroPillText: { ...D.type.metadata, fontWeight: '600', color: '#0E2A52', flexShrink: 1 },
+  heroPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 3, marginTop: 8 },
+  heroPrice: { fontSize: 40, lineHeight: 48, fontWeight: '700', letterSpacing: -1, color: D.color.onDark, fontVariant: ['tabular-nums'], flexShrink: 1 },
+  heroUnit: { ...D.type.supporting, fontWeight: '400', color: 'rgba(255,255,255,0.86)' },
+  heroIdentity: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  heroIdentityCopy: { flex: 1, minWidth: 0 },
+  heroStation: { ...D.type.cardTitle, color: D.color.onDark },
+  heroArea: { ...D.type.supporting, color: 'rgba(255,255,255,0.86)' },
+  heroMovement: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  heroDeltaTag: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  heroDeltaDown: { backgroundColor: D.status.success.background },
+  heroDeltaUp: { backgroundColor: D.status.error.background },
+  heroDeltaText: { ...D.type.supporting, fontWeight: '600' },
+  heroDeltaFlat: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: '#FFF5E7' },
+  heroDeltaFlatText: { ...D.type.metadata, color: '#0E2A52' },
+  heroMovementNote: { flex: 1, ...D.type.metadata, color: 'rgba(255,255,255,0.86)', fontWeight: '400' },
+  rangeCard: { marginTop: 12, padding: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: D.color.surface },
+  rangeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  rangeTitle: { ...D.type.supporting, fontWeight: '600', color: D.color.textPrimary },
+  rangeCount: { ...D.type.metadata, color: D.color.textTertiary },
+  rangeEnds: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 },
+  rangeEndValue: { fontSize: 17, lineHeight: 22, fontWeight: '600', letterSpacing: -0.3, color: D.color.textPrimary, fontVariant: ['tabular-nums'] },
+  rangeUnit: { ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400', letterSpacing: 0 },
+  rangeEndLabel: { ...D.type.metadata, color: D.color.textTertiary, fontWeight: '400' },
+  rangeMid: { alignItems: 'center' }, rangeEndRight: { alignItems: 'flex-end' },
+  rangeBar: { height: 4, marginTop: 8, justifyContent: 'center' },
+  rangeTrack: { height: 2, borderRadius: 1, backgroundColor: D.color.borderControl },
+  rangeDot: { position: 'absolute', width: 4, height: 4, borderRadius: 2 },
+  trendPanel: { marginTop: 20, padding: 16, borderRadius: 16, backgroundColor: D.color.surface, gap: 12 },
+  trendBrandRow: {},
+  summaryStrip: { gap: 4 },
+  summaryStripText: { ...D.type.bodyDense, fontWeight: '500', color: D.color.textPrimary },
+  summaryStripMeta: { ...D.type.metadata, color: D.color.textTertiary },
+  weekList: { marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
+  listHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 20, marginBottom: 12 },
+  sectionTitle: { ...D.type.sectionTitle, color: D.color.structure },
+  sectionTitleTop: { ...D.type.sectionTitle, color: D.color.structure, marginTop: 20 },
+  reportCta: { flexShrink: 0, minHeight: 44, justifyContent: 'center', paddingLeft: 4 },
+  reportCtaText: { ...D.type.supporting, color: D.color.action, fontWeight: '600' },
+  communitySection: { marginTop: 24, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
   communityHeading: { flex: 1, minWidth: 0 },
-  sourceDescription: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.textSoft,
-    marginTop: 3,
-  },
-  doeInfoStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    minHeight: 44,
-    marginBottom: spacing.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: radii.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.glassBorderSubtle,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  doeInfoBody: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.forestMuted,
-  },
-  doeInfoLead: { fontWeight: '500' },
-  communityFilters: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: spacing.sm,
-    paddingRight: spacing.sm,
-  },
-  communityChip: {
-    minHeight: 34,
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  communityChipActive: {
-    borderColor: GasTaColors.forestDark,
-    backgroundColor: GasTaColors.forest,
-  },
-  communityChipText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-  communityChipTextActive: { color: GasTaColors.textOnForest },
-  communityCards: {
-    overflow: 'hidden',
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(46, 125, 50, 0.18)',
-    backgroundColor: GasTaColors.creamLight,
-  },
-  communityCard: {
-    minHeight: 96,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: spacing.sm,
-  },
-  communityCardDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: GasTaColors.forestGlow,
-  },
-  communityCardVerified: {
-    backgroundColor: 'rgba(46, 125, 50, 0.04)',
-  },
-  communityCardPending: {
-    backgroundColor: 'rgba(180, 83, 9, 0.06)',
-  },
-  communityCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
+  sourceDescription: { ...D.type.metadata, color: D.color.textSecondary, marginTop: 4, fontWeight: '400' },
+  doeInfoStrip: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 16 },
+  doeInfoBody: { flex: 1, minWidth: 0, ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400' },
+  doeInfoLead: { fontWeight: '400', color: D.color.textSecondary },
+  communityFilters: { flexDirection: 'row', backgroundColor: D.color.neutralSoft, borderRadius: 10, padding: 2, marginBottom: 12 },
+  communityChip: { flex: 1, minWidth: 0, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
+  communityChipActive: { backgroundColor: D.color.surface },
+  communityChipText: { ...D.type.supporting, color: D.color.textSecondary, fontWeight: '500' },
+  communityChipTextActive: { color: D.color.structure, fontWeight: '600' },
+  communityCards: { overflow: 'hidden', borderRadius: 12, backgroundColor: D.color.surface },
+  communityCard: { minHeight: 96, padding: 12, gap: 8 },
+  communityCardDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
+  communityCardVerified: {}, communityCardPending: {},
+  communityCardTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   communityCardMain: { flex: 1, minWidth: 0 },
-  communityStation: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: GasTaColors.textPrimary,
-  },
-  communityMeta: {
-    fontSize: 11,
-    color: GasTaColors.textSoft,
-    marginTop: 2,
-  },
-  communityPrice: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: GasTaColors.forestDark,
-  },
-  communityBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: 4,
-  },
-  communityBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-    backgroundColor: 'rgba(180, 83, 9, 0.12)',
-  },
-  communityBadgeVerified: { backgroundColor: GasTaColors.forestGlow },
-  communityBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#9A6700',
-  },
-  communityBadgeTextVerified: { color: GasTaColors.forest },
-  communityConfirmations: {
-    fontSize: 10,
-    color: GasTaColors.textSoft,
-  },
-  inlineConfirm: {
-    marginLeft: 'auto',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  inlineConfirmText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: GasTaColors.forestDark,
-  },
-  communityEmpty: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    padding: spacing.lg,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  communityEmptyCopy: { flex: 1, minWidth: 0 },
-
-  /* ---- flat row lists ---- */
-  plainListTight: {
-    backgroundColor: GasTaColors.creamLight,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
-    overflow: 'hidden',
-    marginTop: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  /* Needs-confirmation is pending community data, so it carries a pale amber
-     cast rather than reading as another authoritative white block. */
-  confirmList: {
-    backgroundColor: 'rgba(180, 83, 9, 0.06)',
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(180, 83, 9, 0.22)',
-    overflow: 'hidden',
-    marginTop: spacing.sm,
-  },
-  rowDivider: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: GasTaColors.forestGlow,
-  },
-
-  /* ---- needs-confirmation rows ---- */
-  verifyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    minHeight: 76,
-    paddingVertical: spacing.sm,
-  },
-  verifyInfo: { flex: 1, minWidth: 0 },
-  verifyTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: GasTaColors.textPrimary,
-  },
-  verifyMeta: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: GasTaColors.textSoft,
-    marginTop: 1,
-  },
-  verifyPrice: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: GasTaColors.forestDark,
-  },
-  verifyUnit: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: GasTaColors.textSoft,
-  },
-  voteBtn: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forest,
-    backgroundColor: GasTaColors.creamLight,
-  },
+  communityStation: { ...D.type.bodyDense, fontWeight: '600', color: D.color.textPrimary },
+  communityMeta: { ...D.type.metadata, color: D.color.textTertiary, marginTop: 2, marginBottom: 4 },
+  communityPrice: { fontSize: 18, lineHeight: 24, fontWeight: '600', color: D.color.textPrimary },
+  verifyUnit: { ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400' },
+  communityBadgeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  communityBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: D.status.warning.background },
+  communityBadgeVerified: { backgroundColor: D.status.success.background },
+  communityBadgeText: { ...D.type.metadata, color: D.status.warning.foreground },
+  communityBadgeTextVerified: { color: D.status.success.foreground },
+  communityConfirmations: { ...D.type.metadata, color: D.color.textTertiary },
+  inlineConfirm: { marginLeft: 'auto', minHeight: 44, paddingHorizontal: 8, justifyContent: 'center' },
+  inlineConfirmText: { ...D.type.supporting, fontWeight: '600', color: D.color.action },
   voteBtnBusy: { opacity: 0.5 },
-  voteBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: GasTaColors.forestDark,
-  },
-
-  /* ---- history summary ---- */
-
-  /* ---- quiet text states ---- */
-  inlineLoading: {
-    paddingVertical: spacing.xxl,
-    alignItems: 'center',
-  },
-  hintText: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: GasTaColors.textSoft,
-    marginTop: spacing.sm,
-  },
-  emptyTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: GasTaColors.textPrimary,
-    marginBottom: 2,
-  },
-  emptyLine: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: GasTaColors.textSoft,
-    paddingVertical: spacing.lg,
-  },
-  /* Quiet, informative panel -- not an error and not a warning banner. */
-  emptyCard: {
-    marginTop: spacing.sm,
-    padding: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  emptyCardTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: GasTaColors.forestDark,
-  },
-  emptyCardBody: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: GasTaColors.textPrimary,
-    marginTop: 4,
-  },
-  emptyCardHint: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: GasTaColors.textSoft,
-    marginTop: 6,
-  },
-  errorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    borderColor: GasTaColors.error,
-    backgroundColor: palette.dangerSoft,
-  },
-  errorText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: '600',
-    color: palette.danger,
-  },
+  communityEmpty: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 },
+  communityEmptyCopy: { flex: 1, minWidth: 0 },
+  communityEmptyHint: { ...D.type.supporting, color: D.color.textSecondary },
+  plainListTight: { backgroundColor: D.color.surface, borderRadius: 12, overflow: 'hidden', marginTop: 8 },
+  historyNote: { paddingVertical: 20, gap: 4 },
+  historyNoteTitle: { ...D.type.bodyDense, fontWeight: '500', color: D.color.textSecondary },
+  historyNoteBody: { ...D.type.supporting, color: D.color.textSecondary },
+  inlineLoading: { paddingVertical: 40, alignItems: 'center' },
+  hintText: { ...D.type.metadata, color: D.color.textTertiary, marginTop: 8, fontWeight: '400' },
+  emptyTitle: { ...D.type.bodyDense, fontWeight: '600', color: D.color.textPrimary, marginBottom: 4 },
+  emptyLine: { ...D.type.supporting, color: D.color.textSecondary, paddingVertical: 12 },
+  errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: D.status.error.background },
+  errorText: { flex: 1, ...D.type.supporting, color: D.status.error.foreground },
 });

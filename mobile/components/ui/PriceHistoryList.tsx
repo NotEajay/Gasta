@@ -1,9 +1,8 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing, typography } from '@/constants/Theme';
+import { designSystem as D, palette, radii } from '@/constants/Theme';
 import { formatBulletinRange, formatCurrency } from '@/lib/format';
-import { useTheme } from '@/lib/useTheme';
 
 export interface HistoryPoint {
   bulletin_date: string;
@@ -21,7 +20,6 @@ export default function PriceHistoryList({
   selectedDate,
   onSelectDate,
 }: PriceHistoryListProps) {
-  const theme = useTheme();
 
   if (points.length === 0) return null;
 
@@ -53,37 +51,39 @@ export default function PriceHistoryList({
           <Pressable
             key={point.bulletin_date}
             disabled={!onSelectDate}
+            accessibilityRole="button" accessibilityLabel={formatBulletinRange(point.bulletin_date)}
+            accessibilityState={{ selected, disabled: !onSelectDate }}
             onPress={() => onSelectDate?.(point.bulletin_date)}
             style={[
               styles.row,
               {
-                borderBottomColor: theme.borderLight,
-                backgroundColor: selected ? palette.successSoft : 'transparent',
+                borderBottomColor: D.color.borderSubtle,
+                backgroundColor: selected ? D.color.actionSoft : 'transparent',
               },
               index === newestFirst.length - 1 && styles.last,
             ]}>
             <View style={styles.left}>
-              <Text style={[styles.date, { color: theme.text }]}>
+              <Text style={[styles.date, { color: D.color.textPrimary }]}>
                 {formatBulletinRange(point.bulletin_date)}
                 {isLatest ? '  ·  Latest' : ''}
               </Text>
-              <Text style={[styles.hint, { color: theme.textMuted }]}>
+              <Text style={[styles.hint, { color: D.color.textTertiary }]}>
                 {isLatest ? 'Latest DOE bulletin' : 'Past DOE bulletin'}
               </Text>
             </View>
             <View style={styles.right}>
-              <Text style={[styles.price, { color: theme.text }]}>
+              <Text style={[styles.price, { color: D.color.textPrimary }]}>
                 {formatCurrency(point.price_per_liter)}
               </Text>
               {delta === null ? (
-                <Text style={[styles.delta, { color: theme.textMuted }]}>—</Text>
+                <Text style={[styles.delta, { color: D.color.textTertiary }]}>—</Text>
               ) : (
                 <Text
                   style={[
                     styles.delta,
                     {
                       color:
-                        delta > 0 ? palette.danger : delta < 0 ? palette.success : theme.textMuted,
+                        delta > 0 ? palette.danger : delta < 0 ? palette.success : D.color.textSecondary,
                     },
                   ]}>
                   {delta > 0 ? '▲' : delta < 0 ? '▼' : '→'} {formatCurrency(Math.abs(delta))}
@@ -102,16 +102,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderRadius: radii.sm,
   },
   last: { borderBottomWidth: 0 },
   left: { flex: 1 },
-  date: { ...typography.body, fontWeight: '700' },
-  hint: { ...typography.caption, marginTop: 2 },
+  date: { ...D.type.supporting, fontWeight: '500' },
+  hint: { ...D.type.metadata, marginTop: 2 },
   right: { alignItems: 'flex-end' },
-  price: { fontSize: 16, fontWeight: '800' },
-  delta: { ...typography.caption, fontWeight: '700', marginTop: 2 },
+  price: { fontSize: 17, lineHeight: 24, fontWeight: '600' },
+  delta: { ...D.type.metadata, fontWeight: '700', marginTop: 2 },
 });

@@ -17,7 +17,7 @@ test('region-only scope accepts only region-wide DOE rows',()=>{
 });
 test('missing bulletin keeps every company visible without prices',()=>assert(build([price('SEAOIL')],{...scope,bulletinId:null}).every(r=>r.price===null)));
 const {harness,find}=require('./componentHarness.cjs');
-const theme={'@/constants/Theme':{GasTaColors:{},palette:{},radii:{},spacing:{sm:8,md:16}}};
+const theme={'@/constants/Theme':require('./currentLowestHarness.cjs').theme,'@/hooks/useReducedMotion':{useReducedMotion:()=>true}};
 test('unavailable company still expands and opens selector with active context, including SEAOIL',async()=>{
  const h=harness(path.resolve(__dirname,'../components/ui/StationPriceTable.tsx'),{...theme,'expo-router':{useRouter:()=>({push(){}})},'@/lib/format':{formatCurrency:n=>String(n)}});
  await h.flush({rows:[],areaRows:build(),fuelType:'RON_91',region:'SOUTH_LUZON',selectedArea:'Calamba'});
