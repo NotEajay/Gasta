@@ -210,11 +210,10 @@ const COMMUNITY_RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = 
 const HISTORY_WEEKS = 52;
 
 /*
- * Centred content column. On phones this never binds (the viewport is narrower
- * than the cap), so the layout is effectively full width. On tablet/web it keeps
- * the list readable instead of letting rows stretch to 1366px.
+ * The centred content column comes from `useResponsive().contentMaxWidth`, so
+ * it fills a phone and caps the dashboard on tablet/web instead of letting
+ * rows stretch across a 1366px browser.
  */
-const SHELL_MAX_WIDTH = 660;
 
 const PRICE_GREEN = GasTaColors.forest;
 const PRICE_GREEN_SOFT = GasTaColors.forestGlow;
@@ -361,7 +360,7 @@ export default function FuelPricesScreen() {
   // Below ~360px three filter columns are too tight to read, so the row wraps
   // to 2+1 there. `isCompact` is width-only, so it is safe to read before any
   // conditional return.
-  const { isCompact } = useResponsive();
+  const { contentMaxWidth, isCompact, isDesktop } = useResponsive();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
@@ -1119,7 +1118,7 @@ export default function FuelPricesScreen() {
         // Centred responsive shell. On phones this is transparent and the
         // column simply fills the width; on tablet/web it stops the content
         // from stretching edge to edge.
-        { maxWidth: SHELL_MAX_WIDTH, alignSelf: 'center', width: '100%' },
+        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
       ]}
       refreshControl={
         <RefreshControl
@@ -1349,13 +1348,19 @@ export default function FuelPricesScreen() {
       ) : (
         <>
           {/*
+            On web the hero and the range summary sit side by side, so the top
+            of the page uses the available width instead of stacking two
+            half-empty cards. Phones still get the original vertical order.
+          */}
+          <View style={[styles.overviewRow, isDesktop && styles.overviewRowDesktop]}>
+          {/*
             THE HERO. The single strongest element on the screen, on a forest
             surface, so the page reads as a fuel dashboard rather than a stack of
             white cards. Same minimum the list already highlights -- derived from
             rows in memory, no extra fetch, precedence untouched.
           */}
           {cheapest ? (
-            <View style={styles.heroCard}>
+            <View style={[styles.heroCard, isDesktop && styles.overviewCard]}>
               <View style={styles.heroTopRow}>
                 <Text style={styles.heroLabel}>Current lowest</Text>
                 {/*
@@ -1420,7 +1425,7 @@ export default function FuelPricesScreen() {
             describe.
           */}
           {priceRange ? (
-            <View style={styles.rangeCard}>
+            <View style={[styles.rangeCard, isDesktop && styles.overviewCard]}>
               <View style={styles.rangeHead}>
                 <Text style={styles.rangeTitle}>Price range</Text>
                 <Text style={styles.rangeCount}>{priceRange.count} listed</Text>
@@ -1448,6 +1453,7 @@ export default function FuelPricesScreen() {
               </View>
             </View>
           ) : null}
+          </View>
 
           {/*
             TREND. There is deliberately no second This week / Past prices
@@ -2001,6 +2007,13 @@ const styles = StyleSheet.create({
   },
 
   /* ---- hero: the primary data surface ---- */
+  overviewRow: {},
+  overviewRowDesktop: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: spacing.md,
+  },
+  overviewCard: { flex: 1, minWidth: 0 },
   heroCard: {
     marginTop: spacing.md,
     padding: spacing.lg,

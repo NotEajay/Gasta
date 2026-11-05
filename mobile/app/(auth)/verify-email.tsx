@@ -30,7 +30,7 @@ export default function VerifyEmailScreen() {
     isCompact,
     isLandscape,
     scale,
-    contentMaxWidth,
+    formMaxWidth,
     horizontalPadding,
     verticalPadding,
   } = useResponsive();
@@ -81,7 +81,7 @@ export default function VerifyEmailScreen() {
             ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
-            <View style={[styles.inner, { maxWidth: contentMaxWidth }]}>
+            <View style={[styles.inner, { maxWidth: formMaxWidth }]}>
               <GlassSurface style={styles.card} variant="strong">
                 <View style={styles.header}>
                   <Text style={[styles.cardTitle, { fontSize: titleSize }]}>Verify your email</Text>

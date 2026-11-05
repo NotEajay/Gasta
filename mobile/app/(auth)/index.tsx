@@ -47,7 +47,7 @@ export default function AuthScreen() {
     isDesktop,
     isLandscape,
     scale,
-    contentMaxWidth,
+    formMaxWidth,
     logoWidth,
     horizontalPadding,
     verticalPadding,
@@ -184,7 +184,7 @@ export default function AuthScreen() {
             ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
-            <View style={[styles.inner, { maxWidth: contentMaxWidth }]}>
+            <View style={[styles.inner, { maxWidth: formMaxWidth }]}>
               <View
                 style={[
                   styles.hero,

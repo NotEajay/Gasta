@@ -18,6 +18,7 @@ import { HomeColors } from '@/constants/home';
 import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatPeso, transportModeLabel } from '@/lib/format';
 import { weightsForTimePriority, weightsSumToOne } from '@/lib/mcda';
 import { createSavedTrip } from '@/lib/services/savedTrips';
@@ -100,6 +101,7 @@ export default function TripOptimizerScreen() {
   }>();
   const { user } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth, isDesktop } = useResponsive();
   const [origin, setOrigin] = useState('');
   const [originLocation, setOriginLocation] = useState<RouteLocation | null>(
     null,
@@ -1243,18 +1245,22 @@ export default function TripOptimizerScreen() {
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.padding}
+      contentContainerStyle={[
+        styles.padding,
+        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
+      ]}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag">
       <TripSectionHeader active="new" />
 
+      <View style={[styles.sectionsGrid, isDesktop && styles.sectionsGridDesktop]}>
       {/*
         ROUTE. One warm-white surface holding the two endpoints, the map
         picker and the live distance summary. The picker, its params and the
         Google Directions call are all unchanged -- only the presentation moved
         onto a card.
       */}
-      <View style={styles.section}>
+      <View style={[styles.section, isDesktop && styles.sectionDesktop]}>
         <Text style={styles.sectionLabel}>Route</Text>
         <View style={styles.sectionCard}>
           {/*
@@ -1445,7 +1451,7 @@ export default function TripOptimizerScreen() {
         query and `handleVehicleChipChange` are untouched -- only the control
         changed, and it calls the same handler.
       */}
-      <View style={styles.section}>
+      <View style={[styles.section, isDesktop && styles.sectionDesktop]}>
         <Text style={styles.sectionLabel}>Vehicle</Text>
         {vehicleError ? <Text style={styles.error}>{vehicleError}</Text> : null}
         <View style={styles.sectionCard}>
@@ -1575,7 +1581,7 @@ export default function TripOptimizerScreen() {
         comparing anything. Precedence is unchanged: manual > verified community
         > DOE > unavailable.
       */}
-      <View style={styles.section}>
+      <View style={[styles.section, isDesktop && styles.sectionDesktop]}>
         <Text style={styles.sectionLabel}>Fuel price</Text>
         <View style={styles.sectionCard}>
           {!isManualVehicle && selectedVehicle ? (
@@ -1844,7 +1850,7 @@ export default function TripOptimizerScreen() {
         exist (same SAW numbers the result sheet uses). Source notes stay so a
         jeepney estimate is never read as a confirmed booking fare.
       */}
-      <View style={styles.section}>
+      <View style={[styles.section, isDesktop && styles.sectionDesktop]}>
         <Text style={styles.sectionLabel}>Compare transport</Text>
         <Text style={styles.sectionCostNote}>
           Estimated out-of-pocket trip cost for each option (what you will spend, not savings).
@@ -1914,7 +1920,7 @@ export default function TripOptimizerScreen() {
         SAW weights are the same state — dragging rescores an existing route
         without a new Directions call.
       */}
-      <View style={styles.prefBlock}>
+      <View style={[styles.prefBlock, isDesktop && styles.fullWidthDesktop]}>
         <View style={styles.prefHeadRow}>
           <Ionicons name="options-outline" size={15} color="rgba(255, 255, 255, 0.8)" />
           <Text style={[styles.prefTitle, styles.prefTitleOnDark]}>What matters more?</Text>
@@ -1947,7 +1953,7 @@ export default function TripOptimizerScreen() {
       {/* Main action. Spacing above and below signals the transition from
           "set up" to "run". The handler and disabled/loading behaviour are
           untouched. */}
-      <View style={styles.ctaBlock}>
+      <View style={[styles.ctaBlock, isDesktop && styles.fullWidthDesktop]}>
         <PrimaryButton
           label={optimizing ? 'Finding route…' : 'Compare trip costs'}
           variant="secondary"
@@ -1972,7 +1978,11 @@ export default function TripOptimizerScreen() {
           accessibilityRole="button"
           accessibilityLabel="Show last trip comparison"
           onPress={() => setShowResultSheet(true)}
-          style={({ pressed }) => [styles.lastResultBtn, pressed && styles.pressed]}>
+          style={({ pressed }) => [
+            styles.lastResultBtn,
+            isDesktop && styles.fullWidthDesktop,
+            pressed && styles.pressed,
+          ]}>
           <Ionicons name="sparkles-outline" size={14} color={HomeColors.primary} />
           <Text style={styles.lastResultText}>
             Last result · {transportModeLabel(result.recommended.modeCode)} ·{' '}
@@ -1980,6 +1990,7 @@ export default function TripOptimizerScreen() {
           </Text>
         </Pressable>
       ) : null}
+      </View>
     </ScrollView>
 
       {/*
@@ -2482,8 +2493,29 @@ const styles = StyleSheet.create({
   receiptOptionBlock: {
     paddingVertical: 5,
   },
+  sectionsGrid: {},
+  /**
+   * Desktop form: Route / Vehicle on the first row, Fuel / Compare on the
+   * second, with the priority control and CTA spanning both columns. Phones
+   * keep the original single-column section stack.
+   */
+  sectionsGridDesktop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: spacing.xl,
+  },
   section: {
     marginBottom: spacing.xl,
+  },
+  sectionDesktop: {
+    flexBasis: '45%',
+    flexGrow: 1,
+    maxWidth: '49%',
+    marginBottom: 0,
+  },
+  fullWidthDesktop: {
+    width: '100%',
   },
   sectionLabel: {
     ...typography.label,

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { User } from '@supabase/supabase-js';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { floatingNavContentInset } from '@/app/(tabs)/_layout';
@@ -10,6 +10,7 @@ import { floatingNavContentInset } from '@/app/(tabs)/_layout';
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import BrandWordmark from '@/components/ui/BrandWordmark';
 import LoadingState from '@/components/ui/LoadingState';
 // NOTE: Home now runs on the cream/forest GasTa canvas, matching Vehicles,
 // Budget and Profile. `HomeColors` (old navy / cool-gray) is no longer used
@@ -52,68 +53,6 @@ import type { TripRecord } from '@/types/mcda';
 import type { Vehicle } from '@/types';
 
 /**
- * `gastanew.png` is the horizontal GasTa wordmark used in the hero.
- *
- * IMPORTANT: the file is a 1254x1254 SQUARE, but the wordmark inside it only
- * occupies 1128x338 (measured from its alpha channel) with large transparent
- * padding above and below. Sizing the Image box by the FILE's 1:1 aspect would
- * therefore render the wordmark itself only ~35px tall -- which is exactly the
- * "too small to read" problem this asset was added to fix.
- *
- * So the box is sized by the CONTENT aspect (3.34:1) instead. That keeps the
- * wordmark crisp, uncropped and at its intended height at every breakpoint.
- */
-const gastaNewLogo = require('@/assets/images/gastanew.png');
-
-/**
- * Measured geometry of gastanew.png, from its alpha channel.
- *
- * The file is a 1254x1254 SQUARE, but the wordmark only occupies a
- * 1128x338 region at (84, 456) -- i.e. roughly 36% transparent padding above and
- * 37% below, and almost none at the sides.
- *
- * That is why simply widening the Image did not help: `resizeMode="contain"`
- * fits the SQUARE source into the box by its SMALLER dimension, so a 135x40 box
- * shrank the whole 1254px canvas to 40x40 and the visible wordmark came out
- * ~36px wide -- unreadable, and leaving the rest of the row empty.
- *
- * So the square is rendered at full size inside a box exactly the size of the
- * visible artwork, offset by the padding. The source is square and the box is
- * square, so `contain` is a 1:1 fit and nothing is stretched or distorted --
- * the transparent margin is simply cropped away.
- */
-const GASTANEW_FILE = 1254;
-const GASTANEW_PAD_X = 84;
-const GASTANEW_PAD_Y = 456;
-const GASTANEW_CONTENT_W = 1128;
-const GASTANEW_CONTENT_H = 338;
-
-/** The wordmark at a given VISIBLE width, cropped to its real bounds. */
-function BrandWordmark({ width }: { width: number }) {
-  const scale = width / GASTANEW_CONTENT_W;
-  const imageSize = GASTANEW_FILE * scale;
-  return (
-    // Pinned so the tagline can never squeeze the wordmark: it is the brand, and
-    // it is already at its minimum useful size.
-    <View style={{ width, height: GASTANEW_CONTENT_H * scale, overflow: 'hidden', flexShrink: 0 }}>
-      <Image
-        accessibilityLabel="GasTa"
-        accessibilityRole="image"
-        resizeMode="contain"
-        source={gastaNewLogo}
-        style={{
-          position: 'absolute',
-          width: imageSize,
-          height: imageSize,
-          left: -GASTANEW_PAD_X * scale,
-          top: -GASTANEW_PAD_Y * scale,
-        }}
-      />
-    </View>
-  );
-}
-
-/**
  * Cream-on-forest tokens for the dark "This month" card.
  *
  * Defined here rather than in the theme because the theme has no on-forest set
@@ -122,13 +61,34 @@ function BrandWordmark({ width }: { width: number }) {
  * which is green-on-green and effectively invisible.
  */
 const ON_FOREST = {
-  label: 'rgba(248, 240, 229, 0.82)',
-  body: 'rgba(248, 240, 229, 0.94)',
-  sub: 'rgba(248, 240, 229, 0.78)',
-  track: 'rgba(248, 240, 229, 0.22)',
+  label: 'rgba(248, 240, 229, 0.90)',
+  body: 'rgba(248, 240, 229, 0.98)',
+  sub: 'rgba(248, 240, 229, 0.90)',
+  track: 'rgba(248, 240, 229, 0.28)',
   /** A light lime that reads clearly on forest without a new brand hue. */
-  fill: '#9BE08A',
+  fill: '#A7E89A',
   over: '#FCA5A5',
+} as const;
+
+/**
+ * Semantic tints for the small status pills inside the dark price card.
+ *
+ * These are tints OF the existing palette rather than new brand hues: the same
+ * red already used for over-budget, and the same lime already used for a fill
+ * that is under budget. On `forestDark` the tint only works as a translucent
+ * background with a light foreground, which is why each pair is declared here
+ * instead of being mixed inside the stylesheet.
+ */
+const RECO_TINTS = {
+  upBg: 'rgba(248, 113, 113, 0.18)',
+  upBorder: 'rgba(248, 113, 113, 0.45)',
+  upText: '#FCA5A5',
+  downBg: 'rgba(155, 224, 138, 0.16)',
+  downBorder: 'rgba(155, 224, 138, 0.42)',
+  downText: '#A7E89A',
+  staleBg: 'rgba(251, 191, 36, 0.18)',
+  staleBorder: 'rgba(251, 191, 36, 0.45)',
+  staleText: '#FCD34D',
 } as const;
 
 /** "NCR" -> "National Capital Region", from the shared region table. */
@@ -146,16 +106,6 @@ function formatDistanceKm(km: number): string {
   if (!Number.isFinite(km) || km < 0) return '';
   if (km < 1) return `${Math.max(1, Math.round(km * 1000))} m`;
   return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
-}
-
-/**
- * "Sunday, September 28" — local device date, no network, no stored state. */
-function getTodayLabel(now = new Date()): string {
-  return now.toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
 }
 
 /** One small semantic chip. Only rendered when there is a real status to show. */
@@ -257,7 +207,12 @@ function reportStatusBadge(status: string): { label: string; tone: HomeActivityT
 export default function HomeScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-  const { contentMaxWidth, horizontalPadding, width: windowWidth } = useResponsive();
+  const {
+    contentMaxWidth,
+    horizontalPadding,
+    isDesktop,
+    width: windowWidth,
+  } = useResponsive();
   // Lets the branded hero bleed up under the status bar instead of leaving a
   // cream strip above it. Declared here, with the other hooks and above every
   // early return -- a hook below one changes the hook order between the loading
@@ -433,11 +388,11 @@ export default function HomeScreen() {
   const goToBudget = useCallback(() => router.push('/(tabs)/budget'), [router]);
 
   /**
-   * Home is allowed a slightly wider shell than the shared `contentMaxWidth`
-   * (which tops out at 480 on desktop) so a browser does not show a narrow
-   * mobile column adrift in empty space. Still capped, never full-bleed.
+   * Home uses the shared page shell. On a browser that is a wide dashboard
+   * canvas (see `useResponsive`), still capped so it never stretches edge to
+   * edge on an ultrawide display.
    */
-  const homeMaxWidth = Math.max(contentMaxWidth, 640);
+  const homeMaxWidth = contentMaxWidth;
 
   if (!isSupabaseConfigured) {
     return (
@@ -463,8 +418,6 @@ export default function HomeScreen() {
 
   // The fuel type stays the service's concern (DASHBOARD_FUEL_TYPE); the section
   // heading is intentionally generic so it does not duplicate that in the UI.
-
-  const todayLabel = getTodayLabel();
 
   /**
    * Visible wordmark width. Measured, not guessed: this is the width of the
@@ -508,10 +461,11 @@ export default function HomeScreen() {
     price?.source === 'doe' && price.bulletinDate
       ? formatBulletinRange(price.bulletinDate)
       : null;
-  const recoFreshnessLabel =
+  const recoFreshness =
     price?.source === 'doe' && price.bulletinDate
-      ? getBulletinFreshness(price.bulletinDate).label
+      ? getBulletinFreshness(price.bulletinDate)
       : null;
+  const recoIsStale = recoFreshness?.status === 'stale';
 
   const recoDelta =
     price?.vsLastBulletin != null && Number.isFinite(price.vsLastBulletin)
@@ -552,6 +506,180 @@ export default function HomeScreen() {
       : budget?.status === 'warning'
         ? palette.warning
         : GasTaColors.forest;
+
+  /**
+   * The weekly price card ("the diesel card").
+   *
+   * It is defined once and placed twice: inline after "This month" on a phone,
+   * and full-width below the two desktop columns. Duplicating the markup would
+   * have let the mobile and desktop cards drift apart.
+   *
+   * On desktop the card reflows into a price lead on the left and a labelled
+   * Station/Price table on the right, so a 1000px-wide card is not just a
+   * stretched phone card.
+   */
+  const recoBlock = (
+    <View style={isDesktop ? styles.blockDesktop : styles.block}>
+      {price ? (
+        <View style={[styles.recoCard, isDesktop && styles.recoCardWide]}>
+          <View style={styles.recoTop}>
+            {recoEyebrow ? (
+              <Text numberOfLines={2} style={styles.recoEyebrow}>
+                {recoEyebrow}
+              </Text>
+            ) : null}
+            {recoUpdatedLabel ? (
+              <View style={styles.recoAgePill}>
+                <Text style={styles.recoAgePillText}>{recoUpdatedLabel}</Text>
+              </View>
+            ) : null}
+            {/*
+              Freshness is a warning when the bulletin is stale, so it gets the
+              amber treatment; a current bulletin stays a quiet neutral chip
+              instead of turning the happy path into a second accent colour.
+            */}
+            {recoFreshness ? (
+              <View
+                style={[
+                  styles.recoAgePill,
+                  recoIsStale ? styles.recoStalePill : styles.recoCurrentPill,
+                ]}>
+                <Ionicons
+                  name={recoIsStale ? 'alert-circle-outline' : 'checkmark-circle-outline'}
+                  size={11}
+                  color={recoIsStale ? RECO_TINTS.staleText : ON_FOREST.body}
+                />
+                <Text
+                  style={[
+                    styles.recoAgePillText,
+                    recoIsStale && styles.recoStalePillText,
+                  ]}>
+                  {recoFreshness.label}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={isDesktop ? styles.recoBodyWide : undefined}>
+            <View style={isDesktop ? styles.recoLead : undefined}>
+              <View style={styles.recoPriceRow}>
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.55}
+                  numberOfLines={1}
+                  style={[styles.recoPrice, isDesktop && styles.recoPriceWide]}>
+                  {formatCurrency(price.price)}
+                  <Text style={styles.recoUnit}>/L</Text>
+                </Text>
+                {recoDelta != null ? (
+                  <View
+                    style={[
+                      styles.recoDeltaPill,
+                      recoDelta > 0
+                        ? styles.recoDeltaPillUp
+                        : recoDelta < 0
+                          ? styles.recoDeltaPillDown
+                          : styles.recoDeltaPillFlat,
+                    ]}>
+                    <Ionicons
+                      name={
+                        recoDelta > 0
+                          ? 'trending-up'
+                          : recoDelta < 0
+                            ? 'trending-down'
+                            : 'remove'
+                      }
+                      size={12}
+                      color={
+                        recoDelta > 0
+                          ? RECO_TINTS.upText
+                          : recoDelta < 0
+                            ? RECO_TINTS.downText
+                            : ON_FOREST.body
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.recoDeltaPillText,
+                        recoDelta > 0
+                          ? styles.recoDeltaPillTextUp
+                          : recoDelta < 0
+                            ? styles.recoDeltaPillTextDown
+                            : null,
+                      ]}>
+                      {recoDelta === 0
+                        ? 'No change'
+                        : `${formatCurrency(Math.abs(recoDelta))} vs last bulletin`}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Text style={styles.recoBrand}>{price.stationName}</Text>
+              {recoSavingsLabel ? (
+                <Text style={styles.recoSavings}>{recoSavingsLabel}</Text>
+              ) : price.isNearbyRecommended && price.distanceKm != null ? (
+                <Text style={styles.recoSavings}>
+                  {formatDistanceKm(price.distanceKm)} away · community verified
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={isDesktop ? styles.recoAside : undefined}>
+              {price.runnersUp.length > 0 ? (
+                <View style={[styles.recoList, isDesktop && styles.recoListWide]}>
+                  {/*
+                    A labelled table instead of a bare list: the price column
+                    only means "per litre" because the heading says so, and the
+                    header keeps the numbers scannable down the card.
+                  */}
+                  <View style={styles.recoTableHead}>
+                    <Text style={styles.recoTableHeadText}>Station</Text>
+                    <Text style={[styles.recoTableHeadText, styles.recoTableHeadPrice]}>
+                      Price
+                    </Text>
+                  </View>
+                  {price.runnersUp.map((row) => (
+                    <View key={`${row.rank}-${row.name}`} style={styles.recoListRow}>
+                      <Text style={styles.recoListName}>
+                        {row.rank} · {row.name}
+                      </Text>
+                      <Text style={styles.recoListPrice}>{formatCurrency(row.price)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              <View style={styles.recoActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Log refill at this price"
+                  onPress={goToVehicles}
+                  style={({ pressed }) => [styles.recoPrimaryBtn, pressed && styles.pressed]}>
+                  <Ionicons name="add" size={15} color={GasTaColors.forestDark} />
+                  <Text style={styles.recoPrimaryBtnText}>Log refill at this price</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel="See all fuel prices"
+                  onPress={goToPrices}
+                  style={({ pressed }) => [styles.recoSecondaryBtn, pressed && styles.pressed]}>
+                  <Text style={styles.recoSecondaryBtnText}>See all</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      ) : (
+        <Text style={styles.emptyLine}>No price recommendation yet</Text>
+      )}
+
+      {fuelFallbackNote ? (
+        <Text style={styles.fuelNote}>{fuelFallbackNote}</Text>
+      ) : null}
+    </View>
+  );
+
   return (
     <ScrollView
       // The canonical cream, same as the scene behind it. Explicit rather than
@@ -566,7 +694,11 @@ export default function HomeScreen() {
           // in _layout.tsx), so it reserves the identical clearance here. The
           // body continues behind the floating bar instead of stopping at a
           // differently-coloured band, and the last row stays reachable.
-          paddingBottom: floatingNavContentInset(insets.bottom),
+          //
+          // Desktop has no floating bar: it just needs a normal page margin, so
+          // the dashboard ends at the bottom of the price card instead of
+          // reserving ~90px of dead cream space.
+          paddingBottom: isDesktop ? spacing.xl : floatingNavContentInset(insets.bottom),
         },
       ]}
       onScroll={tabBarScrollHandler}
@@ -589,46 +721,55 @@ export default function HomeScreen() {
         be rendered within a <Text> component" for it.
       */}
       <View style={[styles.header, { paddingHorizontal: horizontalPadding }]}>
-        <View style={styles.headerRow}>
-          <BrandWordmark width={brandLogoWidth} />
-          {/*
-            Brand tagline, not an action.
+        {/* Desktop keeps branding in the dock, so the page opens straight on
+            the greeting instead of repeating the wordmark and tagline. */}
+        {!isDesktop ? (
+          <View style={styles.headerRow}>
+            <BrandWordmark width={brandLogoWidth} />
+            {/*
+              Brand tagline, not an action.
 
-            The top-right control was a second shortcut for a screen that the
-            bottom tab bar already owns, so it carried no information. A short
-            statement of what the product is does, and it balances the wordmark
-            without adding another thing to tap.
+              The top-right control was a second shortcut for a screen that the
+              bottom tab bar already owns, so it carried no information. A short
+              statement of what the product is does, and it balances the wordmark
+              without adding another thing to tap.
 
-            "LOWER COSTS" is the only emphasised run. On a narrow phone the line
-            breaks deliberately after the first sentence rather than wherever the
-            text happens to run out, so the accent never lands mid-phrase.
-          */}
-          <View style={styles.tagline}>
-            {taglineBreaks ? (
-              <>
-                <Text style={[styles.taglineLine, styles.taglineLineNarrow]}>
-                  SMART CHOICES.
+              "LOWER COSTS" is the only emphasised run. On a narrow phone the line
+              breaks deliberately after the first sentence rather than wherever the
+              text happens to run out, so the accent never lands mid-phrase.
+            */}
+            <View style={styles.tagline}>
+              {taglineBreaks ? (
+                <>
+                  <Text style={[styles.taglineLine, styles.taglineLineNarrow]}>
+                    SMART CHOICES.
+                  </Text>
+                  <Text style={[styles.taglineLine, styles.taglineLineNarrow]}>
+                    <Text style={styles.taglineAccent}>LOWER COSTS.</Text> EVERY TRIP.
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.taglineLine}>
+                  SMART CHOICES. <Text style={styles.taglineAccent}>LOWER COSTS.</Text> EVERY TRIP.
                 </Text>
-                <Text style={[styles.taglineLine, styles.taglineLineNarrow]}>
-                  <Text style={styles.taglineAccent}>LOWER COSTS.</Text> EVERY TRIP.
-                </Text>
-              </>
-            ) : (
-              <Text style={styles.taglineLine}>
-                SMART CHOICES. <Text style={styles.taglineAccent}>LOWER COSTS.</Text> EVERY TRIP.
-              </Text>
-            )}
+              )}
+            </View>
           </View>
-        </View>
+        ) : null}
         <Text style={styles.greeting} numberOfLines={1}>
           {getGreeting()}, {firstName}
-        </Text>
-        <Text style={styles.headerDate} numberOfLines={1}>
-          {todayLabel}
         </Text>
       </View>
       <View style={styles.body}>
         <View style={[styles.grid, { paddingHorizontal: horizontalPadding }]}>
+          {/*
+            Two desktop columns, then the weekly price card across the full
+            width beneath them. `dashboardRow` is only applied on desktop; on a
+            phone the wrappers are layout-neutral, so the original order --
+            month, price, glance, pending, recent -- is unchanged.
+          */}
+          <View style={isDesktop ? styles.dashboardRow : undefined}>
+          <View style={isDesktop ? styles.columnMain : undefined}>
           {/*
             THIS MONTH — the primary hero. A dark forest card, because this is the
             one number the user opened the app for, and the reference composition
@@ -707,14 +848,21 @@ export default function HomeScreen() {
                   spent on refills this month
                 </Text>
                 <View style={styles.monthFoot}>
-                  <Text style={styles.monthFootLeft}>No monthly budget set</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Set a monthly budget"
+                    onPress={goToBudget}
+                    style={({ pressed }) => [styles.setBudgetPill, pressed && styles.pressed]}>
+                    <Ionicons name="wallet-outline" size={14} color={GasTaColors.forestDark} />
+                    <Text style={styles.setBudgetPillText}>Set budget</Text>
+                  </Pressable>
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Log refill"
                     onPress={goToVehicles}
-                    style={({ pressed }) => [styles.logRefillPill, pressed && styles.pressed]}>
-                    <Ionicons name="add" size={14} color={GasTaColors.forest} />
-                    <Text style={styles.logRefillPillText}>Log refill</Text>
+                    style={({ pressed }) => [styles.logRefillGhost, pressed && styles.pressed]}>
+                    <Ionicons name="add" size={14} color={GasTaColors.cream} />
+                    <Text style={styles.logRefillGhostText}>Log refill</Text>
                   </Pressable>
                 </View>
               </>
@@ -722,113 +870,17 @@ export default function HomeScreen() {
           </View>
 
           {/*
-            DOE recommendation panel (proposed layout): cheapest brand this week,
-            week-over-week delta, fill-up savings vs average, runners-up, and
-            dual CTAs. Uses forestDark + cream tokens so it sits in the GasTa
-            system next to This month — not a one-off mock palette.
+            On a phone the price card follows This month; on desktop it is
+            lifted out of the columns and rendered full-width below them.
           */}
-          <View style={styles.block}>
-            {price ? (
-              <View style={styles.recoCard}>
-                <View style={styles.recoTop}>
-                  {recoEyebrow ? (
-                    <Text numberOfLines={2} style={styles.recoEyebrow}>
-                      {recoEyebrow}
-                    </Text>
-                  ) : null}
-                  {recoUpdatedLabel ? (
-                    <View style={styles.recoAgePill}>
-                      <Text style={styles.recoAgePillText}>{recoUpdatedLabel}</Text>
-                    </View>
-                  ) : null}
-                  {recoFreshnessLabel ? (
-                    <View style={styles.recoAgePill}>
-                      <Text style={styles.recoAgePillText}>{recoFreshnessLabel}</Text>
-                    </View>
-                  ) : null}
-                </View>
-
-                <View style={styles.recoPriceRow}>
-                  <Text
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.55}
-                    numberOfLines={1}
-                    style={styles.recoPrice}>
-                    {formatCurrency(price.price)}
-                    <Text style={styles.recoUnit}>/L</Text>
-                  </Text>
-                  {recoDelta != null ? (
-                    <Text
-                      numberOfLines={2}
-                      style={[
-                        styles.recoDelta,
-                        recoDelta > 0 ? styles.recoDeltaUp : null,
-                      ]}>
-                      {recoDelta === 0
-                        ? 'No change vs last bulletin'
-                        : `${recoDelta < 0 ? '↘' : '↗'} ${formatCurrency(Math.abs(recoDelta))} vs last bulletin`}
-                    </Text>
-                  ) : null}
-                </View>
-
-                <Text numberOfLines={1} style={styles.recoBrand}>
-                  {price.stationName}
-                </Text>
-                {recoSavingsLabel ? (
-                  <Text style={styles.recoSavings}>{recoSavingsLabel}</Text>
-                ) : price.isNearbyRecommended && price.distanceKm != null ? (
-                  <Text style={styles.recoSavings}>
-                    {formatDistanceKm(price.distanceKm)} away · community verified
-                  </Text>
-                ) : null}
-
-                {price.runnersUp.length > 0 ? (
-                  <View style={styles.recoList}>
-                    {price.runnersUp.map((row) => (
-                      <View key={`${row.rank}-${row.name}`} style={styles.recoListRow}>
-                        <Text numberOfLines={1} style={styles.recoListName}>
-                          {row.rank} · {row.name}
-                        </Text>
-                        <Text style={styles.recoListPrice}>{formatCurrency(row.price)}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                <View style={styles.recoActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Log refill at this price"
-                    onPress={goToVehicles}
-                    style={({ pressed }) => [styles.recoPrimaryBtn, pressed && styles.pressed]}>
-                    <Ionicons name="add" size={15} color={GasTaColors.forestDark} />
-                    <Text style={styles.recoPrimaryBtnText}>Log refill at this price</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="link"
-                    accessibilityLabel="See all fuel prices"
-                    onPress={goToPrices}
-                    style={({ pressed }) => [styles.recoSecondaryBtn, pressed && styles.pressed]}>
-                    <Text style={styles.recoSecondaryBtnText}>See all</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : (
-              <Text style={styles.emptyLine}>No price recommendation yet</Text>
-            )}
-
-            {fuelFallbackNote ? (
-              <Text style={styles.fuelNote}>{fuelFallbackNote}</Text>
-            ) : null}
-          </View>
-
+          {!isDesktop ? recoBlock : null}
           {/*
             AT A GLANCE. One call to fetchVehicles, no per-vehicle refill lookup.
             The last-refill figures come from the vehicle row's own cached
             columns, so nothing here is a second round trip. With no owned
             vehicle this collapses to one action instead of two empty cards.
           */}
-          <View style={styles.block}>
+          <View style={isDesktop ? [styles.block, styles.blockDesktop] : styles.block}>
             <Text style={styles.sectionLabel}>At a glance</Text>
             {primaryVehicle ? (
               <View style={styles.glanceRow}>
@@ -906,7 +958,7 @@ export default function HomeScreen() {
             case costs no vertical space.
           */}
           {pending && pending.count > 0 ? (
-            <View style={styles.block}>
+            <View style={isDesktop ? [styles.block, styles.blockDesktop] : styles.block}>
               <Pressable
                 accessibilityRole="link"
                 accessibilityLabel="Review pending refill responsibility"
@@ -929,8 +981,15 @@ export default function HomeScreen() {
               </Pressable>
             </View>
           ) : null}
+          </View>
 
-          <View style={styles.blockLast}>
+          {/*
+            Recent moves to the right-hand column on desktop (it is the tallest
+            section); on a phone these wrappers add no layout, so it stays the
+            last block in the original order.
+          */}
+          <View style={isDesktop ? styles.columnSide : undefined}>
+          <View style={isDesktop ? styles.blockLastDesktop : styles.blockLast}>
             <View style={styles.sectionHead}>
               <Text style={styles.sectionLabel}>Recent</Text>
               {/*
@@ -984,10 +1043,15 @@ export default function HomeScreen() {
                       />
                     </View>
                     <View style={styles.recentInfo}>
-                      <Text numberOfLines={1} style={styles.recentTitle}>
+                      {/*
+                        No `numberOfLines` cap: the station name is the part of
+                        this row a user actually recognises, so it wraps rather
+                        than being cut off with an ellipsis.
+                      */}
+                      <Text style={styles.recentTitle}>
                         {activity.title}
                       </Text>
-                      <Text numberOfLines={1} style={styles.recentDetail}>
+                      <Text style={styles.recentDetail}>
                         {activity.secondary} · {activity.detail}
                       </Text>
                     </View>
@@ -1011,6 +1075,14 @@ export default function HomeScreen() {
               </Pressable>
             ) : null}
           </View>
+          </View>
+          </View>
+
+          {/*
+            Full-width price card. Desktop only: on a phone it already sits
+            between This month and At a glance.
+          */}
+          {isDesktop ? <View style={styles.dieselFull}>{recoBlock}</View> : null}
         </View>
       </View>
     </ScrollView>
@@ -1071,7 +1143,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     marginTop: 18,
   },
-  headerDate: { color: GasTaColors.textMuted, fontSize: 13, lineHeight: 17, marginTop: 3 },
 
   /* ---- dashboard body ---------------------------------------------------- */
   /**
@@ -1094,6 +1165,24 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   grid: { width: '100%' },
+  /**
+   * Desktop dashboard. Two columns on top -- budget / glance / pending on the
+   * left, the Recent activity list on the right -- and then the weekly price
+   * card spans the full width beneath them (see `dieselFull`).
+   */
+  dashboardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xl,
+  },
+  columnMain: { flex: 1.15, minWidth: 0, gap: spacing.xl },
+  columnSide: { flex: 0.85, minWidth: 0, gap: spacing.xl },
+  /**
+   * The full-width price card. The top margin is the same column gap used
+   * above, so the three desktop regions read as one grid rather than three
+   * separately-spaced blocks.
+   */
+  dieselFull: { width: '100%', marginTop: spacing.xl },
 
   sectionLabel: {
     color: GasTaColors.textMuted,
@@ -1113,7 +1202,10 @@ const styles = StyleSheet.create({
   sectionLink: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   sectionLinkText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '700' },
   block: { marginTop: spacing.xl },
+  /** Desktop columns already own their spacing via `gap`. */
+  blockDesktop: { marginTop: 0 },
   blockLast: { marginTop: spacing.xl, marginBottom: spacing.md },
+  blockLastDesktop: { marginTop: 0, marginBottom: spacing.md },
 
   /* ---- this month: the dark hero ----------------------------------------- */
   monthCard: {
@@ -1175,6 +1267,32 @@ const styles = StyleSheet.create({
     backgroundColor: GasTaColors.cream,
   },
   logRefillPillText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '800' },
+  /**
+   * "Set budget" is the primary action when no limit exists, so it keeps the
+   * cream fill; Log refill drops to a ghost pill beside it rather than two
+   * solid pills competing for the same glance.
+   */
+  setBudgetPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm + 4,
+    borderRadius: radii.pill,
+    backgroundColor: GasTaColors.cream,
+  },
+  setBudgetPillText: { color: GasTaColors.forestDark, fontSize: 12, fontWeight: '800' },
+  logRefillGhost: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm + 2,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(248, 240, 229, 0.45)',
+  },
+  logRefillGhostText: { color: GasTaColors.cream, fontSize: 12, fontWeight: '700' },
 
   /* ---- at a glance ------------------------------------------------------- */
   glanceRow: { flexDirection: 'row', gap: spacing.sm },
@@ -1234,6 +1352,24 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md + 2,
     paddingHorizontal: spacing.lg,
   },
+  /** Full-width desktop card: more side room, same vertical rhythm. */
+  recoCardWide: {
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.xl,
+  },
+  /**
+   * Desktop split inside the wide card: price + station on the left, the
+   * Station/Price table and the two actions on the right. On a phone this
+   * wrapper is absent, so the card stacks exactly as before.
+   */
+  recoBodyWide: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xl,
+    marginTop: spacing.sm,
+  },
+  recoLead: { flex: 1, minWidth: 0 },
+  recoAside: { flex: 1, minWidth: 0 },
   recoTop: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1250,11 +1386,23 @@ const styles = StyleSheet.create({
   },
   recoAgePill: {
     flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: radii.pill,
     backgroundColor: 'rgba(248, 240, 229, 0.14)',
   },
+  /** Amber warning: the bulletin is older than its week. */
+  recoStalePill: {
+    backgroundColor: RECO_TINTS.staleBg,
+    borderWidth: 1,
+    borderColor: RECO_TINTS.staleBorder,
+  },
+  recoStalePillText: { color: RECO_TINTS.staleText },
+  /** Current bulletin, kept quiet: a light lime tint, no border weight. */
+  recoCurrentPill: { backgroundColor: 'rgba(155, 224, 138, 0.14)' },
   recoAgePillText: {
     color: ON_FOREST.body,
     fontSize: 10,
@@ -1263,9 +1411,9 @@ const styles = StyleSheet.create({
   },
   recoPriceRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: spacing.sm + 4,
     marginTop: spacing.sm + 2,
   },
   recoPrice: {
@@ -1277,18 +1425,48 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
   },
+  /** The price is the anchor of the full-width card, so it earns more size. */
+  recoPriceWide: { fontSize: 42, lineHeight: 48 },
   recoUnit: { fontSize: 15, fontWeight: '600', color: ON_FOREST.sub },
-  recoDelta: {
+  /**
+   * Week-over-week change as a pill rather than a line of text: red-tinted for
+   * a rise (the cost went the wrong way), lime-tinted for a drop, and a quiet
+   * neutral for no change.
+   */
+  recoDeltaPill: {
     flexShrink: 1,
-    maxWidth: 132,
-    color: ON_FOREST.fill,
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '700',
-    textAlign: 'right',
-    paddingBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: 172,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(248, 240, 229, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(248, 240, 229, 0.26)',
   },
-  recoDeltaUp: { color: ON_FOREST.over },
+  recoDeltaPillUp: {
+    backgroundColor: RECO_TINTS.upBg,
+    borderColor: RECO_TINTS.upBorder,
+  },
+  recoDeltaPillDown: {
+    backgroundColor: RECO_TINTS.downBg,
+    borderColor: RECO_TINTS.downBorder,
+  },
+  recoDeltaPillFlat: {
+    backgroundColor: 'rgba(248, 240, 229, 0.12)',
+    borderColor: 'rgba(248, 240, 229, 0.26)',
+  },
+  recoDeltaPillText: {
+    flexShrink: 1,
+    color: ON_FOREST.body,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  recoDeltaPillTextUp: { color: RECO_TINTS.upText },
+  recoDeltaPillTextDown: { color: RECO_TINTS.downText },
   recoBrand: {
     color: GasTaColors.cream,
     fontSize: 17,
@@ -1310,6 +1488,30 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(248, 240, 229, 0.18)',
     paddingTop: spacing.sm + 2,
   },
+  /** Column headings for the Station / Price table. */
+  recoTableHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingBottom: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(248, 240, 229, 0.28)',
+  },
+  recoTableHeadText: {
+    color: ON_FOREST.label,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    textTransform: 'uppercase',
+  },
+  recoTableHeadPrice: { textAlign: 'right' },
+  /**
+   * In the wide card the table is the top of the right-hand column, so it
+   * lines up with the price row instead of floating below a stack of text.
+   */
+  recoListWide: { marginTop: spacing.sm + 2 },
   recoListRow: {
     flexDirection: 'row',
     alignItems: 'center',

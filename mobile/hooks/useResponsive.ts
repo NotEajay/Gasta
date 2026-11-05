@@ -20,7 +20,20 @@ export function useResponsive() {
     : clamp(width / BASE_WIDTH, MIN_SCALE, MAX_SCALE);
   const scale = (size: number) => Math.round(scaleFactor * size);
 
+  /**
+   * Two widths, because a dashboard and a sign-in form want different things.
+   *
+   * `contentMaxWidth` is the page shell: full width on a phone, a comfortable
+   * multi-column canvas on a desktop browser. `formMaxWidth` stays narrow so
+   * auth / single-field flows keep a readable measure instead of stretching to
+   * the full browser width.
+   */
   const contentMaxWidth = clamp(
+    width * 0.92,
+    320,
+    isDesktop ? 1120 : isTablet ? 720 : 400,
+  );
+  const formMaxWidth = clamp(
     width * 0.92,
     320,
     isDesktop ? 480 : isTablet ? 440 : 400,
@@ -42,6 +55,7 @@ export function useResponsive() {
     isLandscape,
     scale,
     contentMaxWidth,
+    formMaxWidth,
     logoWidth,
     horizontalPadding,
     verticalPadding,

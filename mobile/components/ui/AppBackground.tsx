@@ -61,6 +61,14 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: GasTaColors.cream,
+    /**
+     * The orbs are deliberately pushed past the edges. Without clipping, the
+     * bottom-left orb (offset -70px) makes the document 70px taller than the
+     * viewport, which shows up as a scroll of empty cream at the bottom of
+     * every cream screen. Clipping is the correct behaviour for a background
+     * layer: the orbs stay decorative and the page ends where its content does.
+     */
+    overflow: 'hidden',
   },
   topGlow: {
     position: 'absolute',

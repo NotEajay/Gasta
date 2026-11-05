@@ -28,6 +28,7 @@ import {
 } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   archiveVehicle,
@@ -59,6 +60,7 @@ export default function VehiclesScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth, isDesktop } = useResponsive();
   const scrollRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
   const scrollOffset = useRef(0);
@@ -759,7 +761,10 @@ export default function VehiclesScreen() {
       keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
       scrollEventThrottle={16}
       style={styles.flex}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
+      ]}
       showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Vehicles</Text>
@@ -945,13 +950,16 @@ export default function VehiclesScreen() {
       ) : (
         <>
           <Text style={styles.sectionLabel}>Saved vehicles</Text>
+          <View style={[styles.vehicleGrid, isDesktop && styles.vehicleGridDesktop]}>
           {vehicles.map((v) => {
             const hasRefill = v.last_refill_price != null;
             const showRefillForm = editingVehicleId === v.id;
             const isEditingThis = editingVehicle?.id === v.id;
 
             return (
-              <View key={v.id} style={styles.vehicleCard}>
+              <View
+                key={v.id}
+                style={[styles.vehicleCard, isDesktop && styles.vehicleCardDesktop]}>
                 <View style={styles.vehicleCardHead}>
                   <View style={styles.vehicleIcon}>
                     <Ionicons name="car-outline" size={18} color={GasTaColors.forest} />
@@ -1094,6 +1102,7 @@ export default function VehiclesScreen() {
               </View>
             );
           })}
+          </View>
         </>
       )}
 
@@ -1447,6 +1456,12 @@ const styles = StyleSheet.create({
 
   // Collapsible add/edit form. Flat surface — no blur, no gradient.
   formCard: {
+    // Keep single-column inputs at a readable measure on a wide browser, and
+    // centre the card inside the wider page shell instead of leaving it
+    // hanging off the left edge.
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
     padding: SURFACE_PAD,
     borderRadius: GasTaRadius.md,
     borderWidth: StyleSheet.hairlineWidth,
@@ -1519,6 +1534,13 @@ const styles = StyleSheet.create({
   },
 
   // Compact vehicle card — flat surface, hairline border, no shadow.
+  vehicleGrid: {},
+  vehicleGridDesktop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: GasTaSpacing.md,
+  },
   vehicleCard: {
     padding: SURFACE_PAD,
     borderRadius: GasTaRadius.md,
@@ -1526,6 +1548,12 @@ const styles = StyleSheet.create({
     borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     marginBottom: GasTaSpacing.md,
+  },
+  vehicleCardDesktop: {
+    flexBasis: '45%',
+    flexGrow: 1,
+    maxWidth: '49%',
+    marginBottom: 0,
   },
   vehicleCardHead: {
     flexDirection: 'row',

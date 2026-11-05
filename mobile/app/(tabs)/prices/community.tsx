@@ -12,6 +12,7 @@ import LoadingState from '@/components/ui/LoadingState';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { GasTaColors as C, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency } from '@/lib/format';
 import {
   canDeleteCommunityReport, communityReportMatchesRecency, confirmCommunityReport,
@@ -29,6 +30,7 @@ const RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = [
 type Result = { type: 'confirmation' | 'success' | 'error'; operation: 'confirm' | 'delete'; title: string; message: string };
 export default function CommunityPricesScreen() {
   const router = useRouter();
+  const { contentMaxWidth } = useResponsive();
   const params = useLocalSearchParams<{ report_flow?: string; report_company?: string; report_region?: string; report_area?: string; report_request?: string }>();
   const { user, loading: authLoading } = useAuth();
   const [reports, setReports] = useState<CommunityReport[]>([]);
@@ -114,7 +116,7 @@ export default function CommunityPricesScreen() {
   if (!isSupabaseConfigured) return <View style={styles.flex}><SupabaseSetupBanner /></View>;
   if (authLoading || loading) return <LoadingState message="Loading community prices…" />;
   return <>
-    <ScrollView style={styles.flex} contentContainerStyle={styles.padding} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(); }} tintColor={C.forest} />}>
+    <ScrollView style={styles.flex} contentContainerStyle={[styles.padding, { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' }]} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(); }} tintColor={C.forest} />}>
       <Pressable accessibilityLabel="Go back" accessibilityRole="button" hitSlop={8} onPress={() => router.back()} style={styles.back}><Ionicons name="chevron-back" size={18} color={C.forest} /><Text style={styles.backText}>Back</Text></Pressable>
       <View style={styles.header}>
         <View style={{ flex: 1 }}><Text style={styles.title}>Community Prices</Text><Text style={styles.meta}>Verified by {VERIFY_CONFIRMATIONS_REQUIRED} users within ±₱0.50/L</Text></View>

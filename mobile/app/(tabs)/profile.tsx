@@ -15,6 +15,7 @@ import LoadingState from '@/components/ui/LoadingState';
 import { GasTaColors, GasTaRadius, GasTaSpacing, typeScale } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatDate } from '@/lib/format';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
@@ -39,6 +40,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { user, loading: authLoading, signOut } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth } = useResponsive();
   const [signingOut, setSigningOut] = useState(false);
   const [role, setRole] = useState<'user' | 'developer' | 'admin'>('user');
   const [roleLoading, setRoleLoading] = useState(true);
@@ -122,7 +124,10 @@ export default function ProfileScreen() {
     <View style={styles.flex}>
       <ScrollView
         style={styles.flex}
-        contentContainerStyle={styles.padding}
+        contentContainerStyle={[
+          styles.padding,
+          { maxWidth: Math.min(contentMaxWidth, 760), alignSelf: 'center', width: '100%' },
+        ]}
         onScroll={tabBarScrollHandler}
         scrollEventThrottle={16}>
       {/* Compact page title only. No subtitle — it restated the screen's own

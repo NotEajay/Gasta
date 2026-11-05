@@ -33,6 +33,7 @@ import {
 import { GasTaColors, GasTaRadius, GasTaSpacing, palette, typeScale } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatPeso } from '@/lib/format';
 import {
   ActualSpendUnavailableError,
@@ -154,6 +155,7 @@ export default function BudgetScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth } = useResponsive();
 
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
@@ -486,7 +488,10 @@ export default function BudgetScreen() {
     <HideWhenBlurred>
     <View style={styles.flex}>
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
+        ]}
         onScroll={tabBarScrollHandler}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}

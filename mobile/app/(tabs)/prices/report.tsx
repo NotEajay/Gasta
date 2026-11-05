@@ -19,6 +19,7 @@ import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_REGIONS, REGION_CENTROIDS, type DoeRegionCode } from '@/constants/regions';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency } from '@/lib/format';
 import {
   createFuelStation,
@@ -41,6 +42,7 @@ type SubmittedReport = {
 
 export default function ReportPriceScreen() {
   const router = useRouter();
+  const { contentMaxWidth } = useResponsive();
   const params = useLocalSearchParams<{
     station_id?: string;
     station_name?: string;
@@ -341,7 +343,14 @@ export default function ReportPriceScreen() {
       onScroll={(event) => { scrollOffset.current = event.nativeEvent.contentOffset.y; }}
       scrollEventThrottle={16}
       style={styles.flex}
-      contentContainerStyle={styles.padding}>
+      contentContainerStyle={[
+        styles.padding,
+        {
+          maxWidth: Math.min(contentMaxWidth, 760),
+          alignSelf: 'center',
+          width: '100%',
+        },
+      ]}>
       <SubPageHeader
         module="community"
         title={selectedStationId ? "Report station price" : "Report a price"}
