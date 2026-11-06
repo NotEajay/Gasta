@@ -70,18 +70,18 @@ export default function CompanyEstimateCard({
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: radii.lg, backgroundColor: C.cream, borderWidth: StyleSheet.hairlineWidth, borderColor: C.forestBorder, overflow: 'hidden' },
-  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2, minHeight: 54 },
+  card: { borderRadius: radii.lg, backgroundColor: C.white, borderWidth: 1, borderColor: C.glassBorderSubtle, overflow: 'hidden' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.md, minHeight: 72 },
   copy: { flex: 1, minWidth: 0 },
   right: { alignItems: 'flex-end', gap: 6 },
-  company: { fontSize: 14, fontWeight: '700', lineHeight: 19, color: C.textPrimary },
+  company: { fontSize: 15, fontWeight: '700', lineHeight: 19, color: C.textPrimary },
   source: { fontSize: 11, lineHeight: 15, color: C.textSoft, marginTop: 3, marginBottom: 6 },
   secondary: { color: C.forestMuted, fontSize: 12, lineHeight: 18 },
-  price: { fontSize: 16, fontWeight: '800', color: C.forestDark },
+  price: { fontSize: 20, fontWeight: '800', color: C.forestDark },
   unit: { fontSize: 10, fontWeight: '700', opacity: 0.7 },
   details: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.forestBorder, padding: spacing.md, gap: 8 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  button: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: radii.pill, backgroundColor: C.forestGlow, paddingHorizontal: 10, paddingVertical: 8 },
-  buttonText: { fontSize: 11, fontWeight: '700', color: C.forest },
+  button: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: radii.sm, backgroundColor: C.forestGlow, paddingHorizontal: 12, paddingVertical: 12, minHeight: 44 },
+  buttonText: { fontSize: 12, fontWeight: '700', color: C.forest },
   pressed: { opacity: 0.75 },
 });

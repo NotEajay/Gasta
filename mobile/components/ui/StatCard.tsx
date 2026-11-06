@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   iconText: {
-    color: '#F8F0E5',
+    color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '800',
   },

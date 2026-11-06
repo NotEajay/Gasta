@@ -3,7 +3,6 @@ import { Tabs, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   Animated,
-  Image,
   Platform,
   Pressable,
   StyleSheet,
@@ -15,96 +14,26 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { Text } from '@/components/Themed';
 import AppBackground from '@/components/ui/AppBackground';
-import { AuthBackground } from '@/components/ui/GlassSurface';
+import BrandWordmark from '@/components/ui/BrandWordmark';
 import { HomeColors } from '@/constants/home';
 import { tabConfig } from '@/constants/moduleColors';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarVisibility';
 import { useResponsive } from '@/hooks/useResponsive';
 
-/**
- * The canvas that sits behind every tab scene.
- *
- * POSITION IS THE WHOLE POINT. This component wraps the `<SafeAreaView>` and the
- * `<Tabs>` themselves, so whatever it paints covers the real viewport — the
- * status bar at the top, and the home indicator / bottom edge at the bottom.
- *
- * A scene cannot do this job. Each scene is nested inside
- * `<SafeAreaView edges={['top']}>`, which pads the top by `insets.top`, and
- * `sceneStyle` pads the bottom by the floating tab bar's height plus the bottom
- * inset. A background painted from inside a scene therefore stops short of both
- * edges, and the parent canvas shows through those strips.
- *
- * `AuthBackground canvas="white"` remains the canvas for every other tab. Only
- * the screens running the cream GasTa experiment — Home, Profile, Budget and
- * Vehicles — swap in `AppBackground`. The floating tab bar is `position:
- * absolute` over this canvas and keeps its own opaque white surface, so the bar
- * reads as floating over cream rather than as a white navigation region.
- */
-const CREAM_CANVAS_ROUTES = [
-  '/home',
-  '/profile',
-  '/budget',
-  '/vehicles',
-  // Prices is a stack route, so the tab pathname is `/prices` and the index
-  // screen inside it is `/prices/index`. The parent entry covers both, because
-  // isCreamCanvasRoute matches on an exact hit or a `/` prefix.
-  '/prices',
-];
-
-function isCreamCanvasRoute(pathname: string) {
-  return CREAM_CANVAS_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`)
-  );
-}
-
-/**
- * The opaque fill for a tab scene, derived from the same route list the canvas
- * uses so the two can never disagree.
- *
- * WHY A SCENE MUST BE OPAQUE
- *
- * React Navigation's bottom tabs render every mounted scene in the same slot,
- * absolutely positioned on top of each other, with the focused scene at zIndex 0
- * and the rest at zIndex -1. Hiding the losers is `react-native-screens`' job.
- *
- * On native that works: `screensEnabled()` is true, so each scene is wrapped in a
- * real `Screen`, which detaches the inactive ones. On WEB it does not:
- * `screensEnabled()` returns `isNativePlatformSupported`, which is false for
- * `Platform.OS === 'web'`, so `MaybeScreen` silently degrades to a plain `View`
- * and every mounted scene stays painted. With a transparent scene background
- * that means the previously-visited tabs show straight through the active one —
- * the "previous page visible underneath" artefact, and the reason it was so much
- * more obvious in a browser than on a phone.
- *
- * An opaque per-scene background is the platform-agnostic fix: the focused
- * scene covers everything behind it everywhere. The trade-off is deliberate and
- * documented — the AppBackground gradient and its two 0.04-opacity orbs now sit
- * behind opaque scenes rather than showing through them. Both are far too faint
- * to carry the design, and correctness of "one visible page" outranks them.
- */
-function canvasColorFor(pathname: string) {
-  return isCreamCanvasRoute(pathname) ? GasTaColors.cream : GasTaColors.white;
-}
-
+/** Every scene stays opaque, including on web where inactive screens may mount. */
+function canvasColorFor(_pathname: string) { return GasTaColors.cream; }
 function TabCanvas({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
-  const isCreamCanvas = isCreamCanvasRoute(pathname);
-
-  if (isCreamCanvas) {
-    return <AppBackground>{children}</AppBackground>;
-  }
-
-  return <AuthBackground canvas="white">{children}</AuthBackground>;
+  return <AppBackground>{children}</AppBackground>;
 }
 
 /**
  * Floating nav bar metrics. Declared once so the bar geometry and the content
  * inset that keeps screens scrollable above it can never drift apart.
  */
-const NAV_BAR_HEIGHT = 70;
+const NAV_BAR_HEIGHT = 74;
 const NAV_BAR_RADIUS = radii.lg;
-const NAV_BAR_SIDE_MARGIN = 16;
+const NAV_BAR_SIDE_MARGIN = 12;
 const NAV_BAR_BOTTOM_GAP = 10;
 const NAV_ICON_SIZE = 23;
 const NAV_ICON_CHIP = 40;
@@ -190,12 +119,6 @@ const DESKTOP_NAV = [
   },
 ] as const;
 
-/**
- * The mark is cropped from the horizontal wordmark so the dock can carry the
- * brand without repeating the full logo that the pages already show.
- */
-const gastaMark = require('@/assets/images/gasta-mark.png');
-
 /** Inactive destinations: bright enough to read, quieter than the active tile. */
 const RAIL_INACTIVE = 'rgba(248, 240, 229, 0.86)';
 
@@ -210,13 +133,7 @@ function DesktopRail() {
     <View style={styles.railWrap}>
       <View style={styles.rail}>
         <View style={styles.railBrand}>
-          <Image
-            accessibilityLabel="GasTa"
-            accessibilityRole="image"
-            resizeMode="contain"
-            source={gastaMark}
-            style={styles.railBrandMark}
-          />
+          <BrandWordmark width={26} variant="symbol" />
         </View>
 
         <View style={styles.railDivider} />
@@ -240,7 +157,7 @@ function DesktopRail() {
                 <Ionicons
                   name={active ? item.activeIcon : item.icon}
                   size={19}
-                  color={active ? GasTaColors.forest : RAIL_INACTIVE}
+                  color={active ? GasTaColors.forestDark : RAIL_INACTIVE}
                 />
                 <Text
                   numberOfLines={1}
@@ -269,7 +186,7 @@ function TabIcon({
 
   return (
     <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
-      <Ionicons name={iconName} size={NAV_ICON_SIZE} color={color} />
+      <Ionicons name={iconName} size={NAV_ICON_SIZE} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
     </View>
   );
 }
@@ -284,12 +201,16 @@ function TabLabel({
   color: ColorValue;
   focused: boolean;
 }) {
+  const { isCompact } = useResponsive();
+
   return (
-    <Text numberOfLines={1} style={[styles.tabLabel, focused && styles.tabLabelActive, { color }]}>
+    <Text numberOfLines={1} style={[styles.tabLabel, isCompact && styles.tabLabelCompact, focused && styles.tabLabelActive, { color }]}>
       {children}
     </Text>
   );
 }
+
+export const unstable_settings = { anchor: 'home' };
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
@@ -453,13 +374,12 @@ export default function TabLayout() {
           {showRail ? <DesktopRail /> : null}
           <SafeAreaView edges={showRail ? [] : ['top']} style={styles.fill}>
           <Tabs
-            initialRouteName="home"
+            activityEnabled
             // Detach inactive screens so prior tabs cannot remain visible
             // underneath the focused cream/transparent scene (esp. on web).
             detachInactiveScreens
             screenOptions={{
               headerShown: false,
-              freezeOnBlur: true,
               sceneStyle: showRail ? desktopSceneStyle : sceneStyle,
               lazy: true,
               tabBarActiveTintColor: HomeColors.primary,
@@ -497,7 +417,7 @@ export default function TabLayout() {
                  */
                 sceneStyle: styles.homeScene,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="home" focused={focused} color={color} />
+                  <TabIcon name="home" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -506,7 +426,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.prices.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="prices" focused={focused} color={color} />
+                  <TabIcon name="prices" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -515,7 +435,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.trip.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="trip" focused={focused} color={color} />
+                  <TabIcon name="trip" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -524,7 +444,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.vehicles.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="vehicles" focused={focused} color={color} />
+                  <TabIcon name="vehicles" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -533,7 +453,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.budget.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="budget" focused={focused} color={color} />
+                  <TabIcon name="budget" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -542,7 +462,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.profile.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="profile" focused={focused} color={color} />
+                  <TabIcon name="profile" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -580,16 +500,11 @@ const styles = StyleSheet.create({
   rail: {
     width: 84,
     alignItems: 'center',
-    paddingVertical: 14,
-    borderRadius: 42,
+    paddingVertical: 16,
+    borderRadius: 26,
     backgroundColor: GasTaColors.forestDark,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(248, 240, 229, 0.14)',
-    shadowColor: GasTaColors.forestDark,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.22,
-    shadowRadius: 22,
-    elevation: 12,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestDark,
   },
   railBrand: {
     width: 44,
@@ -599,15 +514,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: GasTaColors.creamLight,
   },
-  railBrandMark: {
-    width: 22,
-    height: 26,
-  },
   railDivider: {
     width: 26,
     height: 1,
     marginVertical: 10,
-    backgroundColor: 'rgba(248, 240, 229, 0.18)',
+    backgroundColor: 'rgba(215, 225, 236, 0.18)',
   },
   railNav: {
     alignItems: 'center',
@@ -622,7 +533,7 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   railItemActive: {
-    backgroundColor: GasTaColors.creamLight,
+    backgroundColor: GasTaColors.accent,
   },
   railItemPressed: {
     opacity: 0.72,
@@ -636,7 +547,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
   },
   railLabelActive: {
-    color: GasTaColors.forest,
+    color: GasTaColors.forestDark,
     fontWeight: '800',
   },
 
@@ -660,19 +571,18 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     position: 'absolute',
-    // Must stay visible so the iOS shadow is not clipped by the rounded corners.
     overflow: 'visible',
     zIndex: 10,
     borderRadius: NAV_BAR_RADIUS,
     borderCurve: 'continuous',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     shadowColor: HomeColors.navy,
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    elevation: 8,
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    elevation: 6,
   },
   tabBarItem: {
     // Vertical centring only. The 40px chip + 2px label gap + 14px line = 56px
@@ -689,7 +599,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconWrapActive: {
-    backgroundColor: HomeColors.primarySoft,
+    backgroundColor: GasTaColors.accent,
   },
   tabLabel: {
     fontSize: 11,
@@ -698,6 +608,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: 'center',
   },
+  tabLabelCompact: { fontSize: 10, letterSpacing: -0.2 },
   tabLabelActive: {
     fontWeight: '700',
   },

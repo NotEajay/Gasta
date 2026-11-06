@@ -1,3 +1,4 @@
+import type { ComponentRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { ActivityIndicator, Animated, Easing, Modal, Pressable, StyleSheet, View } from 'react-native';
@@ -26,7 +27,7 @@ import {
 } from '@/types';
 
 /** Faint forest tint, matching the vehicle card this panel lives inside. */
-const TINT_BG = 'rgba(1, 68, 33, 0.06)';
+const TINT_BG = 'rgba(49, 91, 218, 0.06)';
 
 // Presentation accents only; role definitions remain in the domain constants.
 const ROLE_VISUALS = {
@@ -114,7 +115,7 @@ interface VehicleSharePanelProps {
   expanded?: boolean;
   onToggle?: () => void;
   /** Reveal a native view using the screen's existing scroll container. */
-  onRequestKeyboardReveal?: (target: View | null) => void;
+  onRequestKeyboardReveal?: (target: ComponentRef<typeof View> | null) => void;
 }
 
 type PanelMessage = {
@@ -156,9 +157,9 @@ export default function VehicleSharePanel({
   const [email, setEmail] = useState('');
   const [showAddForm, setShowAddForm] = useState(true);
   const [lookupFocused, setLookupFocused] = useState(false);
-  const lookupCardRef = useRef<View>(null);
-  const collaboratorCardRef = useRef<View>(null);
-  const accessActionRef = useRef<View>(null);
+  const lookupCardRef = useRef<ComponentRef<typeof View>>(null);
+  const collaboratorCardRef = useRef<ComponentRef<typeof View>>(null);
+  const accessActionRef = useRef<ComponentRef<typeof View>>(null);
 
   useEffect(() => () => onRequestKeyboardReveal?.(null), [onRequestKeyboardReveal]);
   const [lookedUpUser, setLookedUpUser] = useState<UserProfileLookup | null>(null);

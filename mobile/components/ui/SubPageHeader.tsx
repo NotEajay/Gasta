@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { GasTaColors, spacing, typography } from '@/constants/Theme';
+import { colors, radii, spacing, typography } from '@/constants/Theme';
 import type { ModuleKey } from '@/constants/moduleColors';
 
 interface SubPageHeaderProps {
@@ -15,13 +16,14 @@ interface SubPageHeaderProps {
 
 export default function SubPageHeader({ title, subtitle, children }: SubPageHeaderProps) {
   const router = useRouter();
-
   return (
     <View style={styles.wrap}>
-      <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
-        <Text style={styles.backText}>← Back</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Go back"
+        onPress={() => router.back()} style={({ pressed }) => [styles.back, pressed && { opacity: 0.65 }]}>
+        <Ionicons name="arrow-back" size={20} color={colors.navy} />
+        <Text style={styles.backText}>Back</Text>
       </Pressable>
-      <Text style={styles.title}>{title}</Text>
+      <Text accessibilityRole="header" style={styles.title}>{title}</Text>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       {children}
     </View>
@@ -29,32 +31,14 @@ export default function SubPageHeader({ title, subtitle, children }: SubPageHead
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    marginHorizontal: -spacing.lg,
-    marginTop: -spacing.lg,
-    marginBottom: spacing.lg,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
+  wrap: { marginBottom: spacing.lg },
+  back: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+    minHeight: 44, paddingHorizontal: 12, borderRadius: radii.sm,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+    marginBottom: spacing.md,
   },
-  backBtn: {
-    alignSelf: 'flex-start',
-    marginBottom: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  backText: {
-    color: GasTaColors.forestDark,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  title: {
-    ...typography.title,
-    color: GasTaColors.textPrimary,
-    fontSize: 24,
-  },
-  subtitle: {
-    ...typography.subtitle,
-    color: GasTaColors.textMuted,
-    marginTop: spacing.xs,
-  },
+  backText: { fontSize: 13, fontWeight: '600', color: colors.navy },
+  title: { ...typography.title, color: colors.navy, letterSpacing: -0.8 },
+  subtitle: { ...typography.subtitle, color: colors.muted, marginTop: spacing.sm },
 });

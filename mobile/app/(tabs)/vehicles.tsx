@@ -1,3 +1,4 @@
+import type { ComponentRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -5,6 +6,7 @@ import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, FlatList, Mod
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
+import ScreenHeader from '@/components/ui/ScreenHeader';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import VehicleSharePanel from '@/components/VehicleSharePanel';
@@ -61,12 +63,12 @@ export default function VehiclesScreen() {
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
   const { contentMaxWidth, isDesktop } = useResponsive();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const insets = useSafeAreaInsets();
   const scrollOffset = useRef(0);
-  const keyboardTarget = useRef<View | null>(null);
+  const keyboardTarget = useRef<ComponentRef<typeof View> | null>(null);
   const keyboardScrollFrame = useRef<number | null>(null);
-  const revealAboveKeyboard = useCallback((target: View | null) => {
+  const revealAboveKeyboard = useCallback((target: ComponentRef<typeof View> | null) => {
     keyboardTarget.current = target;
     if (keyboardScrollFrame.current !== null) cancelAnimationFrame(keyboardScrollFrame.current);
     if (!target || !Keyboard.isVisible()) return;
@@ -170,7 +172,7 @@ export default function VehiclesScreen() {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number } | null>(
     null,
   );
-  const triggerNodes = useRef<Record<string, View | null>>({});
+  const triggerNodes = useRef<Record<string, ComponentRef<typeof View> | null>>({});
   // Guards the async probe against a closed menu / a second menu opening:
   // only the latest probe for the currently open vehicle may write state.
   const menuProbeSeq = useRef(0);
@@ -766,10 +768,7 @@ export default function VehiclesScreen() {
         { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
       ]}
       showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Vehicles</Text>
-        <Text style={styles.headerSubtitle}>Manage your vehicles and fuel details.</Text>
-      </View>
+      <ScreenHeader eyebrow="Your garage" title="Vehicles" subtitle="Every vehicle. Every refill. All in one place." />
 
       {formOpen ? (
         <View style={styles.formCard}>
@@ -1388,7 +1387,7 @@ export default function VehiclesScreen() {
  * Faint forest tint, the same value the auth and Profile surfaces use. Replaces
  * the old `primarySoft` / `navySoft` green and blue-gray washes.
  */
-const TINT_BG = 'rgba(1, 68, 33, 0.06)';
+const TINT_BG = 'rgba(49, 91, 218, 0.06)';
 const MENU_DELETE_COLOR = '#A34F3F';
 
 /** Layout rhythm. Matches the Home screen so both tabs read as one app. */
@@ -1402,6 +1401,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
     paddingHorizontal: GasTaSpacing.lg,
+    paddingTop: GasTaSpacing.md,
     paddingBottom: GasTaSpacing.xl,
   },
   header: {

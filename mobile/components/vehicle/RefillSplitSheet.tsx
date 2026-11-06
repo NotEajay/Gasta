@@ -1,3 +1,4 @@
+import type { ComponentRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -149,14 +150,14 @@ export default function RefillSplitSheet({
 
   /** Which row currently holds focus, and the refs needed to find it. */
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   /**
    * A plain View wrapping the ScrollView, because this project's react-native
    * type surface does not expose measureInWindow on ScrollView itself. A View
    * ref does, and it reports the same viewport frame.
    */
-  const viewportRef = useRef<View>(null);
-  const rowRefs = useRef<Record<string, View | null>>({});
+  const viewportRef = useRef<ComponentRef<typeof View>>(null);
+  const rowRefs = useRef<Record<string, ComponentRef<typeof View> | null>>({});
   const scrollYRef = useRef(0);
 
   /**

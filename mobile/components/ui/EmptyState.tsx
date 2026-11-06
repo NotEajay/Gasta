@@ -25,7 +25,7 @@ interface EmptyStateProps {
 export default function EmptyState({
   title,
   message,
-  variant = 'legacy',
+  variant = 'canonical',
   icon = 'file-tray-outline',
   action,
 }: EmptyStateProps) {

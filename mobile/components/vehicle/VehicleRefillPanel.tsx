@@ -1,3 +1,4 @@
+import type { ComponentRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -102,7 +103,7 @@ type FieldKey = 'total' | 'price' | 'liters' | 'paidBy' | 'date';
 type FieldErrors = Partial<Record<FieldKey, string>>;
 
 /** Faint forest tint, matching the vehicle card and the auth surfaces. */
-const TINT_BG = 'rgba(1, 68, 33, 0.06)';
+const TINT_BG = 'rgba(49, 91, 218, 0.06)';
 
 type RefillResult = {
   visible: boolean;
@@ -146,11 +147,11 @@ export default function VehicleRefillPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const formScrollRef = useRef<ScrollView>(null);
+  const formScrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const formScrollOffset = useRef(0);
-  const focusedFieldRef = useRef<View | null>(null);
+  const focusedFieldRef = useRef<ComponentRef<typeof View> | null>(null);
   const fieldScrollFrame = useRef<number | null>(null);
-  const revealFormField = useCallback((target: View | null) => {
+  const revealFormField = useCallback((target: ComponentRef<typeof View> | null) => {
     focusedFieldRef.current = target;
     if (fieldScrollFrame.current !== null) cancelAnimationFrame(fieldScrollFrame.current);
     if (!target || !Keyboard.isVisible()) return;
@@ -960,7 +961,7 @@ export default function VehicleRefillPanel({
                 contentContainerStyle={styles.listContent}
                 data={filteredRefills}
                 keyExtractor={(item) => item.id}
-                ListHeaderComponent={refills.length > 0 ? <PendingAllocationInbox onChanged={load} /> : null}
+                ListHeaderComponent={refills.length > 0 ? <PendingAllocationInbox onChanged={load} /> : undefined}
                 ListEmptyComponent={
                   <View style={styles.state}>
                     <Text style={styles.historyEmptyTitle}>No refills found</Text>
@@ -1377,10 +1378,10 @@ function RefillFormField({
   unit?: string;
   amount?: boolean;
   compact?: boolean;
-  onReveal: (target: View | null) => void;
+  onReveal: (target: ComponentRef<typeof View> | null) => void;
 }) {
   const [focused, setFocused] = useState(false);
-  const fieldRef = useRef<View>(null);
+  const fieldRef = useRef<ComponentRef<typeof View>>(null);
   return (
     <View ref={fieldRef} collapsable={false} style={[styles.formField, compact && styles.formFieldCompact]}>
       <Text style={[styles.formFieldLabel, focused && styles.formFieldLabelFocused]}>
@@ -1752,7 +1753,7 @@ const styles = StyleSheet.create({
     // Was the old navy `rgba(14, 42, 82, 0.35)`. Replaced with a forestDark scrim
     // so the scrim belongs to the GasTa canvas. Opacity kept restrained, and the
     // modal's size, maxHeight, animation and keyboard handling are untouched.
-    backgroundColor: 'rgba(1, 48, 25, 0.38)',
+    backgroundColor: 'rgba(23, 44, 73, 0.38)',
     justifyContent: 'flex-end',
   },
   sheet: {

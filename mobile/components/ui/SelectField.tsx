@@ -117,12 +117,13 @@ const styles = StyleSheet.create({
     color: palette.danger,
   },
   label: {
-    ...typography.label,
-    textTransform: 'uppercase',
+    ...typography.body,
+    fontSize: 13,
+    fontWeight: '600',
     marginBottom: spacing.sm,
   },
   field: {
-    minHeight: 48,
+    minHeight: 52,
     borderWidth: 1,
     borderRadius: radii.md,
     paddingHorizontal: spacing.md,
@@ -163,7 +164,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   option: {
-    minHeight: 48,
+    minHeight: 52,
     paddingHorizontal: spacing.md,
     borderRadius: radii.sm,
     flexDirection: 'row',

@@ -2304,11 +2304,9 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xs,
   },
   routeFieldLabel: {
-    ...typography.label,
-    fontSize: 10,
-    letterSpacing: 1.1,
-    textTransform: 'uppercase',
-    color: GasTaColors.forestMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    color: GasTaColors.textMuted,
   },
   routeFieldInput: {
     // Largest text in the card: the address is the point of the Route section.
@@ -2518,11 +2516,9 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   sectionLabel: {
-    ...typography.label,
-    color: GasTaColors.forestMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 1.1,
-    marginBottom: spacing.xs,
+    ...typography.section,
+    color: GasTaColors.textPrimary,
+    marginBottom: spacing.sm,
   },
   sectionCostNote: {
     fontSize: 12,
@@ -2530,16 +2526,11 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   sectionCard: {
-    backgroundColor: GasTaColors.creamLight,
-    borderRadius: 20,
+    backgroundColor: GasTaColors.white,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
+    borderColor: GasTaColors.glassBorderSubtle,
     padding: spacing.lg,
-    shadowColor: GasTaColors.forest,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 1,
   },
   /* Inner fields sit on a warm-beige well so the card does not read as one
      undifferentiated white block. */

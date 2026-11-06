@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 
 import { Text } from '@/components/Themed';
+import ScreenHeader from '@/components/ui/ScreenHeader';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
@@ -308,14 +309,14 @@ function PriceFilterField<T extends string>({
                   <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
                     {error}
                   </Text>
-                ) : null
+                ) : undefined
               }
               ListFooterComponent={
                 options.length > 0 && (loading || error) ? (
                   <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
                     {loading ? 'Refreshing available areas…' : error}
                   </Text>
-                ) : null
+                ) : undefined
               }
               renderItem={({ item }) => {
                 const isSelected = item.value === value;
@@ -1137,15 +1138,11 @@ export default function FuelPricesScreen() {
         post day (week start + 7) and the bulletin week start — not the ETL
         run timestamp, which confused "when we synced" with "when DOE posted".
       */}
-      <View style={styles.headerRow}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Fuel Prices</Text>
-          {bulletin ? (
-            <Text numberOfLines={1} style={styles.headerMeta}>
-              {formatBulletinRange(bulletin.bulletin_date)}
-            </Text>
-          ) : null}
-        </View>
+      <ScreenHeader
+        eyebrow="Stay ahead"
+        title="Fuel prices"
+        subtitle={bulletin ? formatBulletinRange(bulletin.bulletin_date) : 'Know the price before you fill up.'}
+        action={
         <Pressable
           accessibilityRole="link"
           accessibilityLabel="Community prices"
@@ -1154,7 +1151,8 @@ export default function FuelPricesScreen() {
           style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}>
           <Text style={styles.headerActionText}>Community</Text>
         </Pressable>
-      </View>
+        }
+      />
 
       {/*
         Location status. A quiet line, not a banner: it only appears while the
@@ -1754,7 +1752,7 @@ function HeroDelta({ delta }: { delta: number }) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  flex: { flex: 1, backgroundColor: GasTaColors.cream },
   pressed: { opacity: 0.7 },
   padding: {
     paddingHorizontal: spacing.lg,
@@ -1860,13 +1858,13 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   headerAction: {
-    flexShrink: 0,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: GasTaColors.forest,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    justifyContent: 'center',
     backgroundColor: GasTaColors.white,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
   },
   headerActionText: {
     fontSize: 13,
@@ -1929,8 +1927,8 @@ const styles = StyleSheet.create({
   },
   /* Each filter gets a faint, distinct cast so the row reads as
      location / place / fuel rather than three identical dropdowns. */
-  filterIconRegion: { backgroundColor: 'rgba(1, 68, 33, 0.08)' },
-  filterIconCity: { backgroundColor: 'rgba(1, 68, 33, 0.12)' },
+  filterIconRegion: { backgroundColor: 'rgba(49, 91, 218, 0.08)' },
+  filterIconCity: { backgroundColor: 'rgba(49, 91, 218, 0.12)' },
   /* Fuel keeps a faint amber-green cast -- fuel, but still on-palette. */
   filterIconFuel: { backgroundColor: 'rgba(180, 83, 9, 0.12)' },
   filterLabel: {

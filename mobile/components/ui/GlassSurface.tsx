@@ -1,9 +1,8 @@
 import type { ReactNode } from 'react';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Platform, StyleSheet, View, ViewProps } from 'react-native';
+import { StyleSheet, View, type ViewProps } from 'react-native';
 
-import { GasTaColors, GasTaRadius } from '@/constants/Theme';
+import { colors, radii } from '@/constants/Theme';
 
 type GlassSurfaceProps = ViewProps & {
   intensity?: number;
@@ -11,172 +10,65 @@ type GlassSurfaceProps = ViewProps & {
   variant?: 'default' | 'strong' | 'input';
 };
 
+/** Solid surfaces keep forms and financial data readable on every platform.
+ * The public props remain compatible with existing auth and form screens.
+ */
 export default function GlassSurface({
   children,
   style,
-  intensity = 55,
-  borderRadius = GasTaRadius.lg,
+  intensity: _intensity,
+  borderRadius = radii.lg,
   variant = 'default',
   ...props
 }: GlassSurfaceProps) {
-  const fill =
-    variant === 'strong'
-      ? GasTaColors.glassFillStrong
-      : variant === 'input'
-        ? 'rgba(255, 255, 255, 0.7)'
-        : GasTaColors.glassFill;
-
-  if (Platform.OS === 'web') {
-    return (
-      <View
-        style={[
-          styles.shell,
-          styles.webGlass,
-          { borderRadius, backgroundColor: fill },
-          style,
-        ]}
-        {...props}>
-        <View style={[styles.topHighlight, { borderTopLeftRadius: borderRadius, borderTopRightRadius: borderRadius }]} />
-        <View style={styles.content}>{children}</View>
-      </View>
-    );
-  }
-
   return (
-    <View style={[styles.shell, { borderRadius }, style]} {...props}>
-      <BlurView
-        intensity={intensity}
-        style={[StyleSheet.absoluteFill, { borderRadius, overflow: 'hidden' }]}
-        tint="light"
-      />
-      <View style={[StyleSheet.absoluteFill, { borderRadius, backgroundColor: fill }]} />
-      <View style={[styles.topHighlight, { borderTopLeftRadius: borderRadius, borderTopRightRadius: borderRadius }]} />
+    <View
+      style={[
+        styles.shell,
+        { borderRadius },
+        variant === 'strong' && styles.elevated,
+        variant === 'input' && { backgroundColor: colors.background },
+        style,
+      ]}
+      {...props}>
       <View style={styles.content}>{children}</View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  shell: {
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: GasTaColors.glassBorder,
-    position: 'relative',
-    shadowColor: GasTaColors.forest,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 24,
-    elevation: 4,
-  },
-  webGlass: {
-    backdropFilter: 'blur(28px) saturate(180%)',
-    WebkitBackdropFilter: 'blur(28px) saturate(180%)',
-  } as object,
-  content: {
-    position: 'relative',
-    zIndex: 1,
-    width: '100%',
-  },
-  topHighlight: {
-    position: 'absolute',
-    top: 0,
-    left: '8%',
-    right: '8%',
-    height: 1,
-    backgroundColor: GasTaColors.glassHighlight,
-    zIndex: 2,
-  },
-});
-
-type AuthBackgroundProps = {
+export function AuthBackground({ children, canvas = 'cream' }: {
   children: ReactNode;
-  /** Cream is used on sign-in. White is used on the app dashboard. */
   canvas?: 'cream' | 'white';
-};
-
-export function AuthBackground({ children, canvas = 'cream' }: AuthBackgroundProps) {
-  const isWhite = canvas === 'white';
-
+}) {
   return (
-    <View style={[bgStyles.root, isWhite && { backgroundColor: GasTaColors.white }]}>
-      <LinearGradient
-        colors={
-          isWhite
-            ? [GasTaColors.white, GasTaColors.white, GasTaColors.white]
-            : [GasTaColors.creamLight, GasTaColors.cream, GasTaColors.creamDark]
-        }
-        locations={[0, 0.5, 1]}
-        style={StyleSheet.absoluteFill}
-      />
-
-      <LinearGradient
-        colors={[
-          'rgba(1, 68, 33, 0)',
-          GasTaColors.forestGlow,
-          'rgba(1, 68, 33, 0)',
-        ]}
-        locations={[0, 0.46, 1]}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={bgStyles.topGlow}
-      />
-      <View style={[bgStyles.orb, bgStyles.orbForestBottom]} />
-      <View
-        style={[
-          bgStyles.orb,
-          bgStyles.orbPomelo,
-          isWhite && { backgroundColor: 'rgba(255, 255, 255, 0.9)' },
-        ]}
-      />
-
-      <LinearGradient
-        colors={
-          isWhite
-            ? ['rgba(255,255,255,0)', 'rgba(255,255,255,0.4)', GasTaColors.white]
-            : ['rgba(248,240,229,0)', 'rgba(248,240,229,0.35)', GasTaColors.cream]
-        }
-        locations={[0, 0.7, 1]}
-        style={bgStyles.vignette}
-      />
-
+    <View style={[styles.background, canvas === 'white' && { backgroundColor: colors.surface }]}>
+      {canvas !== 'white' ? (
+        <LinearGradient
+          pointerEvents="none"
+          colors={['#E8EEFF', colors.background, '#F0F5E5']}
+          locations={[0, 0.5, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+      ) : null}
       {children}
     </View>
   );
 }
 
-const bgStyles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: GasTaColors.cream,
+const styles = StyleSheet.create({
+  background: { flex: 1, backgroundColor: colors.background },
+  shell: {
+    position: 'relative',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  orb: {
-    position: 'absolute',
-    borderRadius: 999,
+  elevated: {
+    shadowColor: colors.navy,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 2,
   },
-  topGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 280,
-    pointerEvents: 'none',
-  },
-  orbForestBottom: {
-    width: 240,
-    height: 240,
-    bottom: 80,
-    left: -90,
-    backgroundColor: 'rgba(1, 68, 33, 0.08)',
-  },
-  orbPomelo: {
-    width: 200,
-    height: 200,
-    top: '35%',
-    right: '15%',
-    backgroundColor: 'rgba(248, 240, 229, 0.85)',
-  },
-  vignette: {
-    ...StyleSheet.absoluteFill,
-    pointerEvents: 'none',
-  },
+  content: { width: '100%' },
 });

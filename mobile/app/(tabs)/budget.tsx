@@ -1,5 +1,5 @@
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -16,11 +16,15 @@ import { Ionicons } from '@expo/vector-icons';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import { Text } from '@/components/Themed';
+import ScreenHeader from '@/components/ui/ScreenHeader';
 import AnimatedPressable from '@/components/auth/AnimatedPressable';
 import HideWhenBlurred from '@/components/navigation/HideWhenBlurred';
 import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
+import SegmentedToggle from '@/components/ui/SegmentedToggle';
+import FuelInsightsPanel from '@/components/insights/FuelInsightsPanel';
+import { parseInsightPeriod } from '@/lib/fuelInsights';
 import { buildBudgetInsights, activeVehicles, type BudgetInsight } from '@/lib/budgetInsights';
 import {
   describeLiters,
@@ -101,7 +105,7 @@ const ACCENT_TEAL_SOFT = 'rgba(31, 107, 103, 0.14)';
  * Contrast note: all three are checked against the cream canvas (#F8F0E5) and
  * clear the 3:1 needed for a non-text UI element.
  */
-const RAIL_FOREST = '#014421';
+const RAIL_FOREST = GasTaColors.forestDark;
 const RAIL_BLUE = '#1F6F8B';
 const RAIL_OLIVE = '#6B7A2A';
 
@@ -124,12 +128,12 @@ const DOT_NEUTRAL = RAIL_OLIVE;
  * Pale beige inset surface for explanatory notes. Warm rather than grey so it
  * sits with the cream canvas instead of reading as a disabled field.
  */
-const NOTE_BEIGE = '#F3EADB';
-const NOTE_BEIGE_BORDER = 'rgba(1, 68, 33, 0.08)';
+const NOTE_BEIGE = '#EDF1F7';
+const NOTE_BEIGE_BORDER = 'rgba(49, 91, 218, 0.08)';
 
 // Restrained green, not a large colored bubble behind each icon.
-const ICON_TINT_BG = 'rgba(1, 68, 33, 0.06)';
-const ICON_TINT_BORDER = 'rgba(1, 68, 33, 0.16)';
+const ICON_TINT_BG = 'rgba(49, 91, 218, 0.06)';
+const ICON_TINT_BORDER = 'rgba(49, 91, 218, 0.16)';
 
 function shiftMonth(year: number, month: number, delta: number) {
   const zeroBased = month - 1 + delta;
@@ -153,6 +157,9 @@ const STATUS_META: Record<BudgetStatus, { label: string; color: string }> = {
 
 export default function BudgetScreen() {
   const router = useRouter();
+  const insightParams = useLocalSearchParams<{ view?: string; year?: string; month?: string; insight_request?: string }>();
+  const [view, setView] = useState<'overview' | 'history'>('overview');
+  const [historyRevision, setHistoryRevision] = useState(0);
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
   const { contentMaxWidth } = useResponsive();
@@ -160,6 +167,13 @@ export default function BudgetScreen() {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth() + 1);
+
+  useEffect(() => {
+    if (insightParams.view !== 'history' && insightParams.view !== 'overview') return;
+    setView(insightParams.view);
+    const period = parseInsightPeriod(insightParams.year, insightParams.month);
+    if (period) { setYear(period.year); setMonth(period.month); }
+  }, [insightParams.view, insightParams.year, insightParams.month, insightParams.insight_request]);
 
   const [overview, setOverview] = useState<MonthlyBudgetOverview | null>(null);
   const [months, setMonths] = useState<MonthBudgetSummary[]>([]);
@@ -250,6 +264,7 @@ export default function BudgetScreen() {
       } finally {
         setLoading(false);
         setRefreshing(false);
+        setHistoryRevision((value) => value + 1);
       }
 
       /*
@@ -474,7 +489,6 @@ export default function BudgetScreen() {
     });
   }, [analytics, spent, hasBudget, percent, timeContext]);
 
-
   if (!authLoading && !user) {
     return (
       <AuthPrompt
@@ -504,41 +518,9 @@ export default function BudgetScreen() {
         }>
         {!isSupabaseConfigured ? <SupabaseSetupBanner /> : null}
 
-        {/*
-          HEADER — a dark forest block with rounded bottom corners that owns the
-          title, the Edit budget action, and the month selector together.
-
-          The BACKGROUND is bled to the left and right screen edges, and starts
-          immediately below the safe area rather than after a page gutter. The
-          CONTENT keeps the normal page padding, so the title and controls line
-          up with the hero and every section below. The status-bar area itself
-          stays cream and is never covered.
-
-          The month arrows live inside the header and are centred, per the design
-          direction. `shiftMonth` maths, the picker, and both arrow handlers are
-          unchanged.
-        */}
         <View style={styles.header}>
-          {/*
-            Decorative dotted route motif. pointerEvents="none" so it can never
-            intercept a press, and hidden from accessibility so it is never
-            announced as a label.
-          */}
-          <View
-            style={styles.headerMotif}
-            pointerEvents="none"
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants">
-            <View style={[styles.headerDot, styles.headerDotA]} />
-            <View style={[styles.headerDot, styles.headerDotB]} />
-            <View style={[styles.headerDot, styles.headerDotC]} />
-            <View style={styles.headerMotifArc} />
-          </View>
-
-          <View style={styles.headerTopRow}>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              Budget
-            </Text>
+          <ScreenHeader eyebrow="Keep it balanced" title="Fuel budget" subtitle="A clearer view of your monthly spending."
+            action={
             <AnimatedPressable
               accessibilityRole="button"
               accessibilityLabel="Edit this month's budget"
@@ -547,12 +529,13 @@ export default function BudgetScreen() {
               pressScale={0.96}
               style={styles.headerAction}
               onPress={openEditor}>
-              <Ionicons name="create-outline" size={14} color={GasTaColors.textOnForest} />
+              <Ionicons name="create-outline" size={14} color={GasTaColors.forestDark} />
               <Text style={styles.headerActionText}>
                 {hasBudget ? 'Edit budget' : 'Set budget'}
               </Text>
             </AnimatedPressable>
-          </View>
+            }
+          />
 
           <View style={styles.monthNav}>
             <AnimatedPressable
@@ -567,7 +550,7 @@ export default function BudgetScreen() {
                 setYear(next.year);
                 setMonth(next.month);
               }}>
-              <Ionicons name="chevron-back" size={18} color={GasTaColors.textOnForest} />
+              <Ionicons name="chevron-back" size={18} color={GasTaColors.forestDark} />
             </AnimatedPressable>
 
             <AnimatedPressable
@@ -580,7 +563,7 @@ export default function BudgetScreen() {
               <Text style={styles.monthLabel}>
                 {MONTHS[month - 1]} {year}
               </Text>
-              <Ionicons name="chevron-down" size={14} color="rgba(248, 240, 229, 0.75)" />
+              <Ionicons name="chevron-down" size={14} color={GasTaColors.textMuted} />
             </AnimatedPressable>
 
             <AnimatedPressable
@@ -595,24 +578,26 @@ export default function BudgetScreen() {
                 setYear(next.year);
                 setMonth(next.month);
               }}>
-              <Ionicons name="chevron-forward" size={18} color={GasTaColors.textOnForest} />
+              <Ionicons name="chevron-forward" size={18} color={GasTaColors.forestDark} />
             </AnimatedPressable>
           </View>
         </View>
 
+        <SegmentedToggle options={[{ value: 'overview', label: 'Overview' }, { value: 'history', label: 'Fuel history' }]}
+          value={view} onChange={setView} />
 
-        {loading ? (
+        {view === 'history' ? (
+          loading || !user ? <LoadingState message="Loading fuel history…" /> : (
+            <FuelInsightsPanel userId={user.id} year={year} month={month} mode="history"
+              refreshKey={historyRevision} onSelectMonth={(selectedYear, selectedMonth) => {
+                setFormNotice(null); setYear(selectedYear); setMonth(selectedMonth); setView('overview');
+              }} />
+          )
+        ) : loading ? (
           <LoadingState />
         ) : (
           <>
-            {/*
-              HERO — the strongest surface on the screen.
 
-              A negative top margin tucks its top edge under the forest header, so
-              the page does not read as a flat stack of cards from the first
-              element. It keeps the normal page gutter on both sides and is NOT
-              bled to the screen edges the way the header background is.
-            */}
             <View style={styles.summary}>
               <Text style={styles.summaryLabel}>Spent this month</Text>
               <Text style={styles.summaryAmount}>
@@ -1249,7 +1234,6 @@ export default function BudgetScreen() {
           </Pressable>
         </Modal>
 
-
         {/* ------------------------------------------- month picker
             Plain React Native `Modal` — no new package. The arrows still handle
             adjacent months; this is for jumping straight to a month/year.
@@ -1332,7 +1316,6 @@ export default function BudgetScreen() {
   );
 }
 
-
 const styles = StyleSheet.create({
   // Transparent: the cream canvas comes from `TabCanvas` in the tab layout.
   flex: { flex: 1 },
@@ -1345,52 +1328,45 @@ const styles = StyleSheet.create({
   },
 
   // ---- month selector, now centred inside the dark header -------------------
-  /*
-   * Centred and deliberately compact. It is a secondary control inside the
-   * header, not a second hero element, so the arrows and the surrounding padding
-   * were both reduced until the whole pill sits comfortably under the title
-   * rather than competing with it. Tap targets stay at 30px, which is still
-   * above the 28px minimum for a comfortable press.
-   */
+
   monthNav: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    gap: 2,
-    padding: 2,
-    marginTop: GasTaSpacing.sm,
-    borderRadius: GasTaRadius.pill,
-    backgroundColor: 'rgba(248, 240, 229, 0.10)',
+    justifyContent: 'space-between',
+    padding: 4,
+    borderRadius: GasTaRadius.md,
+    backgroundColor: GasTaColors.white,
     borderWidth: 1,
-    borderColor: 'rgba(248, 240, 229, 0.18)',
+    borderColor: GasTaColors.glassBorderSubtle,
   },
   monthBtn: {
-    width: 30,
-    height: 30,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: GasTaRadius.pill,
-    backgroundColor: 'rgba(248, 240, 229, 0.10)',
+    borderRadius: 12,
+    backgroundColor: GasTaColors.cream,
   },
   monthLabel: {
     ...typeScale.body,
     fontWeight: '700',
-    color: GasTaColors.textOnForest,
+    color: GasTaColors.textPrimary,
   },
   // The tappable half of the selector: label + caret, same visual weight.
   monthTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: GasTaSpacing.sm,
-    paddingVertical: 4,
+    justifyContent: 'center',
+    gap: 6,
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 8,
   },
 
   // ---- month picker -------------------------------------------------------
   pickerBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(1, 16, 8, 0.45)',
+    backgroundColor: 'rgba(23, 44, 73, 0.45)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: GasTaSpacing.lg,
@@ -1470,18 +1446,9 @@ const styles = StyleSheet.create({
   // ---- THE one strong surface ---------------------------------------------
   // Budget's single elevated element, matching Profile's identity card: opaque
   // white, one restrained forest-tinted shadow, no glass and no gradient.
-  /*
-   * Overlaps the forest header by a quarter of the header's bottom padding, so
-   * the hero's top edge tucks under the dark block and the page does not read as
-   * a flat stack of cards.
-   *
-   * The hero keeps the normal page gutter on both sides: unlike the header
-   * background, its white card is NOT bled to the edges, which is what lets the
-   * full-width header above it read as a distinct band rather than one more
-   * edge-to-edge surface.
-   */
+
   summary: {
-    marginTop: -GasTaSpacing.lg,
+    marginTop: 0,
     backgroundColor: GasTaColors.white,
     borderRadius: GasTaRadius.lg,
     padding: GasTaSpacing.lg,
@@ -1606,7 +1573,6 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { ...typeScale.bodySmall, fontWeight: '700' },
 
-
   // ---- secondary information: flat, grouped, no shadow ---------------------
   // Pending and the trip-fuel estimate are supporting rows, not extra cards.
   infoBlock: {
@@ -1668,135 +1634,27 @@ const styles = StyleSheet.create({
   },
 
   // ---- header -------------------------------------------------------------
-  /*
-   * Dark forest block with rounded bottom corners. It owns the title, the Edit
-   * budget pill, and the centred month selector, so the hero card below reads as
-   * one floating surface rather than the first of many stacked blocks.
-   *
-   * The forest background is bled to the left and right screen edges, and it
-   * starts immediately below the safe-area region. The content inside keeps the
-   * page gutter on all sides.
-   */
-  /*
-   * VERTICAL POSITION — cancel the page's top gutter only.
-   *
-   * Three things stack above the title:
-   *   1. the tab layout's `<SafeAreaView edges={['top']}>` = insets.top
-   *   2. this ScrollView's `content.paddingTop`    = GasTaSpacing.lg
-   *   3. this header's own `paddingTop`            = GasTaSpacing.lg
-   *
-   * (1) is the real status bar / notch and is left completely alone. (3) is
-   * breathing room between the forest's top edge and the title, so the title
-   * never crowds the notch.
-   *
-   * (2) was the problem: it stacked a full 24pt band of cream between the safe
-   * area and the forest, which read as a gap rather than as a header. A negative
-   * margin of exactly that same token cancels it, so the forest begins
-   * immediately below the safe-area region and the status-bar area stays cream.
-   *
-   * Deliberately NOT `-(insets.top + spacing)`: that would pull the header
-   * behind the status bar, which is not wanted.
-   *
-   * HORIZONTAL BLEED — background to both screen edges, content inset.
-   * `marginHorizontal` cancels the page gutter and `paddingHorizontal` puts it
-   * back, so the two cancel for the CONTENT while the BACKGROUND runs edge to
-   * edge. Both use the shared spacing token, not a device width, so this holds
-   * at 320, 375, 390, 430 and web.
-   */
+
   header: {
-    marginTop: -GasTaSpacing.lg,
-    marginHorizontal: -GasTaSpacing.lg,
-    paddingHorizontal: GasTaSpacing.lg,
-    paddingTop: GasTaSpacing.lg,
-    paddingBottom: GasTaSpacing.xl,
-    backgroundColor: GasTaColors.forest,
-    // Only the bottom corners are rounded; the sides run off-screen and the top
-    // is a straight edge under the safe area.
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-    overflow: 'hidden',
+    marginBottom: GasTaSpacing.lg,
   },
-  headerTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: GasTaSpacing.md,
-  },
-  headerTitle: {
-    ...typeScale.pageTitle,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-    color: GasTaColors.textOnForest,
-    // `flex: 1` with `numberOfLines={1}` on the Text: the title yields space to
-    // the Edit budget pill rather than pushing it off the row. Without this, a
-    // long month label below could squeeze the action on a 320px screen.
-    flex: 1,
-  },
-  /**
-   * Quiet translucent pill, not a filled white button. On the dark header a
-   * solid fill would out-weigh the hero figure below it; this reads as available
-   * without competing.
-   */
+
   headerAction: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    flexShrink: 0,
-    paddingHorizontal: GasTaSpacing.md,
-    paddingVertical: 7,
-    borderRadius: GasTaRadius.pill,
-    backgroundColor: 'rgba(248, 240, 229, 0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(248, 240, 229, 0.28)',
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: GasTaColors.accent,
   },
   headerActionText: {
-    ...typeScale.bodySmall,
+    ...typeScale.caption,
     fontWeight: '700',
-    color: GasTaColors.textOnForest,
+    color: GasTaColors.forestDark,
   },
 
-  /* ---- decorative route motif --------------------------------------------
-   * Three dots on a curve plus one faint arc. Absolutely positioned inside the
-   * header and clipped by its `overflow: hidden`, so it cannot push layout.
-   *
-   * Sits low and to the right, around the month selector, and is deliberately
-   * very faint. An earlier version sat high and near the Edit budget pill,
-   * where it competed with a real control; the title and the action now have
-   * clear space, and this reads as texture rather than a foreground graphic.
-   */
-  headerMotif: {
-    position: 'absolute',
-    bottom: 18,
-    right: 10,
-    width: 150,
-    height: 84,
-  },
-  headerMotifArc: {
-    position: 'absolute',
-    top: 18,
-    right: 6,
-    width: 116,
-    height: 54,
-    borderWidth: 1.5,
-    borderColor: 'rgba(248, 240, 229, 0.09)',
-    borderTopLeftRadius: 116,
-    borderBottomLeftRadius: 116,
-    borderTopRightRadius: 8,
-    borderBottomRightRadius: 8,
-    borderRightWidth: 0,
-    transform: [{ rotate: '-8deg' }],
-  },
-  headerDot: {
-    position: 'absolute',
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    // Lower contrast than the header's own text, so the dots never pull focus.
-    backgroundColor: 'rgba(248, 240, 229, 0.20)',
-  },
-  headerDotA: { top: 8, right: 22 },
-  headerDotB: { top: 36, right: 8 },
-  headerDotC: { top: 64, right: 28 },
   /** Under the status line in the hero; a plain calendar fact, not a warning. */
   daysRemaining: {
     ...typeScale.caption,
@@ -1998,7 +1856,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-
   // ---- by vehicle ---------------------------------------------------------
   vehicleList: { gap: GasTaSpacing.sm },
   vehicleRow: {
@@ -2147,7 +2004,7 @@ const styles = StyleSheet.create({
   // ---- budget editor sheet ------------------------------------------------
   editorBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(1, 48, 25, 0.45)',
+    backgroundColor: 'rgba(23, 44, 73, 0.45)',
     justifyContent: 'flex-end',
   },
   editorSheet: {

@@ -1,7 +1,7 @@
 import { StyleSheet, View, type ViewStyle } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { palette, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useTheme } from '@/lib/useTheme';
 
 type MetricTone = 'neutral' | 'success' | 'warning' | 'danger' | 'primary';
@@ -16,19 +16,19 @@ interface MetricTileProps {
 const TONE = {
   neutral: {
     bg: { light: '#FFFFFF', dark: '#FFFFFF' },
-    border: { light: 'rgba(1, 68, 33, 0.1)', dark: 'rgba(1, 68, 33, 0.1)' },
-    value: { light: '#014421', dark: '#014421' },
-    label: { light: 'rgba(1, 68, 33, 0.62)', dark: 'rgba(1, 68, 33, 0.62)' },
+    border: { light: GasTaColors.glassBorderSubtle, dark: GasTaColors.glassBorderSubtle },
+    value: { light: GasTaColors.forestDark, dark: GasTaColors.forestDark },
+    label: { light: GasTaColors.textMuted, dark: GasTaColors.textMuted },
   },
   primary: {
     bg: { light: palette.primarySoft, dark: palette.primarySoft },
-    border: { light: 'rgba(1, 68, 33, 0.32)', dark: 'rgba(1, 68, 33, 0.32)' },
+    border: { light: GasTaColors.forestBorder, dark: GasTaColors.forestBorder },
     value: { light: palette.primaryDark, dark: palette.primaryDark },
     label: { light: palette.primary, dark: palette.primary },
   },
   success: {
     bg: { light: palette.successSoft, dark: palette.successSoft },
-    border: { light: 'rgba(1, 68, 33, 0.2)', dark: 'rgba(1, 68, 33, 0.2)' },
+    border: { light: GasTaColors.glassBorderSubtle, dark: GasTaColors.glassBorderSubtle },
     value: { light: palette.success, dark: palette.success },
     label: { light: palette.success, dark: palette.success },
   },

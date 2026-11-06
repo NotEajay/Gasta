@@ -33,7 +33,6 @@ export default function FormSection({
     <View style={[styles.wrap, style]} {...props}>
       {title ? (
         <View style={styles.header}>
-          <View style={[styles.dot, { backgroundColor: accent }]} />
           <View style={styles.headerText}>
             <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
             {subtitle ? (
@@ -76,6 +75,6 @@ const styles = StyleSheet.create({
   },
   card: {
     marginBottom: 0,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.lg,
   },
 });

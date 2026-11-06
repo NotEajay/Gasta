@@ -35,6 +35,8 @@ export default function PrimaryButton({
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -42,7 +44,7 @@ export default function PrimaryButton({
         size === 'sm' && styles.buttonSm,
         {
           backgroundColor,
-          borderColor: variant === 'secondary' ? palette.primary : backgroundColor,
+          borderColor: variant === 'secondary' ? theme.border : backgroundColor,
           opacity: disabled ? 0.45 : pressed ? 0.88 : 1,
         },
         variant === 'secondary' && { backgroundColor: theme.surface },
@@ -57,19 +59,17 @@ export default function PrimaryButton({
 
 const styles = StyleSheet.create({
   button: {
-    paddingVertical: spacing.md + 2,
+    minHeight: 52,
+    paddingVertical: 14,
     paddingHorizontal: spacing.lg,
     borderRadius: radii.md,
     alignItems: 'center',
-    borderWidth: 1.5,
-    shadowColor: palette.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 2,
+    justifyContent: 'center',
+    borderWidth: 1,
   },
   buttonSm: {
-    paddingVertical: spacing.sm + 2,
+    minHeight: 44,
+    paddingVertical: 10,
     paddingHorizontal: spacing.md,
   },
   label: {
