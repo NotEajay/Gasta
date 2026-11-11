@@ -1151,8 +1151,7 @@ export default function FuelPricesScreen() {
           style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}>
           <Text style={styles.headerActionText}>Community</Text>
         </Pressable>
-        }
-      />
+      </View>
 
       {/*
         Location status. A quiet line, not a banner: it only appears while the
@@ -1444,7 +1443,6 @@ export default function FuelPricesScreen() {
               </View>
             </View>
           ) : null}
-          </View>
 
           {/*
             TREND. There is deliberately no second This week / Past prices
