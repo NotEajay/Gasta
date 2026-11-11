@@ -12,6 +12,7 @@ import PrimaryButton from '@/components/ui/PrimaryButton';
 import { spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatDate } from '@/lib/format';
 import { deleteSavedTrip, fetchSavedTrips } from '@/lib/services/savedTrips';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -29,6 +30,7 @@ export default function SavedTripsScreen() {
   const router = useRouter();
   const theme = useTheme();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth } = useResponsive();
   const { user, loading: authLoading } = useAuth();
   const [trips, setTrips] = useState<SavedTrip[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,7 +117,10 @@ export default function SavedTripsScreen() {
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.padding}>
+      contentContainerStyle={[
+        styles.padding,
+        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
+      ]}>
       <TripSectionHeader active="saved" />
 
       {loadError ? (

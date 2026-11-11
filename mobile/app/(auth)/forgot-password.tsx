@@ -40,7 +40,7 @@ export default function ForgotPasswordScreen() {
     isDesktop,
     isLandscape,
     scale,
-    contentMaxWidth,
+    formMaxWidth,
     logoWidth,
     horizontalPadding,
     verticalPadding,
@@ -128,7 +128,7 @@ export default function ForgotPasswordScreen() {
             ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
-            <View style={[styles.inner, { maxWidth: contentMaxWidth }]}>
+            <View style={[styles.inner, { maxWidth: formMaxWidth }]}>
               <View
                 style={[
                   styles.hero,

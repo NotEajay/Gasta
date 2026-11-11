@@ -418,6 +418,126 @@ export interface Database {
         };
         Relationships: [];
       };
+      doe_etl_state: {
+        Row: {
+          id: number;
+          last_website_fetch_at: string;
+          last_trigger: string | null;
+          last_run_id: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: number;
+          last_website_fetch_at: string;
+          last_trigger?: string | null;
+          last_run_id?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: number;
+          last_website_fetch_at?: string;
+          last_trigger?: string | null;
+          last_run_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      doe_pending_downloads: {
+        Row: {
+          id: number;
+          region_code: string;
+          bulletin_date: string;
+          slug: string;
+          source_url: string;
+          last_error: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: number;
+          region_code: string;
+          bulletin_date: string;
+          slug: string;
+          source_url: string;
+          last_error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: number;
+          region_code?: string;
+          bulletin_date?: string;
+          slug?: string;
+          source_url?: string;
+          last_error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      doe_etl_runs: {
+        Row: {
+          id: string;
+          run_at: string;
+          workflow: 'weekly' | 'pending-retry';
+          status: 'success' | 'partial' | 'failed';
+          trigger_source: string | null;
+          github_run_id: string | null;
+          github_run_attempt: number;
+          regions_ok: number;
+          regions_failed: number;
+          regions_skipped: number;
+          region_results: Json | null;
+          duration_s: number | null;
+          error_summary: string | null;
+          started_at: string;
+          ended_at: string;
+          failure_reason: string | null;
+          failed_step: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          run_at?: string;
+          workflow: 'weekly' | 'pending-retry';
+          status: 'success' | 'partial' | 'failed';
+          trigger_source?: string | null;
+          github_run_id?: string | null;
+          github_run_attempt?: number;
+          regions_ok?: number;
+          regions_failed?: number;
+          regions_skipped?: number;
+          region_results?: Json | null;
+          duration_s?: number | null;
+          error_summary?: string | null;
+          started_at?: string;
+          ended_at?: string;
+          failure_reason?: string | null;
+          failed_step?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          run_at?: string;
+          workflow?: 'weekly' | 'pending-retry';
+          status?: 'success' | 'partial' | 'failed';
+          trigger_source?: string | null;
+          github_run_id?: string | null;
+          github_run_attempt?: number;
+          regions_ok?: number;
+          regions_failed?: number;
+          regions_skipped?: number;
+          region_results?: Json | null;
+          duration_s?: number | null;
+          error_summary?: string | null;
+          started_at?: string;
+          ended_at?: string;
+          failure_reason?: string | null;
+          failed_step?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       fuel_stations: {
         Row: {
           id: string;
@@ -532,32 +652,27 @@ export interface Database {
         };
         Relationships: [];
       };
-      doe_etl_state: {
-        Row: {
-          id: number;
-          last_website_fetch_at: string;
-          last_trigger: string | null;
-          last_run_id: string | null;
-          updated_at: string;
-        };
-        Insert: {
-          id?: number;
-          last_website_fetch_at: string;
-          last_trigger?: string | null;
-          last_run_id?: string | null;
-          updated_at?: string;
-        };
-        Update: {
-          id?: number;
-          last_website_fetch_at?: string;
-          last_trigger?: string | null;
-          last_run_id?: string | null;
-          updated_at?: string;
-        };
-        Relationships: [];
-      };
     };
     Functions: {
+      save_doe_etl_run: {
+        Args: {
+          p_workflow: string;
+          p_status: string;
+          p_started_at: string;
+          p_ended_at: string;
+          p_trigger_source: string;
+          p_github_run_id: string | null;
+          p_github_run_attempt: number;
+          p_regions_ok: number;
+          p_regions_failed: number;
+          p_regions_skipped: number;
+          p_duration_s: number;
+          p_failure_reason: string | null;
+          p_failed_step: string | null;
+          p_region_results?: Json | null;
+        };
+        Returns: Database['public']['Tables']['doe_etl_runs']['Row'];
+      };
       submit_community_fuel_report: {
         Args: {
           p_station_id: string;

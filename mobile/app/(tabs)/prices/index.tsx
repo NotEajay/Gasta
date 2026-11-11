@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 
 import { Text } from '@/components/Themed';
+import ScreenHeader from '@/components/ui/ScreenHeader';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
@@ -214,11 +215,10 @@ const COMMUNITY_RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = 
 const HISTORY_WEEKS = 52;
 
 /*
- * Centred content column. On phones this never binds (the viewport is narrower
- * than the cap), so the layout is effectively full width. On tablet/web it keeps
- * the list readable instead of letting rows stretch to 1366px.
+ * The centred content column comes from `useResponsive().contentMaxWidth`, so
+ * it fills a phone and caps the dashboard on tablet/web instead of letting
+ * rows stretch across a 1366px browser.
  */
-const SHELL_MAX_WIDTH = 660;
 
 const PRICE_ACTION = D.color.action;
 const PRICE_ACTION_SOFT = D.color.actionSoft;
@@ -304,14 +304,14 @@ function PriceFilterField<T extends string>({
                   <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
                     {error}
                   </Text>
-                ) : null
+                ) : undefined
               }
               ListFooterComponent={
                 options.length > 0 && (loading || error) ? (
                   <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
                     {loading ? 'Refreshing available areas…' : error}
                   </Text>
-                ) : null
+                ) : undefined
               }
               renderItem={({ item }) => {
                 const isSelected = item.value === value;
@@ -355,7 +355,7 @@ export default function FuelPricesScreen() {
   // Below ~360px three filter columns are too tight to read, so the row wraps
   // to 2+1 there. `isCompact` is width-only, so it is safe to read before any
   // conditional return.
-  const { isCompact } = useResponsive();
+  const { contentMaxWidth, isCompact, isDesktop } = useResponsive();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const { fuelType, selectFuelType, vehicleLabel } = useFuelPriceDefault(user?.id ?? null);

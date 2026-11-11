@@ -12,6 +12,7 @@ import PrimaryButton from '@/components/ui/PrimaryButton';
 import { spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency, formatDate, transportModeLabel } from '@/lib/format';
 import { fetchRecentTrips } from '@/lib/services/trips';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -34,6 +35,7 @@ export default function TripHistoryScreen() {
   const router = useRouter();
   const theme = useTheme();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth } = useResponsive();
   const { user, loading: authLoading } = useAuth();
   const [records, setRecords] = useState<TripRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,7 +90,10 @@ export default function TripHistoryScreen() {
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
       style={[styles.flex, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.padding}>
+      contentContainerStyle={[
+        styles.padding,
+        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
+      ]}>
       <TripSectionHeader active="history" />
 
       {loadError ? (

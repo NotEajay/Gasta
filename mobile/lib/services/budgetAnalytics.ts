@@ -86,6 +86,9 @@ export type LitersCoverage =
 
 export interface BudgetAnalytics {
   vehicles: VehicleBudgetRow[];
+  /** Server totals. Null means the response did not include a usable totals row. */
+  actualRefillSpend?: number | null;
+  refillCount?: number | null;
   /** Month-wide logged trips, including trips with no vehicle set. */
   loggedTripCount: number;
   loggedDistanceKm: number;
@@ -150,6 +153,8 @@ export async function fetchMonthlyBudgetAnalytics(
 
   return {
     vehicles,
+    actualRefillSpend: totals?.actual_spend == null ? null : Number(totals.actual_spend),
+    refillCount: totals?.relevant_refill_count == null ? null : Number(totals.relevant_refill_count),
     loggedTripCount: Number(totals?.logged_trip_count ?? 0),
     loggedDistanceKm: Number(totals?.logged_distance_km ?? 0),
     estimatedTripCost: Number(totals?.estimated_trip_cost ?? 0),

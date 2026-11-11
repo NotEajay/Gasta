@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { StyleSheet, TextInput as RNTextInput, View, type TextInputProps } from 'react-native';
 
 import { Text } from '@/components/Themed';
@@ -19,9 +20,10 @@ interface LabeledInputProps extends TextInputProps {
   error?: string;
 }
 
-export default function LabeledInput({ label, error, style, ...props }: LabeledInputProps) {
+export default function LabeledInput({ label, error, style, onFocus, onBlur, ...props }: LabeledInputProps) {
   const theme = useTheme();
   const invalid = Boolean(error);
+  const [focused, setFocused] = useState(false);
 
   return (
     <View style={styles.container}>
@@ -30,11 +32,14 @@ export default function LabeledInput({ label, error, style, ...props }: LabeledI
       </Text>
       <RNTextInput
         {...props}
+        accessibilityLabel={props.accessibilityLabel ?? label}
+        onFocus={(event) => { setFocused(true); onFocus?.(event); }}
+        onBlur={(event) => { setFocused(false); onBlur?.(event); }}
         style={[
           styles.input,
           {
             color: theme.text,
-            borderColor: theme.border,
+            borderColor: focused ? palette.primary : theme.border,
             backgroundColor: theme.surface,
           },
           // Danger wins over the theme border/tint, but still yields to an
@@ -54,11 +59,14 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   label: {
-    ...typography.label,
+    ...typography.body,
+    fontSize: 13,
+    fontWeight: '600',
     marginBottom: spacing.sm,
   },
   input: {
-    borderWidth: 1.5,
+    minHeight: 52,
+    borderWidth: 1,
     borderRadius: radii.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,

@@ -1,3 +1,4 @@
+import type { ComponentRef } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   LayoutChangeEvent,
@@ -76,7 +77,7 @@ export default function PriorityBalanceBar({
   const [trackWidth, setTrackWidth] = useState(0);
   const trackWidthRef = useRef(0);
   const trackPageXRef = useRef(0);
-  const trackRef = useRef<View>(null);
+  const trackRef = useRef<ComponentRef<typeof View>>(null);
   const position = clampTimePriority(value);
   const valueRef = useRef(position);
   const previousPropValue = useRef(position);

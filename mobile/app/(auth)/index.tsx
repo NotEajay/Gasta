@@ -47,7 +47,7 @@ export default function AuthScreen() {
     isDesktop,
     isLandscape,
     scale,
-    contentMaxWidth,
+    formMaxWidth,
     logoWidth,
     horizontalPadding,
     verticalPadding,
@@ -184,7 +184,7 @@ export default function AuthScreen() {
             ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
-            <View style={[styles.inner, { maxWidth: contentMaxWidth }]}>
+            <View style={[styles.inner, { maxWidth: formMaxWidth }]}>
               <View
                 style={[
                   styles.hero,
@@ -197,7 +197,8 @@ export default function AuthScreen() {
                   source={require('@/assets/images/gasta-logo.png')}
                   style={{
                     width: logoWidth,
-                    height: logoWidth * 0.85,
+                    height: logoWidth * 0.55,
+                    tintColor: GasTaColors.forestDark,
                   }}
                 />
               </View>
@@ -394,7 +395,7 @@ const styles = StyleSheet.create({
   },
   toggleRow: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(1, 68, 33, 0.06)',
+    backgroundColor: GasTaColors.creamDark,
     borderRadius: GasTaRadius.sm,
     padding: 5,
     gap: 6,
@@ -408,12 +409,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   toggleActive: {
-    backgroundColor: GasTaColors.forest,
-    shadowColor: GasTaColors.forest,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 3,
+    backgroundColor: GasTaColors.white,
   },
   toggleText: {
     color: GasTaColors.textSoft,
@@ -421,8 +417,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   toggleTextActive: {
-    color: GasTaColors.textOnForest,
-    fontWeight: '800',
+    color: GasTaColors.forestDark,
+    fontWeight: '700',
   },
   header: {
     gap: GasTaSpacing.sm,

@@ -43,12 +43,14 @@ export default function ChipSelect<T extends string>({
           return (
             <Pressable
               key={option.value}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected }}
               onPress={() => onChange(option.value)}
               style={({ pressed }) => [
                 styles.chip,
                 {
-                  borderColor: selected ? palette.success : theme.border,
-                  backgroundColor: selected ? palette.success : theme.surface,
+                  borderColor: selected ? palette.primary : theme.border,
+                  backgroundColor: selected ? palette.primarySoft : theme.surface,
                   opacity: pressed ? 0.88 : 1,
                 },
               ]}>
@@ -56,7 +58,7 @@ export default function ChipSelect<T extends string>({
                 style={[
                   styles.chipText,
                   {
-                    color: selected ? '#F8F0E5' : theme.text,
+                    color: selected ? palette.primary : theme.text,
                     fontWeight: selected ? '700' : '500',
                   },
                 ]}>
@@ -86,7 +88,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm + 2,
     borderRadius: radii.pill,
-    borderWidth: 1.5,
+    borderWidth: 1,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   chipText: {
     fontSize: 14,

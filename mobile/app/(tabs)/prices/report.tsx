@@ -1,3 +1,4 @@
+import type { ComponentRef } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -19,6 +20,7 @@ import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_REGIONS, REGION_CENTROIDS, type DoeRegionCode } from '@/constants/regions';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency } from '@/lib/format';
 import {
   createFuelStation,
@@ -41,6 +43,7 @@ type SubmittedReport = {
 
 export default function ReportPriceScreen() {
   const router = useRouter();
+  const { contentMaxWidth } = useResponsive();
   const params = useLocalSearchParams<{
     station_id?: string;
     station_name?: string;
@@ -81,13 +84,13 @@ export default function ReportPriceScreen() {
   const [submitted, setSubmitted] = useState<SubmittedReport | null>(null);
   const submitInFlight = useRef(false);
   const [priceFocused, setPriceFocused] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const scrollOffset = useRef(0);
-  const priceFieldRef = useRef<View>(null);
-  const notesFieldRef = useRef<View>(null);
-  const focusedField = useRef<View | null>(null);
+  const priceFieldRef = useRef<ComponentRef<typeof View>>(null);
+  const notesFieldRef = useRef<ComponentRef<typeof View>>(null);
+  const focusedField = useRef<ComponentRef<typeof View> | null>(null);
   const scrollFrame = useRef<number | null>(null);
-  const revealField = useCallback((target: View | null) => {
+  const revealField = useCallback((target: ComponentRef<typeof View> | null) => {
     focusedField.current = target;
     if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
     if (!target || !Keyboard.isVisible()) return;
@@ -341,7 +344,14 @@ export default function ReportPriceScreen() {
       onScroll={(event) => { scrollOffset.current = event.nativeEvent.contentOffset.y; }}
       scrollEventThrottle={16}
       style={styles.flex}
-      contentContainerStyle={styles.padding}>
+      contentContainerStyle={[
+        styles.padding,
+        {
+          maxWidth: Math.min(contentMaxWidth, 760),
+          alignSelf: 'center',
+          width: '100%',
+        },
+      ]}>
       <SubPageHeader
         module="community"
         title={selectedStationId ? "Report station price" : "Report a price"}
@@ -543,7 +553,7 @@ export default function ReportPriceScreen() {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: GasTaColors.creamLight },
+  flex: { flex: 1, backgroundColor: GasTaColors.cream },
   fieldLabel: { fontSize: 12, fontWeight: '600', color: GasTaColors.forestMuted, marginBottom: 8 },
   selectedCard: { backgroundColor: GasTaColors.glassFillStrong, borderColor: GasTaColors.forestBorder, borderWidth: 1, borderRadius: radii.md, padding: spacing.md, shadowColor: GasTaColors.forest, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6 },
   stationDetails: { gap: 10 },
@@ -659,7 +669,7 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(1, 68, 33, 0.35)',
+    backgroundColor: 'rgba(49, 91, 218, 0.35)',
     justifyContent: 'center',
     padding: spacing.lg,
   },

@@ -40,20 +40,8 @@ export default function PageHero({ title, subtitle, navItems, children }: PageHe
 
 const styles = StyleSheet.create({
   wrap: {
-    marginHorizontal: -spacing.lg,
-    marginTop: -spacing.lg,
     marginBottom: spacing.lg,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.lg,
-    backgroundColor: GasTaColors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: GasTaColors.glassBorderSubtle,
-    shadowColor: GasTaColors.forest,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
-    shadowRadius: 14,
-    elevation: 2,
+    paddingTop: spacing.sm,
   },
   topRow: {
     flexDirection: 'row',
@@ -65,7 +53,7 @@ const styles = StyleSheet.create({
   title: {
     ...typography.title,
     color: GasTaColors.textPrimary,
-    fontSize: 26,
+    fontSize: 28,
   },
   subtitle: {
     ...typography.subtitle,
@@ -80,9 +68,10 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   navChip: {
-    backgroundColor: GasTaColors.creamLight,
+    backgroundColor: GasTaColors.white,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: 12,
+    minHeight: 44,
     borderRadius: radii.pill,
     borderWidth: 1,
     borderColor: GasTaColors.forestGlow,

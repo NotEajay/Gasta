@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs, usePathname } from 'expo-router';
+import { Tabs, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   Animated,
   Platform,
+  Pressable,
   StyleSheet,
   View,
   type ColorValue,
@@ -12,96 +13,27 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/Themed';
-import { AuthBackground } from '@/components/ui/GlassSurface';
 import AppBackground from '@/components/ui/AppBackground';
+import BrandWordmark from '@/components/ui/BrandWordmark';
 import { HomeColors } from '@/constants/home';
 import { tabConfig } from '@/constants/moduleColors';
 import { GasTaColors, radii, spacing } from '@/constants/Theme';
 import { TabBarVisibilityProvider, type TabScrollEvent } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 
-/**
- * The canvas that sits behind every tab scene.
- *
- * POSITION IS THE WHOLE POINT. This component wraps the `<SafeAreaView>` and the
- * `<Tabs>` themselves, so whatever it paints covers the real viewport — the
- * status bar at the top, and the home indicator / bottom edge at the bottom.
- *
- * A scene cannot do this job. Each scene is nested inside
- * `<SafeAreaView edges={['top']}>`, which pads the top by `insets.top`, and
- * `sceneStyle` pads the bottom by the floating tab bar's height plus the bottom
- * inset. A background painted from inside a scene therefore stops short of both
- * edges, and the parent canvas shows through those strips.
- *
- * `AuthBackground canvas="white"` remains the canvas for every other tab. Only
- * the screens running the cream GasTa experiment — Home, Profile, Budget and
- * Vehicles — swap in `AppBackground`. The floating tab bar is `position:
- * absolute` over this canvas and keeps its own opaque white surface, so the bar
- * reads as floating over cream rather than as a white navigation region.
- */
-const CREAM_CANVAS_ROUTES = [
-  '/home',
-  '/profile',
-  '/budget',
-  '/vehicles',
-  // Prices is a stack route, so the tab pathname is `/prices` and the index
-  // screen inside it is `/prices/index`. The parent entry covers both, because
-  // isCreamCanvasRoute matches on an exact hit or a `/` prefix.
-  '/prices',
-];
-
-function isCreamCanvasRoute(pathname: string) {
-  return CREAM_CANVAS_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`)
-  );
-}
-
-/**
- * The opaque fill for a tab scene, derived from the same route list the canvas
- * uses so the two can never disagree.
- *
- * WHY A SCENE MUST BE OPAQUE
- *
- * React Navigation's bottom tabs render every mounted scene in the same slot,
- * absolutely positioned on top of each other, with the focused scene at zIndex 0
- * and the rest at zIndex -1. Hiding the losers is `react-native-screens`' job.
- *
- * On native that works: `screensEnabled()` is true, so each scene is wrapped in a
- * real `Screen`, which detaches the inactive ones. On WEB it does not:
- * `screensEnabled()` returns `isNativePlatformSupported`, which is false for
- * `Platform.OS === 'web'`, so `MaybeScreen` silently degrades to a plain `View`
- * and every mounted scene stays painted. With a transparent scene background
- * that means the previously-visited tabs show straight through the active one —
- * the "previous page visible underneath" artefact, and the reason it was so much
- * more obvious in a browser than on a phone.
- *
- * An opaque per-scene background is the platform-agnostic fix: the focused
- * scene covers everything behind it everywhere. The trade-off is deliberate and
- * documented — the AppBackground gradient and its two 0.04-opacity orbs now sit
- * behind opaque scenes rather than showing through them. Both are far too faint
- * to carry the design, and correctness of "one visible page" outranks them.
- */
-function canvasColorFor(pathname: string) {
-  return isCreamCanvasRoute(pathname) ? GasTaColors.cream : GasTaColors.white;
-}
-
+/** Every scene stays opaque, including on web where inactive screens may mount. */
+function canvasColorFor(_pathname: string) { return GasTaColors.cream; }
 function TabCanvas({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
-  const isCreamCanvas = isCreamCanvasRoute(pathname);
-
-  if (isCreamCanvas) {
-    return <AppBackground>{children}</AppBackground>;
-  }
-
-  return <AuthBackground canvas="white">{children}</AuthBackground>;
+  return <AppBackground>{children}</AppBackground>;
 }
 
 /**
  * Floating nav bar metrics. Declared once so the bar geometry and the content
  * inset that keeps screens scrollable above it can never drift apart.
  */
-const NAV_BAR_HEIGHT = 70;
+const NAV_BAR_HEIGHT = 74;
 const NAV_BAR_RADIUS = radii.lg;
-const NAV_BAR_SIDE_MARGIN = 16;
+const NAV_BAR_SIDE_MARGIN = 12;
 const NAV_BAR_BOTTOM_GAP = 10;
 const NAV_ICON_SIZE = 23;
 const NAV_ICON_CHIP = 40;
@@ -130,6 +62,117 @@ const tabIconNames = {
 
 type TabIconKey = keyof typeof tabIconNames;
 
+/**
+ * Desktop navigation.
+ *
+ * The phone keeps the floating bottom bar. A browser gets a slim "dock": a
+ * floating forest capsule pinned to the left edge, vertically centred, with
+ * icon-only destinations and labels that appear on hover. It is deliberately
+ * not a full-height admin sidebar -- the page keeps the cream canvas and the
+ * rail only borrows as much width as the icons need.
+ *
+ * `path` is the URL pathname expo-router reports (group segments are omitted);
+ * `href` is the router target, which still needs the `(tabs)` group.
+ */
+const DESKTOP_NAV = [
+  {
+    label: 'Home',
+    path: '/home',
+    href: '/(tabs)/home',
+    icon: 'home-outline',
+    activeIcon: 'home',
+  },
+  {
+    label: 'Prices',
+    path: '/prices',
+    href: '/(tabs)/prices',
+    icon: 'pricetag-outline',
+    activeIcon: 'pricetag',
+  },
+  {
+    label: 'Trip',
+    path: '/trip',
+    href: '/(tabs)/trip',
+    icon: 'navigate-outline',
+    activeIcon: 'navigate',
+  },
+  {
+    label: 'Vehicles',
+    path: '/vehicles',
+    href: '/(tabs)/vehicles',
+    icon: 'car-outline',
+    activeIcon: 'car',
+  },
+  {
+    label: 'Budget',
+    path: '/budget',
+    href: '/(tabs)/budget',
+    icon: 'wallet-outline',
+    activeIcon: 'wallet',
+  },
+  {
+    label: 'Profile',
+    path: '/profile',
+    href: '/(tabs)/profile',
+    icon: 'person-outline',
+    activeIcon: 'person',
+  },
+] as const;
+
+/** Inactive destinations: bright enough to read, quieter than the active tile. */
+const RAIL_INACTIVE = 'rgba(248, 240, 229, 0.86)';
+
+function DesktopRail() {
+  const router = useRouter();
+  const pathname = usePathname();
+  // expo-router omits group segments from `usePathname`, but normalising here
+  // keeps the active state correct if that ever changes.
+  const routePath = pathname.replace(/^\/\(tabs\)/, '') || '/home';
+
+  return (
+    <View style={styles.railWrap}>
+      <View style={styles.rail}>
+        <View style={styles.railBrand}>
+          <BrandWordmark width={26} variant="symbol" />
+        </View>
+
+        <View style={styles.railDivider} />
+
+        <View style={styles.railNav}>
+          {DESKTOP_NAV.map((item) => {
+            const active =
+              routePath === item.path || routePath.startsWith(`${item.path}/`);
+            return (
+              <Pressable
+                key={item.path}
+                accessibilityRole="link"
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected: active }}
+                onPress={() => router.navigate(item.href as never)}
+                style={({ pressed }) => [
+                  styles.railItem,
+                  active && styles.railItemActive,
+                  pressed && styles.railItemPressed,
+                ]}>
+                <Ionicons
+                  name={active ? item.activeIcon : item.icon}
+                  size={19}
+                  color={active ? GasTaColors.forestDark : RAIL_INACTIVE}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[styles.railLabel, active && styles.railLabelActive]}>
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function TabIcon({
   name,
   focused,
@@ -143,7 +186,7 @@ function TabIcon({
 
   return (
     <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
-      <Ionicons name={iconName} size={NAV_ICON_SIZE} color={color} />
+      <Ionicons name={iconName} size={NAV_ICON_SIZE} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
     </View>
   );
 }
@@ -158,23 +201,36 @@ function TabLabel({
   color: ColorValue;
   focused: boolean;
 }) {
+  const { isCompact } = useResponsive();
+
   return (
-    <Text numberOfLines={1} style={[styles.tabLabel, focused && styles.tabLabelActive, { color }]}>
+    <Text numberOfLines={1} style={[styles.tabLabel, isCompact && styles.tabLabelCompact, focused && styles.tabLabelActive, { color }]}>
       {children}
     </Text>
   );
 }
 
+export const unstable_settings = { anchor: 'home' };
+
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
+  const { isDesktop } = useResponsive();
+  /**
+   * Web-only desktop shell: a left navigation rail replaces the floating phone
+   * bar. The map picker stays full-screen on every platform.
+   */
+  const showRail =
+    Platform.OS === 'web' && isDesktop && !pathname.includes('pick-map');
   const navBarBottom = insets.bottom + NAV_BAR_BOTTOM_GAP;
   // Sides clear the display cutout when the device is rotated into landscape.
   const navBarInset = Math.max(NAV_BAR_SIDE_MARGIN, Math.max(insets.left, insets.right) + 8);
   // Slides fully below the viewport when hidden, so it can never swallow taps.
   const navBarHiddenOffset = NAV_BAR_HEIGHT + navBarBottom + spacing.sm;
   // Reserve room under every screen so the last row scrolls clear of the bar.
-  const navBarScenePadding = NAV_BAR_HEIGHT + navBarBottom + spacing.md;
+  const navBarScenePadding = showRail
+    ? spacing.xl
+    : NAV_BAR_HEIGHT + navBarBottom + spacing.md;
 
   const navBarVisibility = useRef(new Animated.Value(1)).current;
   const previousOffset = useRef(0);
@@ -292,24 +348,44 @@ export default function TabLayout() {
     [navBarScenePadding, pathname],
   );
 
+  /**
+   * The dock already gives the page a navigation frame, so the scene only
+   * needs a modest bottom gutter instead of the phone bar's full clearance.
+   */
+  const desktopSceneStyle = useMemo(
+    () => ({
+      backgroundColor: canvasColorFor(pathname),
+      flex: 1,
+      paddingBottom: spacing.xl,
+      ...(Platform.OS === 'web' ? ({ width: '100%', height: '100%' } as const) : null),
+    }),
+    [pathname],
+  );
+
   return (
     <TabBarVisibilityProvider handleScroll={handleTabBarScroll} reset={resetTabBar}>
       <TabCanvas>
-        <SafeAreaView edges={['top']} style={styles.fill}>
+        <View
+          style={[
+            styles.fill,
+            showRail && styles.desktopShell,
+            showRail && { backgroundColor: canvasColorFor(pathname) },
+          ]}>
+          {showRail ? <DesktopRail /> : null}
+          <SafeAreaView edges={showRail ? [] : ['top']} style={styles.fill}>
           <Tabs
-            initialRouteName="home"
+            activityEnabled
             // Detach inactive screens so prior tabs cannot remain visible
             // underneath the focused cream/transparent scene (esp. on web).
             detachInactiveScreens
             screenOptions={{
               headerShown: false,
-              freezeOnBlur: true,
-              sceneStyle,
+              sceneStyle: showRail ? desktopSceneStyle : sceneStyle,
               lazy: true,
               tabBarActiveTintColor: HomeColors.primary,
               tabBarInactiveTintColor: HomeColors.muted,
               tabBarItemStyle: styles.tabBarItem,
-              tabBarStyle: tabBarStyle as unknown as ViewStyle,
+              tabBarStyle: (showRail ? styles.tabBarHidden : tabBarStyle) as unknown as ViewStyle,
               tabBarLabel: ({ children, color, focused }) => (
                 <TabLabel color={color} focused={focused}>
                   {children}
@@ -341,7 +417,7 @@ export default function TabLayout() {
                  */
                 sceneStyle: styles.homeScene,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="home" focused={focused} color={color} />
+                  <TabIcon name="home" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -350,7 +426,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.prices.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="prices" focused={focused} color={color} />
+                  <TabIcon name="prices" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -359,7 +435,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.trip.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="trip" focused={focused} color={color} />
+                  <TabIcon name="trip" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -368,7 +444,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.vehicles.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="vehicles" focused={focused} color={color} />
+                  <TabIcon name="vehicles" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -377,7 +453,7 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.budget.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="budget" focused={focused} color={color} />
+                  <TabIcon name="budget" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
@@ -386,12 +462,13 @@ export default function TabLayout() {
               options={{
                 title: tabConfig.profile.label,
                 tabBarIcon: ({ color, focused }) => (
-                  <TabIcon name="profile" focused={focused} color={color} />
+                  <TabIcon name="profile" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
                 ),
               }}
             />
           </Tabs>
-        </SafeAreaView>
+          </SafeAreaView>
+        </View>
       </TabCanvas>
     </TabBarVisibilityProvider>
   );
@@ -399,6 +476,81 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+
+  /* ---- desktop shell ---------------------------------------------------- */
+  desktopShell: {
+    flexDirection: 'row',
+  },
+  tabBarHidden: {
+    display: 'none',
+  },
+  /**
+   * The dock reserves a narrow gutter, then floats a forest capsule in the
+   * middle of it. Keeping the rail content-height (rather than full-height)
+   * is what stops it reading like an admin sidebar.
+   */
+  railWrap: {
+    width: 116,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.md,
+    paddingVertical: spacing.md,
+    justifyContent: 'center',
+    zIndex: 20,
+  },
+  rail: {
+    width: 84,
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 26,
+    backgroundColor: GasTaColors.forestDark,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestDark,
+  },
+  railBrand: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.creamLight,
+  },
+  railDivider: {
+    width: 26,
+    height: 1,
+    marginVertical: 10,
+    backgroundColor: 'rgba(215, 225, 236, 0.18)',
+  },
+  railNav: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  railItem: {
+    width: 64,
+    height: 58,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  railItemActive: {
+    backgroundColor: GasTaColors.accent,
+  },
+  railItemPressed: {
+    opacity: 0.72,
+  },
+  /** Always-visible caption, so the icon-only dock stays self-explanatory. */
+  railLabel: {
+    color: RAIL_INACTIVE,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '700',
+    letterSpacing: 0.1,
+  },
+  railLabelActive: {
+    color: GasTaColors.forestDark,
+    fontWeight: '800',
+  },
+
   /**
    * Home's scene: still opaque (the stacking fix depends on it), but with no
    * painted bottom strip. Home reserves that clearance on its own scroll content
@@ -419,19 +571,18 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     position: 'absolute',
-    // Must stay visible so the iOS shadow is not clipped by the rounded corners.
     overflow: 'visible',
     zIndex: 10,
     borderRadius: NAV_BAR_RADIUS,
     borderCurve: 'continuous',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: HomeColors.border,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     shadowColor: HomeColors.navy,
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    elevation: 8,
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    elevation: 6,
   },
   tabBarItem: {
     // Vertical centring only. The 40px chip + 2px label gap + 14px line = 56px
@@ -448,7 +599,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconWrapActive: {
-    backgroundColor: HomeColors.primarySoft,
+    backgroundColor: GasTaColors.accent,
   },
   tabLabel: {
     fontSize: 11,
@@ -457,6 +608,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: 'center',
   },
+  tabLabelCompact: { fontSize: 10, letterSpacing: -0.2 },
   tabLabelActive: {
     fontWeight: '700',
   },

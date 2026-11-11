@@ -24,7 +24,7 @@ export default function SectionHeader({
   subtitle,
   action,
   module = 'prices',
-  variant = 'legacy',
+  variant = 'canonical',
 }: SectionHeaderProps) {
   const theme = useTheme();
 

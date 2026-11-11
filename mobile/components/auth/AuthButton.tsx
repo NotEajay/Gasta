@@ -51,7 +51,7 @@ export default function AuthButton({
       backgroundColor: interpolateColor(
         hoverProgress.value,
         [0, 1],
-        ['rgba(248, 240, 229, 0.55)', 'rgba(1, 68, 33, 0.08)'],
+        [GasTaColors.white, GasTaColors.cream],
       ),
     };
   });
@@ -136,12 +136,12 @@ const styles = StyleSheet.create({
     backgroundColor: GasTaColors.forest,
     shadowColor: GasTaColors.forest,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0,
     shadowRadius: 12,
-    elevation: 4,
+    elevation: 0,
   },
   secondary: {
-    backgroundColor: 'rgba(248, 240, 229, 0.55)',
+    backgroundColor: GasTaColors.white,
     borderWidth: 1,
     borderColor: GasTaColors.forestBorder,
   },

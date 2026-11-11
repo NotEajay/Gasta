@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { User } from '@supabase/supabase-js';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { floatingNavContentInset } from '@/app/(tabs)/_layout';
@@ -10,10 +10,9 @@ import { floatingNavContentInset } from '@/app/(tabs)/_layout';
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
+import BrandWordmark from '@/components/ui/BrandWordmark';
 import LoadingState from '@/components/ui/LoadingState';
-// NOTE: Home now runs on the cream/forest GasTa canvas, matching Vehicles,
-// Budget and Profile. `HomeColors` (old navy / cool-gray) is no longer used
-// here; `GasTaColors` is the single palette, as it already is on those screens.
+import FuelInsightsPanel from '@/components/insights/FuelInsightsPanel';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
@@ -29,7 +28,6 @@ import {
 import {
   DASHBOARD_FUEL_TYPE,
   DASHBOARD_REGION,
-  DASHBOARD_RECO_FILL_LITERS,
   fetchDashboardBudgetSummary,
   fetchDashboardPendingSummary,
   fetchDashboardPriceSummary,
@@ -51,83 +49,11 @@ import { DOE_REGIONS } from '@/constants/regions';
 import type { TripRecord } from '@/types/mcda';
 import type { Vehicle } from '@/types';
 
-/**
- * `gastanew.png` is the horizontal GasTa wordmark used in the hero.
- *
- * IMPORTANT: the file is a 1254x1254 SQUARE, but the wordmark inside it only
- * occupies 1128x338 (measured from its alpha channel) with large transparent
- * padding above and below. Sizing the Image box by the FILE's 1:1 aspect would
- * therefore render the wordmark itself only ~35px tall -- which is exactly the
- * "too small to read" problem this asset was added to fix.
- *
- * So the box is sized by the CONTENT aspect (3.34:1) instead. That keeps the
- * wordmark crisp, uncropped and at its intended height at every breakpoint.
- */
-const gastaNewLogo = require('@/assets/images/gastanew.png');
-
-/**
- * Measured geometry of gastanew.png, from its alpha channel.
- *
- * The file is a 1254x1254 SQUARE, but the wordmark only occupies a
- * 1128x338 region at (84, 456) -- i.e. roughly 36% transparent padding above and
- * 37% below, and almost none at the sides.
- *
- * That is why simply widening the Image did not help: `resizeMode="contain"`
- * fits the SQUARE source into the box by its SMALLER dimension, so a 135x40 box
- * shrank the whole 1254px canvas to 40x40 and the visible wordmark came out
- * ~36px wide -- unreadable, and leaving the rest of the row empty.
- *
- * So the square is rendered at full size inside a box exactly the size of the
- * visible artwork, offset by the padding. The source is square and the box is
- * square, so `contain` is a 1:1 fit and nothing is stretched or distorted --
- * the transparent margin is simply cropped away.
- */
-const GASTANEW_FILE = 1254;
-const GASTANEW_PAD_X = 84;
-const GASTANEW_PAD_Y = 456;
-const GASTANEW_CONTENT_W = 1128;
-const GASTANEW_CONTENT_H = 338;
-
-/** The wordmark at a given VISIBLE width, cropped to its real bounds. */
-function BrandWordmark({ width }: { width: number }) {
-  const scale = width / GASTANEW_CONTENT_W;
-  const imageSize = GASTANEW_FILE * scale;
-  return (
-    // Pinned so the tagline can never squeeze the wordmark: it is the brand, and
-    // it is already at its minimum useful size.
-    <View style={{ width, height: GASTANEW_CONTENT_H * scale, overflow: 'hidden', flexShrink: 0 }}>
-      <Image
-        accessibilityLabel="GasTa"
-        accessibilityRole="image"
-        resizeMode="contain"
-        source={gastaNewLogo}
-        style={{
-          position: 'absolute',
-          width: imageSize,
-          height: imageSize,
-          left: -GASTANEW_PAD_X * scale,
-          top: -GASTANEW_PAD_Y * scale,
-        }}
-      />
-    </View>
-  );
-}
-
-/**
- * Cream-on-forest tokens for the dark "This month" card.
- *
- * Defined here rather than in the theme because the theme has no on-forest set
- * yet, and adding one globally would ripple through every screen. The earlier
- * attempt used `forestMuted` (dark green at 68%) on a `forestDark` background,
- * which is green-on-green and effectively invisible.
- */
+/** Legible supporting text on the dark fuel feature. */
 const ON_FOREST = {
-  label: 'rgba(248, 240, 229, 0.82)',
-  body: 'rgba(248, 240, 229, 0.94)',
-  sub: 'rgba(248, 240, 229, 0.78)',
-  track: 'rgba(248, 240, 229, 0.22)',
-  /** A light lime that reads clearly on forest without a new brand hue. */
-  fill: '#9BE08A',
+  label: '#D7E1EC',
+  body: '#F3F6FA',
+  sub: '#C1CEDC',
   over: '#FCA5A5',
 } as const;
 
@@ -148,16 +74,6 @@ function formatDistanceKm(km: number): string {
   return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
 }
 
-/**
- * "Sunday, September 28" — local device date, no network, no stored state. */
-function getTodayLabel(now = new Date()): string {
-  return now.toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
-}
-
 /** One small semantic chip. Only rendered when there is a real status to show. */
 function Badge({ label, tone }: { label: string; tone: HomeActivityTone }) {
   return (
@@ -166,8 +82,6 @@ function Badge({ label, tone }: { label: string; tone: HomeActivityTone }) {
     </View>
   );
 }
-
-
 
 type HomeActivityIcon = 'navigate-outline' | 'pricetag-outline';
 type HomeActivityTone = 'pending' | 'verified' | 'rejected' | 'review' | 'neutral';
@@ -257,11 +171,13 @@ function reportStatusBadge(status: string): { label: string; tone: HomeActivityT
 export default function HomeScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-  const { contentMaxWidth, horizontalPadding, width: windowWidth } = useResponsive();
-  // Lets the branded hero bleed up under the status bar instead of leaving a
-  // cream strip above it. Declared here, with the other hooks and above every
-  // early return -- a hook below one changes the hook order between the loading
-  // and loaded renders.
+  const {
+    contentMaxWidth,
+    horizontalPadding,
+    isDesktop,
+    width: windowWidth,
+  } = useResponsive();
+  // Hooks stay above the loading/auth returns.
   const insets = useSafeAreaInsets();
   const tabBarScrollHandler = useTabBarScrollHandler();
   const [price, setPrice] = useState<DashboardPriceSummary | null>(null);
@@ -431,13 +347,19 @@ export default function HomeScreen() {
   // plumbing is deliberately deferred so this pass adds no navigation state.
   const goToVehicles = useCallback(() => router.push('/(tabs)/vehicles'), [router]);
   const goToBudget = useCallback(() => router.push('/(tabs)/budget'), [router]);
+  const goToFuelHistory = useCallback((year: number, month: number) => {
+    router.push({ pathname: '/(tabs)/budget', params: {
+      view: 'history', year: String(year), month: String(month), insight_request: String(Date.now()),
+    } });
+  }, [router]);
+  const insightNow = new Date();
 
   /**
-   * Home is allowed a slightly wider shell than the shared `contentMaxWidth`
-   * (which tops out at 480 on desktop) so a browser does not show a narrow
-   * mobile column adrift in empty space. Still capped, never full-bleed.
+   * Home uses the shared page shell. On a browser that is a wide dashboard
+   * canvas (see `useResponsive`), still capped so it never stretches edge to
+   * edge on an ultrawide display.
    */
-  const homeMaxWidth = Math.max(contentMaxWidth, 640);
+  const homeMaxWidth = isDesktop ? contentMaxWidth : Math.min(windowWidth, 760);
 
   if (!isSupabaseConfigured) {
     return (
@@ -464,8 +386,6 @@ export default function HomeScreen() {
   // The fuel type stays the service's concern (DASHBOARD_FUEL_TYPE); the section
   // heading is intentionally generic so it does not duplicate that in the UI.
 
-  const todayLabel = getTodayLabel();
-
   /**
    * Visible wordmark width. Measured, not guessed: this is the width of the
    * ARTWORK after the transparent margin is cropped, so the mark reads at roughly
@@ -473,54 +393,28 @@ export default function HomeScreen() {
    * raster past the point it stays crisp.
    */
   const brandLogoWidth = Math.round(
-    Math.min(Math.max(windowWidth * 0.35, 118), 168)
+    Math.min(Math.max(windowWidth * 0.32, 116), 148)
   );
-
-  /**
-   * Whether the tagline needs two lines.
-   *
-   * Below ~390px a single line would force the wordmark down to stay legible, or
-   * overflow, so it breaks after the first sentence instead. The wordmark keeps
-   * its size either way -- the tagline is what adapts, never the logo.
-   */
-  const taglineBreaks = windowWidth < 390;
 
   // "31%" beside the headline. Derived from the same progress the bar uses, so
   // the two can never disagree. Only shown when there is a real limit.
-  const budgetPercentLabel =
-    budget?.hasBudget && !budget.actualUnavailable && budget.limitAmount > 0
-      ? `${Math.round(budget.progress * 100)}%`
-      : null;
-
   // Recommendation card copy — DOE-first "best this week" layout.
   const recoRegionLabel = price
     ? regionDisplayName(price.regionCode ?? DASHBOARD_REGION)
     : null;
-  const recoEyebrow = price
-    ? price.source === 'community'
-      ? price.isNearbyRecommended
-        ? `Cheapest nearby · ${fuelDisplayName(price.fuelCode)}`
-        : `Community pick · ${fuelDisplayName(price.fuelCode)}`
-      : `Cheapest ${fuelDisplayName(price.fuelCode)} · ${recoRegionLabel}`
-    : null;
-
   const recoUpdatedLabel =
     price?.source === 'doe' && price.bulletinDate
       ? formatBulletinRange(price.bulletinDate)
       : null;
-  const recoFreshnessLabel =
+  const recoFreshness =
     price?.source === 'doe' && price.bulletinDate
-      ? getBulletinFreshness(price.bulletinDate).label
+      ? getBulletinFreshness(price.bulletinDate)
       : null;
+  const recoIsStale = recoFreshness?.status === 'stale';
 
   const recoDelta =
     price?.vsLastBulletin != null && Number.isFinite(price.vsLastBulletin)
       ? price.vsLastBulletin
-      : null;
-
-  const recoSavingsLabel =
-    price?.savingsOnFill != null && price.savingsOnFill > 0
-      ? `Save about ${formatPeso(Math.round(price.savingsOnFill))} on a ${DASHBOARD_RECO_FILL_LITERS} L fill-up vs average`
       : null;
 
   /**
@@ -541,919 +435,251 @@ export default function HomeScreen() {
     budgetIsOver ? (budget?.overBy ?? 0) : (budget?.remaining ?? 0)
   );
   const budgetLimit = budget?.hasBudget ? formatPeso(budget.limitAmount) : null;
-  const budgetSpent = budget?.hasBudget && !budget.actualUnavailable
-    ? formatPeso(budget.spent)
-    : null;
   const budgetProgress = budget?.hasBudget && !budget.actualUnavailable ? budget.progress : null;
   const budgetProgressWidth = `${Math.round((budgetProgress ?? 0) * 100)}%` as `${number}%`;
-  const budgetFillColor =
-    budget?.status === 'exceeded'
-      ? palette.danger
-      : budget?.status === 'warning'
-        ? palette.warning
-        : GasTaColors.forest;
-  return (
-    <ScrollView
-      // The canonical cream, same as the scene behind it. Explicit rather than
-      // transparent so an iOS bounce or a web overscroll exposes this exact
-      // shade instead of whatever happens to be behind the ScrollView.
-      style={[styles.flex, styles.scroll]}
-      contentContainerStyle={[
-        styles.shell,
-        {
-          maxWidth: homeMaxWidth,
-          // Home opted out of the scene's painted bottom strip (see the Home tab
-          // in _layout.tsx), so it reserves the identical clearance here. The
-          // body continues behind the floating bar instead of stopping at a
-          // differently-coloured band, and the last row stays reachable.
-          paddingBottom: floatingNavContentInset(insets.bottom),
-        },
-      ]}
-      onScroll={tabBarScrollHandler}
-      scrollEventThrottle={16}
-      showsVerticalScrollIndicator={false}>
-      {/*
-        COMPACT HEADER. The wordmark sits on the cream canvas beside a quiet
-        profile action, with the greeting as the real content. No hero banner and
-        no drop shadow: the reference composition is information-first, and the
-        dark "This month" card below is the only thing competing for attention.
 
-        The wordmark is sized by the asset's CONTENT aspect (3.34:1), not the
-        1254x1254 file aspect, so the mark renders at its real height instead of
-        ~35px inside a square of transparent padding.
-      */}
-      {/*
-        Same horizontal padding as the card grid below, so the wordmark and the
-        cards share one margin down the page. Written as a JSX comment -- a bare
-        `//` line here is a text node, and React Native throws "Text strings must
-        be rendered within a <Text> component" for it.
-      */}
-      <View style={[styles.header, { paddingHorizontal: horizontalPadding }]}>
-        <View style={styles.headerRow}>
-          <BrandWordmark width={brandLogoWidth} />
-          {/*
-            Brand tagline, not an action.
-
-            The top-right control was a second shortcut for a screen that the
-            bottom tab bar already owns, so it carried no information. A short
-            statement of what the product is does, and it balances the wordmark
-            without adding another thing to tap.
-
-            "LOWER COSTS" is the only emphasised run. On a narrow phone the line
-            breaks deliberately after the first sentence rather than wherever the
-            text happens to run out, so the accent never lands mid-phrase.
-          */}
-          <View style={styles.tagline}>
-            {taglineBreaks ? (
-              <>
-                <Text style={[styles.taglineLine, styles.taglineLineNarrow]}>
-                  SMART CHOICES.
-                </Text>
-                <Text style={[styles.taglineLine, styles.taglineLineNarrow]}>
-                  <Text style={styles.taglineAccent}>LOWER COSTS.</Text> EVERY TRIP.
-                </Text>
-              </>
-            ) : (
-              <Text style={styles.taglineLine}>
-                SMART CHOICES. <Text style={styles.taglineAccent}>LOWER COSTS.</Text> EVERY TRIP.
-              </Text>
-            )}
+  const budgetCard = (
+    <Pressable testID="home-spending-card" accessibilityRole="button" accessibilityLabel="View budget"
+      onPress={goToBudget} style={({ pressed }) => [styles.monthCard, pressed && styles.pressed]}>
+      <View style={styles.monthHead}>
+        <Text style={styles.monthLabel}>Your spending · {insightNow.toLocaleDateString('en-PH', { month: 'short' })}</Text>
+        <View style={styles.inlineLink}><Text style={styles.sectionLinkText}>Budget</Text><Ionicons name="arrow-forward" size={14} color={GasTaColors.forest} /></View>
+      </View>
+      {budget && !budget.actualUnavailable ? <>
+        <View style={styles.spendingFigures}>
+          <View style={styles.fill}><Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={1} style={styles.monthAmount}>{formatPeso(budget.spent)}</Text>
+            <Text style={styles.meta}>Recorded refill expenses</Text></View>
+          <View style={styles.spendingRemaining}>
+            {budget.hasBudget ? <><Text style={[styles.remainingAmount, budgetIsOver && { color: palette.danger }]}>{budgetHeadroom}</Text>
+              <Text style={styles.meta}>{budgetIsOver ? 'over' : 'left of'} {budgetLimit}</Text></>
+              : <Text style={styles.sectionLinkText}>Set a budget</Text>}
           </View>
         </View>
-        <Text style={styles.greeting} numberOfLines={1}>
-          {getGreeting()}, {firstName}
-        </Text>
-        <Text style={styles.headerDate} numberOfLines={1}>
-          {todayLabel}
-        </Text>
+        {budget.hasBudget ? <View style={styles.monthTrack} accessibilityRole="progressbar" accessibilityLabel="Monthly budget used"
+          accessibilityValue={{ min: 0, max: 100, now: Math.round((budgetProgress ?? 0) * 100) }}>
+          <View style={[styles.monthFill, { width: budgetProgressWidth, backgroundColor: budgetIsOver ? palette.danger : GasTaColors.forest }]} />
+        </View> : null}
+      </> : <View style={styles.unavailableSpend}><Text style={styles.monthUnavailable}>Spending unavailable</Text>
+        <Text style={styles.meta}>Open Budget to review your recorded refills.</Text></View>}
+    </Pressable>
+  );
+
+  const quickActions = (
+    <View testID="home-quick-actions" style={styles.quickActions}>
+      {[
+        { label: 'Plan a trip', icon: 'navigate-outline' as const, onPress: goToTrip },
+        { label: 'Log refill', icon: 'water-outline' as const, onPress: goToVehicles },
+      ].map((item) => <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={item.label}
+        onPress={item.onPress} style={({ pressed }) => [styles.quickAction, pressed && styles.pressed]}>
+        <Ionicons name={item.icon} size={20} color={GasTaColors.forest} />
+        <Text style={styles.quickLabel}>{item.label}</Text>
+        <Ionicons name="arrow-forward" size={14} color={GasTaColors.textMuted} />
+      </Pressable>)}
+    </View>
+  );
+
+  const insightPreview = (
+    <FuelInsightsPanel userId={user.id} year={insightNow.getFullYear()} month={insightNow.getMonth() + 1}
+      compact highlight onViewHistory={goToFuelHistory} />
+  );
+
+  const pricePreview = (
+    <View testID="home-fuel-feature" style={styles.fuelFeature}>
+      <View style={styles.fuelTop}>
+        <Text style={styles.fuelEyebrow}>FUEL PRICE WATCH</Text>
+        {price ? <View style={styles.fuelSourceBadge}>
+          <Ionicons name={price.source === 'community' ? 'shield-checkmark-outline' : 'document-text-outline'} size={13} color={GasTaColors.white} />
+          <Text style={styles.fuelSource}>{price.source === 'doe' ? 'DOE bulletin estimate' : 'Verified community price'}</Text>
+        </View> : null}
       </View>
-      <View style={styles.body}>
-        <View style={[styles.grid, { paddingHorizontal: horizontalPadding }]}>
-          {/*
-            THIS MONTH — the primary hero. A dark forest card, because this is the
-            one number the user opened the app for, and the reference composition
-            gives it the visual weight. Still the accepted-allocations-only
-            actual spend; the trip estimate is never mixed in.
-          */}
-          <View style={styles.monthCard}>
-            <View style={styles.monthHead}>
-              <Text style={styles.monthLabel}>This month</Text>
-              <Pressable
-                accessibilityRole="link"
-                accessibilityLabel="View budget"
-                hitSlop={8}
-                onPress={goToBudget}
-                style={({ pressed }) => [styles.monthHeadLink, pressed && styles.pressed]}>
-                <Text style={styles.monthHeadLinkText}>View budget</Text>
-                <Ionicons name="chevron-forward" size={12} color={GasTaColors.cream} />
-              </Pressable>
+      {price ? <>
+        <Text style={styles.fuelScope}>{fuelDisplayName(price.fuelCode)} · {price.isRegionFallback ? `${recoRegionLabel} reference` : recoRegionLabel}</Text>
+        <View style={styles.fuelPriceRow}>
+          <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={1} style={styles.fuelPrice}>{formatCurrency(price.price)}<Text style={styles.fuelUnit}> /L</Text></Text>
+          {recoDelta != null ? <View style={styles.fuelDelta}>
+            <Ionicons name={recoDelta < 0 ? 'trending-down' : recoDelta > 0 ? 'trending-up' : 'remove'} size={18}
+              color={recoDelta < 0 ? GasTaColors.accent : recoDelta > 0 ? ON_FOREST.over : ON_FOREST.body} />
+            <Text style={[styles.fuelDeltaValue, { color: recoDelta < 0 ? GasTaColors.accent : recoDelta > 0 ? ON_FOREST.over : ON_FOREST.body }]}>
+              {recoDelta === 0 ? 'No change' : `${recoDelta > 0 ? '+' : '−'}${formatCurrency(Math.abs(recoDelta))}/L`}
+            </Text>
+            <Text style={styles.fuelDeltaCaption}>vs last bulletin</Text>
+          </View> : null}
+        </View>
+        <Text style={styles.fuelStation}>{price.stationName}</Text>
+        {price.isNearbyRecommended && price.distanceKm != null ? <Text style={styles.fuelDetail}>{formatDistanceKm(price.distanceKm)} away</Text> : null}
+        <View style={styles.fuelMetadata}>
+          {recoUpdatedLabel ? <Text style={styles.fuelDetail}>{recoUpdatedLabel}</Text> : null}
+          {recoFreshness ? <Text style={[styles.fuelFreshness, recoIsStale && styles.fuelStale]}>{recoFreshness.label}</Text> : null}
+        </View>
+        {fuelFallbackNote ? <Text style={styles.fuelFallback}>{fuelFallbackNote}</Text> : null}
+      </> : <View style={styles.fuelEmpty}>
+        <Text style={styles.fuelEmptyTitle}>Know before{ '\n' }you fill up.</Text>
+        <Text style={styles.fuelDetail}>Explore regional bulletins and verified community prices. No recommendation is available yet.</Text>
+      </View>}
+      <Pressable accessibilityRole="button" accessibilityLabel={price ? 'See all fuel prices' : 'Browse fuel prices'}
+        onPress={goToPrices} style={({ pressed }) => [styles.compareAction, pressed && styles.pressed]}>
+        <Text style={styles.compareLabel}>Compare fuel prices</Text><Ionicons name="arrow-forward" size={19} color={GasTaColors.forestDark} />
+      </Pressable>
+    </View>
+  );
+
+  const vehiclePreview = (
+    <Pressable accessibilityRole="button" accessibilityLabel={primaryVehicle ? 'View vehicles and last refill' : 'Add your first vehicle'}
+      onPress={goToVehicles} style={({ pressed }) => [styles.vehicleCard, pressed && styles.pressed]}>
+      <View style={styles.priceIcon}><Ionicons name={primaryVehicle ? 'car-outline' : 'add-outline'} size={22} color={GasTaColors.forest} /></View>
+      <View style={styles.fill}>
+        <Text style={styles.meta}>{primaryVehicle ? 'Your vehicle' : 'Your garage'}</Text>
+        <Text style={styles.vehicleName} numberOfLines={2}>{vehicleName || 'Add your first vehicle'}</Text>
+        {primaryVehicle?.fuel_efficiency_km_per_liter ? <Text style={styles.meta}>{primaryVehicle.fuel_efficiency_km_per_liter} km/L</Text> : null}
+      </View>
+      {primaryVehicle ? <View style={styles.vehicleRefill}>
+        <Text style={styles.meta}>Last refill</Text>
+        <Text style={styles.vehicleRefillValue}>{primaryVehicle.last_refill_price != null ? `${formatCurrency(primaryVehicle.last_refill_price)}/L` : 'Not logged'}</Text>
+        {primaryVehicle.last_refill_at ? <Text style={styles.meta}>{formatDate(primaryVehicle.last_refill_at)}</Text> : null}
+      </View> : <Ionicons name="chevron-forward" size={16} color={GasTaColors.textMuted} />}
+    </Pressable>
+  );
+
+  const recentActivity = (
+    <View style={styles.section}>
+      <View style={styles.sectionHead}>
+        <Text accessibilityRole="header" style={styles.sectionTitle}>Recent activity</Text>
+        {canExpand ? <Pressable accessibilityRole="button"
+          accessibilityLabel={showAllRecent ? 'Show fewer activities' : `View ${hiddenCount} more activities`}
+          onPress={() => setShowAllRecent((value) => !value)} style={styles.textAction}>
+          <Text style={styles.sectionLinkText}>{showAllRecent ? 'Show less' : 'View more'}</Text>
+        </Pressable> : null}
+      </View>
+      <View style={styles.recentList}>
+        {visibleActivities.length === 0 ? <Text style={styles.emptyLine}>Your trips and price reports will appear here.</Text> : visibleActivities.map((activity) => (
+          <View key={activity.id} style={styles.recentRow}>
+            <View style={styles.recentIcon}><Ionicons name={activity.icon} size={18} color={GasTaColors.forest} /></View>
+            <View style={styles.fill}>
+              <Text style={styles.recentTitle}>{activity.title}</Text>
+              <Text style={styles.meta}>{activity.secondary} · {activity.detail}</Text>
             </View>
-
-            {budget?.hasBudget ? (
-              budget.actualUnavailable ? (
-                // Never claim a zero we could not verify.
-                <Text style={styles.monthUnavailable}>Refill spending unavailable</Text>
-              ) : (
-                <>
-                  <Text
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.6}
-                    numberOfLines={1}
-                    style={styles.monthAmount}>
-                    {budgetSpent}
-                  </Text>
-                  <Text numberOfLines={1} style={styles.monthSub}>
-                    {[
-                      `of ${budgetLimit} budget`,
-                      budgetPercentLabel ? `${budgetPercentLabel} used` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </Text>
-                  <View style={styles.monthTrack}>
-                    <View
-                      style={[
-                        styles.monthFill,
-                        {
-                          width: budgetProgressWidth,
-                          backgroundColor: budgetIsOver ? ON_FOREST.over : ON_FOREST.fill,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <View style={styles.monthFoot}>
-                    <Text numberOfLines={1} style={styles.monthFootLeft}>
-                      {budgetHeadroom} {budgetIsOver ? 'over' : 'left'}
-                    </Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Log refill"
-                      onPress={goToVehicles}
-                      style={({ pressed }) => [styles.logRefillPill, pressed && styles.pressed]}>
-                      <Ionicons name="add" size={14} color={GasTaColors.forest} />
-                      <Text style={styles.logRefillPillText}>Log refill</Text>
-                    </Pressable>
-                  </View>
-                </>
-              )
-            ) : budget?.actualUnavailable ? (
-              <Text style={styles.monthUnavailable}>Refill spending unavailable</Text>
-            ) : (
-              <>
-                <Text style={styles.monthAmount}>
-                  {budget ? formatPeso(budget.spent) : '—'}
-                </Text>
-                <Text numberOfLines={1} style={styles.monthSub}>
-                  spent on refills this month
-                </Text>
-                <View style={styles.monthFoot}>
-                  <Text style={styles.monthFootLeft}>No monthly budget set</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Log refill"
-                    onPress={goToVehicles}
-                    style={({ pressed }) => [styles.logRefillPill, pressed && styles.pressed]}>
-                    <Ionicons name="add" size={14} color={GasTaColors.forest} />
-                    <Text style={styles.logRefillPillText}>Log refill</Text>
-                  </Pressable>
-                </View>
-              </>
-            )}
+            {activity.badge && activity.badgeTone ? <Badge label={activity.badge} tone={activity.badgeTone} /> : null}
           </View>
+        ))}
+      </View>
+    </View>
+  );
 
-          {/*
-            DOE recommendation panel (proposed layout): cheapest brand this week,
-            week-over-week delta, fill-up savings vs average, runners-up, and
-            dual CTAs. Uses forestDark + cream tokens so it sits in the GasTa
-            system next to This month — not a one-off mock palette.
-          */}
-          <View style={styles.block}>
-            {price ? (
-              <View style={styles.recoCard}>
-                <View style={styles.recoTop}>
-                  {recoEyebrow ? (
-                    <Text numberOfLines={2} style={styles.recoEyebrow}>
-                      {recoEyebrow}
-                    </Text>
-                  ) : null}
-                  {recoUpdatedLabel ? (
-                    <View style={styles.recoAgePill}>
-                      <Text style={styles.recoAgePillText}>{recoUpdatedLabel}</Text>
-                    </View>
-                  ) : null}
-                  {recoFreshnessLabel ? (
-                    <View style={styles.recoAgePill}>
-                      <Text style={styles.recoAgePillText}>{recoFreshnessLabel}</Text>
-                    </View>
-                  ) : null}
-                </View>
-
-                <View style={styles.recoPriceRow}>
-                  <Text
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.55}
-                    numberOfLines={1}
-                    style={styles.recoPrice}>
-                    {formatCurrency(price.price)}
-                    <Text style={styles.recoUnit}>/L</Text>
-                  </Text>
-                  {recoDelta != null ? (
-                    <Text
-                      numberOfLines={2}
-                      style={[
-                        styles.recoDelta,
-                        recoDelta > 0 ? styles.recoDeltaUp : null,
-                      ]}>
-                      {recoDelta === 0
-                        ? 'No change vs last bulletin'
-                        : `${recoDelta < 0 ? '↘' : '↗'} ${formatCurrency(Math.abs(recoDelta))} vs last bulletin`}
-                    </Text>
-                  ) : null}
-                </View>
-
-                <Text numberOfLines={1} style={styles.recoBrand}>
-                  {price.stationName}
-                </Text>
-                {recoSavingsLabel ? (
-                  <Text style={styles.recoSavings}>{recoSavingsLabel}</Text>
-                ) : price.isNearbyRecommended && price.distanceKm != null ? (
-                  <Text style={styles.recoSavings}>
-                    {formatDistanceKm(price.distanceKm)} away · community verified
-                  </Text>
-                ) : null}
-
-                {price.runnersUp.length > 0 ? (
-                  <View style={styles.recoList}>
-                    {price.runnersUp.map((row) => (
-                      <View key={`${row.rank}-${row.name}`} style={styles.recoListRow}>
-                        <Text numberOfLines={1} style={styles.recoListName}>
-                          {row.rank} · {row.name}
-                        </Text>
-                        <Text style={styles.recoListPrice}>{formatCurrency(row.price)}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                <View style={styles.recoActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Log refill at this price"
-                    onPress={goToVehicles}
-                    style={({ pressed }) => [styles.recoPrimaryBtn, pressed && styles.pressed]}>
-                    <Ionicons name="add" size={15} color={GasTaColors.forestDark} />
-                    <Text style={styles.recoPrimaryBtnText}>Log refill at this price</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="link"
-                    accessibilityLabel="See all fuel prices"
-                    onPress={goToPrices}
-                    style={({ pressed }) => [styles.recoSecondaryBtn, pressed && styles.pressed]}>
-                    <Text style={styles.recoSecondaryBtnText}>See all</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : (
-              <Text style={styles.emptyLine}>No price recommendation yet</Text>
-            )}
-
-            {fuelFallbackNote ? (
-              <Text style={styles.fuelNote}>{fuelFallbackNote}</Text>
-            ) : null}
-          </View>
-
-          {/*
-            AT A GLANCE. One call to fetchVehicles, no per-vehicle refill lookup.
-            The last-refill figures come from the vehicle row's own cached
-            columns, so nothing here is a second round trip. With no owned
-            vehicle this collapses to one action instead of two empty cards.
-          */}
-          <View style={styles.block}>
-            <Text style={styles.sectionLabel}>At a glance</Text>
-            {primaryVehicle ? (
-              <View style={styles.glanceRow}>
-                <Pressable
-                  accessibilityRole="link"
-                  accessibilityLabel="View vehicles"
-                  onPress={goToVehicles}
-                  style={({ pressed }) => [styles.glanceCard, pressed && styles.pressed]}>
-                  <View style={styles.glanceIcon}>
-                    <Ionicons name="car-outline" size={15} color={GasTaColors.forest} />
-                  </View>
-                  <Text style={styles.glanceLabel}>Your vehicle</Text>
-                  <Text numberOfLines={2} style={styles.glanceValue}>
-                    {vehicleName}
-                  </Text>
-                  {primaryVehicle.fuel_efficiency_km_per_liter ? (
-                    <Text numberOfLines={1} style={styles.glanceDetail}>
-                      {primaryVehicle.fuel_efficiency_km_per_liter} km/L
-                    </Text>
-                  ) : null}
-                </Pressable>
-
-                <Pressable
-                  accessibilityRole="link"
-                  accessibilityLabel="Log refill"
-                  onPress={goToVehicles}
-                  style={({ pressed }) => [styles.glanceCard, pressed && styles.pressed]}>
-                  <View style={styles.glanceIcon}>
-                    <Ionicons name="water-outline" size={15} color={GasTaColors.forest} />
-                  </View>
-                  <Text style={styles.glanceLabel}>Last refill price</Text>
-                  {primaryVehicle.last_refill_price != null ? (
-                    <>
-                      <Text numberOfLines={1} style={styles.glanceValue}>
-                        {formatCurrency(primaryVehicle.last_refill_price)}/L
-                      </Text>
-                      {primaryVehicle.last_refill_at ? (
-                        <Text numberOfLines={1} style={styles.glanceDetail}>
-                          {formatDate(primaryVehicle.last_refill_at)}
-                        </Text>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <Text style={styles.glanceValue}>No refill yet</Text>
-                      <Text numberOfLines={1} style={styles.glanceDetail}>
-                        Log your first refill
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
-              </View>
-            ) : (
-              <Pressable
-                accessibilityRole="link"
-                accessibilityLabel="Add your first vehicle"
-                onPress={goToVehicles}
-                style={({ pressed }) => [styles.addVehicleCard, pressed && styles.pressed]}>
-                <Ionicons name="add-circle-outline" size={16} color={GasTaColors.forest} />
-                <Text style={styles.addVehicleText}>Add your first vehicle</Text>
-                <Ionicons name="chevron-forward" size={14} color={GasTaColors.forest} />
-              </Pressable>
-            )}
-          </View>
-
-          {/*
-            PENDING RESPONSIBILITY.
-
-            A signal only, never an addition to the budget figures above: Home's
-            spend is accepted allocations alone, and a share still awaiting a
-            response is not yet a personal charge. Folding it in would make this
-            screen disagree with the Budget page, which keeps the same separation.
-
-            Rendered only when there is something to respond to, so the common
-            case costs no vertical space.
-          */}
-          {pending && pending.count > 0 ? (
-            <View style={styles.block}>
-              <Pressable
-                accessibilityRole="link"
-                accessibilityLabel="Review pending refill responsibility"
-                accessibilityHint="Opens your vehicles"
-                onPress={goToVehicles}
-                style={({ pressed }) => [styles.pendingCard, pressed && styles.pressed]}>
-                <View style={styles.pendingIcon}>
-                  <Ionicons name="hourglass-outline" size={15} color={palette.warning} />
-                </View>
-                <View style={styles.pendingText}>
-                  <Text style={styles.pendingTitle}>Pending responsibility</Text>
-                  <Text numberOfLines={1} style={styles.pendingHint}>
-                    {pending.count === 1
-                      ? '1 refill awaiting your response'
-                      : `${pending.count} refills awaiting your response`}
-                  </Text>
-                </View>
-                <Text style={styles.pendingValue}>{formatPeso(pending.total)}</Text>
-                <Ionicons name="chevron-forward" size={14} color={GasTaColors.forestMuted} />
-              </Pressable>
-            </View>
-          ) : null}
-
-          <View style={styles.blockLast}>
-            <View style={styles.sectionHead}>
-              <Text style={styles.sectionLabel}>Recent</Text>
-              {/*
-                "View more" lives in the section header, in normal flow. It used
-                to sit at the end of the list where it could land under the
-                floating tab bar or the dev overlay; up here it is always visible
-                and always clear of both.
-              */}
-              {canExpand ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    showAllRecent ? 'Show fewer activities' : `View ${hiddenCount} more activities`
-                  }
-                  hitSlop={8}
-                  onPress={() => setShowAllRecent((v) => !v)}
-                  style={({ pressed }) => [styles.sectionLink, pressed && styles.pressed]}>
-                  <Text style={styles.sectionLinkText}>
-                    {showAllRecent ? 'Show less' : `View ${hiddenCount} more`}
-                  </Text>
-                  <Ionicons
-                    name={showAllRecent ? 'chevron-up' : 'chevron-forward'}
-                    size={12}
-                    color={GasTaColors.forest}
-                  />
-                </Pressable>
-              ) : null}
-            </View>
-
-            {visibleActivities.length === 0 ? (
-              <Text style={styles.emptyLine}>No recent activity yet.</Text>
-            ) : (
-              <>
-                {visibleActivities.map((activity) => (
-                  <View key={activity.id} style={styles.recentCard}>
-                    <View
-                      style={[
-                        styles.recentIcon,
-                        activity.icon === 'navigate-outline'
-                          ? styles.recentIconTrip
-                          : styles.recentIconReport,
-                      ]}>
-                      <Ionicons
-                        name={activity.icon}
-                        size={14}
-                        color={
-                          activity.icon === 'navigate-outline'
-                            ? GasTaColors.forestDark
-                            : GasTaColors.forest
-                        }
-                      />
-                    </View>
-                    <View style={styles.recentInfo}>
-                      <Text numberOfLines={1} style={styles.recentTitle}>
-                        {activity.title}
-                      </Text>
-                      <Text numberOfLines={1} style={styles.recentDetail}>
-                        {activity.secondary} · {activity.detail}
-                      </Text>
-                    </View>
-                    {activity.badge && activity.badgeTone ? (
-                      <Badge label={activity.badge} tone={activity.badgeTone} />
-                    ) : null}
-                  </View>
-                ))}
-              </>
-            )}
-
-            {canExpand || visibleActivities.length === 0 ? (
-              <Pressable
-                accessibilityRole="link"
-                accessibilityLabel="Plan a trip"
-                hitSlop={8}
-                onPress={goToTrip}
-                style={({ pressed }) => [styles.planTripLink, pressed && styles.pressed]}>
-                <Ionicons name="navigate-outline" size={12} color={GasTaColors.forest} />
-                <Text style={styles.planTripText}>Plan a trip</Text>
-              </Pressable>
-            ) : null}
-          </View>
+  return (
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.shell, {
+      maxWidth: homeMaxWidth, paddingHorizontal: isDesktop ? horizontalPadding : 20,
+      paddingBottom: isDesktop ? spacing.xl : floatingNavContentInset(insets.bottom),
+    }]} onScroll={tabBarScrollHandler} scrollEventThrottle={16} showsVerticalScrollIndicator={false}>
+      <View style={styles.header}>
+        <View style={styles.headerRow}>
+          {!isDesktop ? <BrandWordmark width={brandLogoWidth} /> : <Text style={styles.dashboardLabel}>YOUR DASHBOARD</Text>}
+          <Pressable accessibilityRole="button" accessibilityLabel="Open your profile" hitSlop={4}
+            onPress={() => router.navigate('/(tabs)/profile')} style={({ pressed }) => [styles.profileAction, pressed && styles.pressed]}>
+            <Ionicons name="person-outline" size={20} color={GasTaColors.forestDark} />
+          </Pressable>
+        </View>
+        <Text style={styles.greeting} numberOfLines={2}>{getGreeting()}, {firstName}</Text>
+      </View>
+      <View style={[styles.dashboardGrid, isDesktop && styles.dashboardGridDesktop]}>
+        <View style={[styles.mainColumn, isDesktop && styles.mainColumnDesktop]}>
+          {pricePreview}
+          {quickActions}
+          {isDesktop ? recentActivity : null}
+        </View>
+        <View style={[styles.sideColumn, isDesktop && styles.sideColumnDesktop]}>
+          {budgetCard}
+          <View style={styles.insightsSection}>{insightPreview}</View>
+          {vehiclePreview}
+          {pending && pending.count > 0 ? <Pressable accessibilityRole="button"
+            accessibilityLabel="Review pending refill responsibility" onPress={goToVehicles}
+            style={({ pressed }) => [styles.pendingCard, pressed && styles.pressed]}>
+            <Ionicons name="hourglass-outline" size={20} color={palette.warning} />
+            <View style={styles.fill}><Text style={styles.pendingTitle}>{pending.count} pending refill{pending.count === 1 ? '' : 's'}</Text>
+              <Text style={styles.meta}>Review your share</Text></View>
+            <Text style={styles.pendingValue}>{formatPeso(pending.total)}</Text>
+            <Ionicons name="chevron-forward" size={14} color={GasTaColors.textMuted} />
+          </Pressable> : null}
+          {!isDesktop ? recentActivity : null}
         </View>
       </View>
     </ScrollView>
   );
 }
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  /** Same cream as the scene, so overscroll never exposes a different shade. */
-  scroll: { backgroundColor: GasTaColors.cream },
-  /**
-   * The centred dashboard shell. `maxWidth` is injected from useResponsive, so
-   * on a phone this is full-bleed (the header reaches both edges) and on a
-   * desktop it caps the whole dashboard, header included.
-   *
-   * It paints the canonical `cream` -- the same token Vehicles, Budget and
-   * Profile show. That matters for more than looks: the shell is what fills the
-   * viewport AND the reserved bottom padding, so keeping it on the canonical
-   * tone is what stops a second shade appearing at the bottom while scrolling.
-   */
-  shell: {
-    alignSelf: 'center',
-    width: '100%',
-    backgroundColor: GasTaColors.cream,
-  },
-  pressed: { opacity: 0.6 },
-
-  /* ---- header ------------------------------------------------------------ */
-  /** Transparent: the shell behind it is already the page cream. */
-  header: { paddingTop: 10, paddingBottom: spacing.md },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  /**
-   * Tagline block. The wordmark is pinned with `flexShrink: 0` on its wrapper
-   * (see BrandWordmark) so the tagline wraps instead of squeezing the logo.
-   */
-  tagline: { flexShrink: 1, alignItems: 'flex-end' },
-  taglineLine: {
-    color: GasTaColors.forestMuted,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: '600',
-    letterSpacing: 0.6,
-    textAlign: 'right',
-  },
-  /** Slightly tighter on narrow phones so both phrase-lines still fit beside the logo. */
-  taglineLineNarrow: { fontSize: 9, lineHeight: 13, letterSpacing: 0.4 },
-  /** The single emphasised run, in the theme's forest. No new hue, no navy. */
-  taglineAccent: { color: GasTaColors.forest, fontWeight: '700' },
-  greeting: {
-    color: GasTaColors.forestDark,
-    fontSize: 23,
-    lineHeight: 28,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-    marginTop: 18,
-  },
-  headerDate: { color: GasTaColors.textMuted, fontSize: 13, lineHeight: 17, marginTop: 3 },
-
-  /* ---- dashboard body ---------------------------------------------------- */
-  /**
-   * Deliberately NO backgroundColor.
-   *
-   * This block used to be `creamLight`, which painted an opaque, slightly
-   * whiter panel over the rest of the page. Two consequences: it was a different
-   * shade from the cream on Vehicles / Budget / Profile, and its top edge cut a
-   * hard horizontal line across the screen just below the header -- the seam
-   * that made the page look like two layers sliding past each other.
-   *
-   * Letting the shell's canonical cream through removes both problems, and
-   * keeps this file consistent with the other migrated tabs, which leave their
-   * root, ScrollView and content container transparent for the same reason.
-   *
-   * `flexGrow` is still required: it makes content shorter than the viewport
-   * scrollable, so the last Recent row can travel above the floating tab bar.
-   */
-  body: {
-    flexGrow: 1,
-  },
-  grid: { width: '100%' },
-
-  sectionLabel: {
-    color: GasTaColors.textMuted,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: spacing.sm,
-  },
-  sectionHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-  },
-  sectionLink: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sectionLinkText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '700' },
-  block: { marginTop: spacing.xl },
-  blockLast: { marginTop: spacing.xl, marginBottom: spacing.md },
-
-  /* ---- this month: the dark hero ----------------------------------------- */
-  monthCard: {
-    backgroundColor: GasTaColors.forestDark,
-    borderRadius: 20,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-  },
-  monthHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  monthLabel: {
-    color: ON_FOREST.label,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  monthHeadLink: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0 },
-  monthHeadLinkText: { color: ON_FOREST.body, fontSize: 12, fontWeight: '700' },
-  monthAmount: {
-    color: GasTaColors.white,
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: '800',
-    letterSpacing: -0.8,
-    marginTop: 2,
-  },
-  monthSub: { color: ON_FOREST.sub, fontSize: 12, lineHeight: 17, marginTop: 1 },
-  monthUnavailable: { color: ON_FOREST.sub, fontSize: 13, lineHeight: 19, marginTop: spacing.sm },
-  monthTrack: {
-    height: 5,
-    borderRadius: radii.pill,
-    backgroundColor: ON_FOREST.track,
-    overflow: 'hidden',
-    marginTop: spacing.sm + 2,
-  },
+  fill: { flex: 1, minWidth: 0 },
+  scroll: { flex: 1, backgroundColor: GasTaColors.cream },
+  shell: { width: '100%', alignSelf: 'center', paddingTop: 12 },
+  header: { marginBottom: 20 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16 },
+  profileAction: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, backgroundColor: GasTaColors.white },
+  dashboardLabel: { color: GasTaColors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 1.4 },
+  greeting: { color: GasTaColors.textPrimary, fontSize: 22, lineHeight: 28, fontWeight: '700', letterSpacing: -0.6, marginTop: 12 },
+  dashboardGrid: { width: '100%' },
+  dashboardGridDesktop: { flexDirection: 'row', gap: 24, alignItems: 'flex-start' },
+  mainColumn: { minWidth: 0, width: '100%' },
+  mainColumnDesktop: { flex: 1.2, width: undefined },
+  sideColumn: { minWidth: 0, marginTop: 20, width: '100%' },
+  sideColumnDesktop: { flex: 1, marginTop: 0, width: undefined },
+  monthCard: { borderRadius: 18, padding: 16, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle },
+  monthHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  monthLabel: { color: GasTaColors.textMuted, fontSize: 12, fontWeight: '600' },
+  inlineLink: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  spendingFigures: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  spendingRemaining: { flex: 1, minWidth: 0, alignItems: 'flex-end' },
+  remainingAmount: { color: GasTaColors.textPrimary, fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  monthAmount: { fontSize: 28, lineHeight: 34, color: GasTaColors.forestDark, fontWeight: '800', letterSpacing: -0.8, fontVariant: ['tabular-nums'] },
+  monthTrack: { height: 4, backgroundColor: GasTaColors.glassBorderSubtle, borderRadius: radii.pill, overflow: 'hidden', marginTop: 14 },
   monthFill: { height: '100%', borderRadius: radii.pill },
-  monthFoot: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.sm + 2,
-  },
-  monthFootLeft: { color: ON_FOREST.body, fontSize: 13, fontWeight: '700' },
-  /** The one warm pill in the hero -- the contextual primary action. */
-  logRefillPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.sm + 2,
-    borderRadius: radii.pill,
-    backgroundColor: GasTaColors.cream,
-  },
-  logRefillPillText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '800' },
-
-  /* ---- at a glance ------------------------------------------------------- */
-  glanceRow: { flexDirection: 'row', gap: spacing.sm },
-  glanceCard: {
-    flex: 1,
-    minWidth: 0,
-    backgroundColor: GasTaColors.white,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.glassBorderSubtle,
-    // Equal padding on both cards, and a capped name so a long vehicle cannot
-    // make one card visibly taller than its neighbour.
-    padding: spacing.sm + 2,
-  },
-  glanceIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: GasTaColors.forestGlow,
-    marginBottom: 6,
-  },
-  glanceLabel: {
-    color: GasTaColors.textSoft,
-    fontSize: 10,
-    lineHeight: 13,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  glanceValue: {
-    color: GasTaColors.forestDark,
-    fontSize: 15,
-    lineHeight: 19,
-    fontWeight: '700',
-    marginTop: 1,
-  },
-  glanceDetail: { color: GasTaColors.textMuted, fontSize: 12, lineHeight: 15 },
-  addVehicleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: GasTaColors.white,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.forestBorder,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-  },
-  addVehicleText: { flex: 1, color: GasTaColors.forestDark, fontSize: 14, fontWeight: '700' },
-
-  /* ---- DOE recommendation (proposed layout, GasTa forest tokens) --------- */
-  recoCard: {
-    backgroundColor: GasTaColors.forestDark,
-    borderRadius: 20,
-    paddingVertical: spacing.md + 2,
-    paddingHorizontal: spacing.lg,
-  },
-  recoTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  recoEyebrow: {
-    flex: 1,
-    minWidth: 0,
-    color: ON_FOREST.fill,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  recoAgePill: {
-    flexShrink: 0,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: radii.pill,
-    backgroundColor: 'rgba(248, 240, 229, 0.14)',
-  },
-  recoAgePillText: {
-    color: ON_FOREST.body,
-    fontSize: 10,
-    lineHeight: 13,
-    fontWeight: '700',
-  },
-  recoPriceRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.sm + 2,
-  },
-  recoPrice: {
-    color: GasTaColors.white,
-    fontSize: 34,
-    lineHeight: 40,
-    fontWeight: '800',
-    letterSpacing: -1,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  recoUnit: { fontSize: 15, fontWeight: '600', color: ON_FOREST.sub },
-  recoDelta: {
-    flexShrink: 1,
-    maxWidth: 132,
-    color: ON_FOREST.fill,
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '700',
-    textAlign: 'right',
-    paddingBottom: 4,
-  },
-  recoDeltaUp: { color: ON_FOREST.over },
-  recoBrand: {
-    color: GasTaColors.cream,
-    fontSize: 17,
-    lineHeight: 22,
-    fontWeight: '800',
-    marginTop: spacing.sm,
-  },
-  recoSavings: {
-    color: ON_FOREST.body,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  recoList: {
-    marginTop: spacing.md,
-    gap: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(248, 240, 229, 0.18)',
-    paddingTop: spacing.sm + 2,
-  },
-  recoListRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  recoListName: {
-    flex: 1,
-    minWidth: 0,
-    color: ON_FOREST.sub,
-    fontSize: 13,
-    lineHeight: 17,
-    fontWeight: '600',
-  },
-  recoListPrice: {
-    color: ON_FOREST.body,
-    fontSize: 13,
-    lineHeight: 17,
-    fontWeight: '700',
-  },
-  recoActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.md + 2,
-  },
-  recoPrimaryBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    minWidth: 0,
-    paddingVertical: 10,
-    paddingHorizontal: spacing.sm + 2,
-    borderRadius: radii.pill,
-    backgroundColor: GasTaColors.cream,
-  },
-  recoPrimaryBtnText: {
-    color: GasTaColors.forestDark,
-    fontSize: 12,
-    fontWeight: '800',
-    flexShrink: 1,
-  },
-  recoSecondaryBtn: {
-    flexShrink: 0,
-    paddingVertical: 10,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(248, 240, 229, 0.35)',
-  },
-  recoSecondaryBtnText: {
-    color: GasTaColors.cream,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  /**
-   * Qualifier under the recommendation card, shown only when the fuel is not
-   * the vehicle's own. Muted so it reads as a footnote on the figure above.
-   */
-  fuelNote: {
-    color: GasTaColors.forestMuted,
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: spacing.xs + 2,
-  },
-
-  /* ---- pending responsibility ---------------------------------------------- */
-  /*
-   * Warm-white row, matching every other Home card. The only colour cue is the
-   * amber icon and value, so it reads as "needs a response" without becoming an
-   * alarm or being mistaken for money already spent.
-   */
-  pendingCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm + 2,
-    paddingVertical: spacing.sm + 2,
-    paddingHorizontal: spacing.md,
-    backgroundColor: GasTaColors.white,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.forestBorder,
-  },
-  pendingIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(180, 83, 9, 0.10)',
-  },
-  // minWidth 0 lets the text column shrink at 320px instead of pushing the
-  // peso value and chevron off the row.
-  pendingText: { flex: 1, minWidth: 0 },
-  pendingTitle: {
-    color: GasTaColors.forestDark,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  pendingHint: {
-    color: GasTaColors.forestMuted,
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 1,
-  },
-  pendingValue: {
-    color: GasTaColors.forestDark,
-    fontSize: 15,
-    fontWeight: '800',
-  },
-
-  /* ---- recent ------------------------------------------------------------ */
-  recentCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm + 2,
-    backgroundColor: GasTaColors.white,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.glassBorderSubtle,
-    paddingVertical: spacing.sm + 2,
-    paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  recentIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  recentIconTrip: { backgroundColor: GasTaColors.forestGlow },
-  recentIconReport: { backgroundColor: GasTaColors.cream },
-  recentInfo: { flex: 1, minWidth: 0 },
-  recentTitle: { color: GasTaColors.forestDark, fontSize: 13, lineHeight: 17, fontWeight: '700' },
-  recentDetail: { color: GasTaColors.textSoft, fontSize: 11, lineHeight: 15, marginTop: 1 },
-  /** Quiet secondary action under Recent, in normal flow. */
-  planTripLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-start',
-    marginTop: spacing.xs,
-  },
-  planTripText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '700' },
-
-  badge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.sm, flexShrink: 0 },
-  badgeText: { fontSize: 10, lineHeight: 14, fontWeight: '700' },
-
-  emptyLine: { color: GasTaColors.textMuted, fontSize: 13, lineHeight: 19 },
+  monthUnavailable: { color: GasTaColors.textPrimary, fontSize: 18, fontWeight: '700', marginBottom: 4 },
+  unavailableSpend: { paddingTop: 14 },
+  quickActions: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  quickAction: { flex: 1, minWidth: 0, minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, borderRadius: 16 },
+  quickLabel: { flexShrink: 1, color: GasTaColors.textPrimary, fontSize: 13, fontWeight: '600' },
+  fuelFeature: { borderRadius: 26, padding: 20, backgroundColor: GasTaColors.forestDark },
+  fuelTop: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  fuelEyebrow: { color: ON_FOREST.label, fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
+  fuelSourceBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 5, paddingHorizontal: 8, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.08)' },
+  fuelSource: { color: ON_FOREST.body, fontSize: 10, fontWeight: '500' },
+  fuelScope: { color: ON_FOREST.body, fontSize: 13, lineHeight: 19, marginTop: 20 },
+  fuelPriceRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginTop: 4 },
+  fuelPrice: { flexShrink: 1, color: GasTaColors.white, fontSize: 52, lineHeight: 64, fontWeight: '800', letterSpacing: -2, fontVariant: ['tabular-nums'] },
+  fuelUnit: { color: ON_FOREST.label, fontSize: 18, fontWeight: '500', letterSpacing: 0 },
+  fuelDelta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 },
+  fuelDeltaValue: { fontSize: 12, fontWeight: '600' },
+  fuelDeltaCaption: { color: ON_FOREST.sub, fontSize: 10 },
+  fuelStation: { color: GasTaColors.white, fontSize: 16, fontWeight: '600', marginTop: 5 },
+  fuelDetail: { color: ON_FOREST.sub, fontSize: 11, lineHeight: 17 },
+  fuelMetadata: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, alignItems: 'center' },
+  fuelFreshness: { color: ON_FOREST.label, fontSize: 10, fontWeight: '600' },
+  fuelStale: { color: '#FFD28A' },
+  fuelFallback: { color: ON_FOREST.sub, fontSize: 11, lineHeight: 17, marginTop: 6 },
+  fuelEmpty: { paddingVertical: 20, gap: 10 },
+  fuelEmptyTitle: { color: GasTaColors.white, fontSize: 32, lineHeight: 38, fontWeight: '700', letterSpacing: -0.8 },
+  compareAction: { minHeight: 48, paddingHorizontal: 16, marginTop: 20, borderRadius: 14, backgroundColor: GasTaColors.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  compareLabel: { color: GasTaColors.forestDark, fontSize: 13, fontWeight: '700' },
+  insightsSection: { marginTop: 20 },
+  section: { marginTop: 20 },
+  sectionHead: { minHeight: 40, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 },
+  sectionTitle: { color: GasTaColors.textPrimary, fontSize: 16, lineHeight: 22, fontWeight: '700', letterSpacing: -0.2 },
+  textAction: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 40, gap: 5, paddingHorizontal: 4 },
+  sectionLinkText: { color: GasTaColors.forest, fontSize: 12, fontWeight: '600' },
+  priceIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: GasTaColors.forestGlow },
+  meta: { color: GasTaColors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 2 },
+  vehicleCard: { padding: 16, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, borderRadius: 18, marginTop: 20 },
+  vehicleName: { color: GasTaColors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 3 },
+  vehicleRefill: { alignItems: 'flex-end', maxWidth: '44%' },
+  vehicleRefillValue: { color: GasTaColors.forestDark, fontSize: 14, fontWeight: '700', marginTop: 3 },
+  pendingCard: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16, borderRadius: 16, backgroundColor: '#FFF7E9', marginTop: 16 },
+  pendingTitle: { color: GasTaColors.textPrimary, fontSize: 13, fontWeight: '600' },
+  pendingValue: { color: GasTaColors.textPrimary, fontSize: 14, fontWeight: '700' },
+  recentList: { borderRadius: 18, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, overflow: 'hidden' },
+  recentRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: GasTaColors.glassBorderSubtle },
+  recentIcon: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: GasTaColors.forestGlow },
+  recentTitle: { color: GasTaColors.textPrimary, fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, maxWidth: 88 },
+  badgeText: { fontSize: 10, lineHeight: 14, fontWeight: '600' },
+  emptyLine: { color: GasTaColors.textMuted, fontSize: 12, lineHeight: 18, padding: 16 },
+  pressed: { opacity: 0.65 },
 });

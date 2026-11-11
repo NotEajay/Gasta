@@ -22,6 +22,8 @@ export default function SegmentedToggle<T extends string>({
         return (
           <Pressable
             key={option.value}
+            accessibilityRole="tab"
+            accessibilityState={{ selected }}
             onPress={() => onChange(option.value)}
             style={[styles.item, selected && styles.itemActive]}>
             <Text style={[styles.label, selected && styles.labelActive]}>{option.label}</Text>
@@ -35,27 +37,23 @@ export default function SegmentedToggle<T extends string>({
 const styles = StyleSheet.create({
   wrap: {
     flexDirection: 'row',
-    backgroundColor: GasTaColors.forestGlow,
-    borderRadius: radii.sm,
-    padding: 5,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.creamDark,
+    borderRadius: radii.md,
+    padding: 4,
+    gap: 4,
     marginBottom: spacing.md,
   },
   item: {
     flex: 1,
+    minHeight: 44,
     paddingVertical: 12,
-    borderRadius: 10,
+    paddingHorizontal: 4,
+    borderRadius: radii.sm,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   itemActive: {
-    backgroundColor: palette.success,
-    shadowColor: palette.success,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 3,
+    backgroundColor: GasTaColors.white,
   },
   label: {
     color: GasTaColors.textSoft,
@@ -64,7 +62,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   labelActive: {
-    color: GasTaColors.textOnForest,
-    fontWeight: '800',
+    color: GasTaColors.forestDark,
+    fontWeight: '700',
   },
 });

@@ -4,28 +4,19 @@ import { useState, useEffect } from 'react';
 import { ScrollView, StyleSheet, View, Pressable } from 'react-native';
 
 import { Text } from '@/components/Themed';
+import ScreenHeader from '@/components/ui/ScreenHeader';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import AnimatedPressable from '@/components/auth/AnimatedPressable';
 import HideWhenBlurred from '@/components/navigation/HideWhenBlurred';
 import InlineNotice from '@/components/ui/InlineNotice';
 import LoadingState from '@/components/ui/LoadingState';
-// NOTE: Profile deliberately uses the AUTH palette (cream + forest) for this
-// design experiment, not the canonical navy/green `colors` object.
 import { GasTaColors, GasTaRadius, GasTaSpacing, typeScale } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
+import { useResponsive } from '@/hooks/useResponsive';
 import { formatDate } from '@/lib/format';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-
-/**
- * Profile is re-themed onto the Sign In screen's visual language (warm cream
- * canvas, one forest accent, code-built background) WITHOUT touching the global
- * canonical palette or the auth screens themselves.
- *
- * The previous `gastabg.png` photographic background was removed from this
- * screen — the asset file is left in place, unused.
- */
 
 function getDisplayName(user: NonNullable<ReturnType<typeof useAuth>['user']>): string {
   const metadataName = user.user_metadata?.full_name ?? user.user_metadata?.name;
@@ -39,6 +30,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { user, loading: authLoading, signOut } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
+  const { contentMaxWidth } = useResponsive();
   const [signingOut, setSigningOut] = useState(false);
   const [role, setRole] = useState<'user' | 'developer' | 'admin'>('user');
   const [roleLoading, setRoleLoading] = useState(true);
@@ -122,13 +114,16 @@ export default function ProfileScreen() {
     <View style={styles.flex}>
       <ScrollView
         style={styles.flex}
-        contentContainerStyle={styles.padding}
+        contentContainerStyle={[
+          styles.padding,
+          { maxWidth: Math.min(contentMaxWidth, 760), alignSelf: 'center', width: '100%' },
+        ]}
         onScroll={tabBarScrollHandler}
         scrollEventThrottle={16}>
       {/* Compact page title only. No subtitle — it restated the screen's own
           purpose, and dropping it removes a label without removing hierarchy.
           Generous spacing below so the cream canvas stays visible. */}
-      <Text style={styles.headerTitle}>Profile</Text>
+      <ScreenHeader eyebrow="Make it yours" title="Your account" subtitle="Your profile, preferences, and account settings." />
 
       {/* ---- identity surface ----
           The screen's single strong surface and its only noticeably elevated
@@ -322,13 +317,6 @@ const styles = StyleSheet.create({
   // Sign In gets its breathing room from a large logo hero; an authenticated
   // settings screen doesn't need one. Title only, and the margin below it does
   // the hierarchy work the removed subtitle used to do.
-  headerTitle: {
-    ...typeScale.pageTitle,
-    color: GasTaColors.forestDark,
-    // Centred over the identity card and the centred sign-out pill below it.
-    textAlign: 'center',
-    marginBottom: GasTaSpacing.lg,
-  },
 
   // ---- identity surface ----------------------------------------------------
   // The screen's ONLY noticeably elevated surface. Sign In works because the
@@ -341,30 +329,23 @@ const styles = StyleSheet.create({
     backgroundColor: GasTaColors.white,
     borderRadius: GasTaRadius.lg,
     alignItems: 'center',
-    paddingHorizontal: GasTaSpacing.md,
-    paddingVertical: GasTaSpacing.lg,
+    paddingHorizontal: GasTaSpacing.lg,
+    paddingVertical: GasTaSpacing.xl,
     borderWidth: 1,
     borderColor: GasTaColors.glassBorderSubtle,
-    marginBottom: GasTaSpacing.xl,
-    // Restrained forest-tinted shadow rather than the previous navy shadow.
-    shadowColor: GasTaColors.forestDark,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    elevation: 2,
+    marginBottom: GasTaSpacing.lg,
   },
 
   // ---- avatar --------------------------------------------------------------
   // Forest disc with cream initials, plus one very subtle outer ring for the
   // "sits on a surface" read. No glow, no shadow.
   avatarRing: {
-    width: 68,
-    height: 68,
+    width: 80,
+    height: 80,
     borderRadius: GasTaRadius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.accent,
     marginBottom: GasTaSpacing.md,
   },
   avatar: {
@@ -373,7 +354,7 @@ const styles = StyleSheet.create({
     borderRadius: GasTaRadius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: GasTaColors.forest,
+    backgroundColor: GasTaColors.forestDark,
   },
   avatarText: {
     fontSize: 22,
@@ -405,7 +386,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: GasTaSpacing.sm,
     paddingVertical: 3,
     borderRadius: GasTaRadius.pill,
-    backgroundColor: 'rgba(1, 68, 33, 0.06)',
+    backgroundColor: 'rgba(49, 91, 218, 0.06)',
   },
   verifiedText: {
     ...typeScale.label,
@@ -448,7 +429,7 @@ const styles = StyleSheet.create({
     borderRadius: GasTaRadius.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(1, 68, 33, 0.06)',
+    backgroundColor: 'rgba(49, 91, 218, 0.06)',
   },
   detailLabel: {
     ...typeScale.body,
