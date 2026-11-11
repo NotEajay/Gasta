@@ -4,6 +4,7 @@ import { ActivityIndicator, FlatList, Modal, Pressable, SafeAreaView, StyleSheet
 import { Text } from '@/components/Themed';
 import { GasTaColors as C, palette } from '@/constants/Theme';
 import CompanyEstimateCard from '@/components/ui/CompanyEstimateCard';
+import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import { DOE_REGIONS } from '@/constants/regions';
 import BrandMark from '@/components/ui/BrandMark';
 import { fetchSeaoilDirectory, filterStationGeography, isSupportedStationRegion, isSupportedStationArea, stationSearchText, type OfficialStation } from '@/lib/services/stationDirectory';
@@ -20,17 +21,18 @@ const StationCard = memo(function StationCard({ station }: { station: OfficialSt
       <Text style={styles.secondary}>{station.operating_hours}</Text>
     </View> : null}
     {station.fuel_types.length ? <View style={styles.chips}>
-      {station.fuel_types.map((fuel, index) => <Text key={`${fuel}-${index}`} style={styles.fuel}>{fuel}</Text>)}
+      {station.fuel_types.map((fuel, index) => <FuelTypeBadge key={`${fuel}-${index}`} fuelCode={fuel} label={fuel} />)}
     </View> : null}
     <View style={styles.chips}><Text style={styles.badge}>Official directory</Text></View>
   </View>;
 });
 
 export default function OfficialStationDirectory({
-  selectedArea = '', selectedRegion = '', doeSummary, unavailableLabel, onReport, expanded, onToggle,
+  selectedArea = '', selectedRegion = '', doeSummary, fuelCode, unavailableLabel, onReport, expanded, onToggle,
 }: {
   selectedArea?: string;
   selectedRegion?: string;
+  fuelCode?: string;
   unavailableLabel?: string;
   doeSummary?: { price: number | null; sourceLabel: string };
   onReport?: () => void;
@@ -68,6 +70,7 @@ export default function OfficialStationDirectory({
     : status === 'error' ? 'Directory unavailable · Tap View stations to retry' : 'Loading official locations…';
   return <>
     <CompanyEstimateCard company="SEAOIL" slug="seaoil"
+      fuelCode={fuelCode}
       price={doeSummary?.price} unavailableLabel={unavailableLabel} sourceLabel={doeSummary?.sourceLabel ?? 'Official station directory'}
       subtitle={countLabel} expanded={expanded} onToggle={onToggle} onReport={onReport}
       onViewStations={() => { setVisible(true); if (status === 'error') setAttempt((value) => value + 1); }}>
@@ -114,7 +117,6 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 20, paddingBottom: 24 },
   card: { backgroundColor: C.glassFillStrong, borderColor: C.glassBorderSubtle, borderWidth: 1, borderRadius: 18, padding: 14, gap: 10, marginBottom: 12, shadowColor: C.forest, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 5 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  fuel: { backgroundColor: C.cream, color: C.forest, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 4, fontSize: 11 },
   badge: { backgroundColor: palette.primarySoft, color: C.forestMuted, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4, fontSize: 10 },
   empty: { padding: 24, gap: 12, alignItems: 'center' },
   retry: { backgroundColor: C.forest, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12 },

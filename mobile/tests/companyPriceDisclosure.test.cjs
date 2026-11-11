@@ -1,7 +1,8 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const path=require('node:path');const {harness,find}=require('./componentHarness.cjs');
+const theme=require('./currentLowestHarness.cjs').theme;
 const row=(slug,price)=>({id:slug,slug,brand:slug,areaName:'NCR',price,source:'doe_area'});
 const props={rows:[],region:'NCR',selectedArea:'',fuelType:'RON_91'};
-function setup(){return harness(path.resolve(__dirname,'../components/ui/StationPriceTable.tsx'),{'@/constants/Theme':{GasTaColors:{},palette:{},radii:{},spacing:{}},'expo-router':{useRouter:()=>({push(){}})},'@/lib/format':{formatCurrency:n=>String(n)}})}
+function setup(){return harness(path.resolve(__dirname,'../components/ui/StationPriceTable.tsx'),{'@/constants/Theme':theme,'expo-router':{useRouter:()=>({push(){}})},'@/lib/format':{formatCurrency:n=>String(n)}})}
 const disclosure=h=>find(h.tree,n=>n.props?.accessibilityLabel?.includes('companies')&&n.type==='Pressable');
 function cards(n,result=[]){if(Array.isArray(n)){n.forEach(x=>cards(x,result));return result}if(!n||typeof n!=='object')return result;if(n.props?.slug&&n.props?.sourceLabel)result.push(n.props.slug);else if(n.props?.doeSummary)result.push('seaoil');cards(n.props?.children,result);return result}
 const text=n=>Array.isArray(n)?n.map(text).join(''):typeof n==='string'?n:n&&typeof n==='object'?text(n.props?.children):'';

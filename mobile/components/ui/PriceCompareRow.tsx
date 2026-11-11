@@ -2,9 +2,8 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import ProgressBar from '@/components/ui/ProgressBar';
-import { GasTaColors, palette, radii, spacing, typography } from '@/constants/Theme';
+import { designSystem as D, radii, spacing, typography } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
-import { useTheme } from '@/lib/useTheme';
 
 interface PriceCompareRowProps {
   rank: number;
@@ -25,7 +24,6 @@ export default function PriceCompareRow({
   isLowest,
   isLast,
 }: PriceCompareRowProps) {
-  const theme = useTheme();
   const span = maxPrice - minPrice || 1;
   const relative = 1 - (price - minPrice) / span;
 
@@ -33,27 +31,20 @@ export default function PriceCompareRow({
     <View
       style={[
         styles.row,
-        !isLast && { borderBottomColor: theme.borderLight, borderBottomWidth: StyleSheet.hairlineWidth },
-        isLowest && {
-          backgroundColor: theme.scheme === 'dark' ? '#4CAF5033' : palette.successSoft,
-          borderWidth: 1,
-          borderColor: 'rgba(76, 175, 80, 0.28)',
-          borderRadius: radii.md,
-          marginHorizontal: -spacing.xs,
-          paddingHorizontal: spacing.sm,
-        },
+        !isLast && { borderBottomColor: D.color.borderSubtle, borderBottomWidth: StyleSheet.hairlineWidth },
+        isLowest && { backgroundColor: D.color.actionSoft },
       ]}>
       <View
         style={[
           styles.rankBadge,
           {
-            backgroundColor: isLowest ? palette.success : theme.overlay,
+            backgroundColor: isLowest ? D.color.structure : D.color.neutralSoft,
           },
         ]}>
         <Text
           style={[
             styles.rank,
-            { color: isLowest ? GasTaColors.white : theme.textSecondary },
+            { color: isLowest ? D.color.onDark : D.color.textSecondary },
           ]}>
           {rank}
         </Text>
@@ -61,19 +52,19 @@ export default function PriceCompareRow({
       <View style={styles.body}>
         <View style={styles.top}>
           <View style={styles.companyBlock}>
-            <Text style={[styles.company, { color: theme.text }]}>{company}</Text>
+            <Text style={[styles.company, { color: D.color.textPrimary }]}>{company}</Text>
             {isLowest ? <Text style={styles.badge}>Best price</Text> : null}
           </View>
-          <Text style={[styles.price, { color: isLowest ? palette.success : theme.text }]}>
+          <Text style={[styles.price, { color: D.color.textPrimary }]}>
             {formatCurrency(price)}
             <Text style={styles.unit}>/L</Text>
           </Text>
         </View>
         <ProgressBar
           progress={relative}
-          color={isLowest ? palette.success : theme.textMuted}
+          color={D.color.textTertiary}
           height={5}
-          trackColor={theme.borderLight}
+          trackColor={D.color.borderSubtle}
         />
       </View>
     </View>
@@ -82,9 +73,10 @@ export default function PriceCompareRow({
 
 const styles = StyleSheet.create({
   row: {
+    paddingHorizontal: 12,
     flexDirection: 'row',
-    gap: spacing.md,
-    paddingVertical: spacing.md,
+    gap: 12,
+    paddingVertical: 12,
     alignItems: 'flex-start',
   },
   rankBadge: {
@@ -118,8 +110,8 @@ const styles = StyleSheet.create({
   },
   badge: {
     alignSelf: 'flex-start',
-    backgroundColor: palette.successSoft,
-    color: palette.success,
+    backgroundColor: D.color.actionSoft,
+    color: D.color.action,
     fontSize: 11,
     fontWeight: '800',
     lineHeight: 16,
