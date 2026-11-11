@@ -1,167 +1,240 @@
-import React, { useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, TouchableOpacity, Linking, ActivityIndicator } from 'react-native';
-import { Text } from '@/components/Themed';
-import { supabase } from '@/lib/supabase';
-import { GasTaColors, GasTaSpacing, radii } from '@/constants/Theme';
-import { formatDate } from '@/lib/format';
+import React, { useCallback, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import {
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Text } from '@/components/Themed';
 import LoadingState from '@/components/ui/LoadingState';
+import { GasTaColors, GasTaSpacing, radii } from '@/constants/Theme';
+import { supabase } from '@/lib/supabase';
+import { describeEtlFailure, fetchEtlWorkflowHistory, isFailedWorkflow } from '@/lib/services/etlHistory';
+import type { EtlWorkflow, EtlWorkflowRun } from '@/lib/services/etlHistory';
+import type { Database } from '@/types/database';
 
-type WorkflowRun = {
-  id: string | number;
-  run_at: string;
-  workflow: 'weekly' | 'pending-retry' | string;
-  status: 'success' | 'partial' | 'failed' | 'in_progress' | 'queued';
-  trigger_source: string;
-  github_run_id?: string;
-  html_url?: string;
-  run_number?: number;
-  duration_str?: string;
-  regions_ok?: number;
-  regions_failed?: number;
-  regions_skipped?: number;
-  error_summary?: string;
-};
+type EtlRun = EtlWorkflowRun;
+type EtlState = Database['public']['Tables']['doe_etl_state']['Row'];
+type PendingDownload = Database['public']['Tables']['doe_pending_downloads']['Row'];
+type Workflow = EtlWorkflow;
 
-const GITHUB_REPO = 'NotEajay/Gasta';
-
-function formatDuration(startStr?: string, endStr?: string): string | undefined {
-  if (!startStr || !endStr) return undefined;
-  const s = new Date(startStr).getTime();
-  const e = new Date(endStr).getTime();
-  const diffSec = Math.round((e - s) / 1000);
-  if (isNaN(diffSec) || diffSec < 0) return undefined;
-  if (diffSec < 60) return `${diffSec}s`;
-  const m = Math.floor(diffSec / 60);
-  const rem = diffSec % 60;
-  return `${m}m ${rem}s`;
+function loadErrorMessage(error: unknown, history = false): string | null {
+  if (!error) return null;
+  const message = typeof error === 'object' && 'message' in error
+    ? String(error.message)
+    : 'Please try again.';
+  if (history && /column .*does not exist|schema cache|relation .*does not exist/i.test(message)) {
+    return 'Run history is unavailable: the ETL history database migration has not been applied.';
+  }
+  return `${history ? 'Could not load run history' : 'Could not load current state'}: ${message}`;
 }
 
-function StatusBadge({ status }: { status: string }) {
+function formatTimestamp(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return 'Unknown';
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const wholeSeconds = Math.round(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  return `${minutes}m ${wholeSeconds % 60}s`;
+}
+
+function triggerLabel(trigger: string | null): string {
+  if (!trigger) return 'GitHub Actions';
+  if (trigger === 'schedule') return 'Scheduled';
+  if (trigger === 'workflow_dispatch') return 'Manual trigger';
+  if (trigger === 'github-actions' || trigger === 'pending-retry' || trigger === 'github-log-recovery') return 'GitHub Actions';
+  return trigger;
+}
+
+function StatusBadge({ status }: { status: EtlRun['status'] }) {
   const isOk = status === 'success';
-  const isWarn = status === 'partial' || status === 'in_progress';
-  const bg = isOk ? '#DCFCE7' : isWarn ? '#FEF3C7' : '#FEE2E2';
-  const color = isOk ? '#15803D' : isWarn ? '#B45309' : '#DC2626';
-  const icon = isOk ? 'checkmark-circle' : isWarn ? 'time-outline' : 'close-circle';
+  const isFailed = isFailedWorkflow(status);
+  const isRunning = ['in_progress', 'queued', 'waiting', 'requested', 'pending'].includes(status);
+  const backgroundColor = isOk ? '#DCFCE7' : isRunning ? '#FEF3C7' : isFailed ? '#FEE2E2' : '#F3F4F6';
+  const color = isOk ? '#15803D' : isRunning ? '#B45309' : isFailed ? '#DC2626' : '#4B5563';
+  const icon = isOk ? 'checkmark-circle' : isRunning ? 'time-outline' : isFailed ? 'close-circle' : 'remove-circle-outline';
+
   return (
-    <View style={[styles.badge, { backgroundColor: bg }]}>
+    <View style={[styles.badge, { backgroundColor }]}>
       <Ionicons name={icon as any} size={12} color={color} />
-      <Text style={[styles.badgeText, { color }]}>{status.toUpperCase()}</Text>
+      <Text style={[styles.badgeText, { color }]}>{status.replace(/_/g, ' ').toUpperCase()}</Text>
+    </View>
+  );
+}
+
+function runCounts(run: EtlRun, workflow: Workflow): string | null {
+  if (run.regions_ok == null || run.regions_failed == null || run.regions_skipped == null) return null;
+  if (workflow === 'pending-retry') {
+    return `${run.regions_ok} recovered · ${run.regions_failed} errors · ${run.regions_skipped} still pending`;
+  }
+  return `${run.regions_ok} ok · ${run.regions_failed} failed · ${run.regions_skipped} skipped`;
+}
+
+function RunHistory({
+  title,
+  description,
+  icon,
+  workflow,
+  runs,
+  error,
+  pending,
+}: {
+  title: string;
+  description: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  workflow: Workflow;
+  runs: EtlRun[];
+  error: string | null;
+  pending: PendingDownload[] | null;
+}) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <Ionicons name={icon} size={20} color={GasTaColors.forest} />
+        <Text style={styles.cardTitle}>{title}</Text>
+      </View>
+      <Text style={styles.cardText}>{description}</Text>
+      <Text style={styles.cardText}>Latest 10 GitHub runs · newest first · times shown in your local time</Text>
+
+      {error ? <Text style={styles.loadError}>{error}</Text> : null}
+      {runs.length === 0 ? (
+        error ? null : <Text style={styles.emptyText}>No GitHub runs found.</Text>
+      ) : (
+        runs.map((run) => {
+          const message = describeEtlFailure(run, pending);
+          const failed = isFailedWorkflow(run.status);
+          return (
+            <View key={run.id} testID={`etl-run-${run.id}`} style={styles.runRow}>
+              <View style={styles.runMain}>
+                <StatusBadge status={run.status} />
+                <View style={styles.runDetails}>
+                  {run.run_number != null ? (
+                    <Text style={styles.runDate}>
+                      {`Run #${run.run_number}${run.run_attempt > 1 ? ` · Attempt ${run.run_attempt}` : ''}`}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.runMeta}>Started {formatTimestamp(run.started_at)}</Text>
+                  <Text style={styles.runMeta}>
+                    {run.ended_at ? `Ended ${formatTimestamp(run.ended_at)}` : 'Not completed yet'}
+                  </Text>
+                  <Text style={styles.runMeta}>
+                    {triggerLabel(run.trigger_source)}{run.branch ? ` · ${run.branch}` : ''}
+                    {run.duration_s != null ? ` · ${formatDuration(run.duration_s)}` : ''}
+                  </Text>
+                  {runCounts(run, workflow) ? (
+                    <Text style={styles.runCounts}>{runCounts(run, workflow)}</Text>
+                  ) : null}
+                  {message ? (
+                    <View testID={`etl-message-${run.id}`} style={[styles.failureBlock, !failed && styles.warningBlock]}>
+                      <Text style={[styles.runError, !failed && styles.runWarning]}>{message}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            </View>
+          );
+        })
+      )}
     </View>
   );
 }
 
 export default function EtlStatusScreen() {
   const [loading, setLoading] = useState(true);
-  const [etlState, setEtlState] = useState<any>(null);
-  const [pending, setPending] = useState<any[]>([]);
-  const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [etlState, setEtlState] = useState<EtlState | null>(null);
+  const [pending, setPending] = useState<PendingDownload[]>([]);
+  const [pendingAvailable, setPendingAvailable] = useState(false);
+  const [weeklyRuns, setWeeklyRuns] = useState<EtlRun[]>([]);
+  const [retryRuns, setRetryRuns] = useState<EtlRun[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [weeklyError, setWeeklyError] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    let active = true;
+
     async function loadData() {
-      setLoading(true);
-      setErrorMsg(null);
+      const [etlResult, pendingResult, weeklyResult, retryResult] = await Promise.allSettled([
+        supabase.from('doe_etl_state').select('*').maybeSingle(),
+        supabase
+          .from('doe_pending_downloads')
+          .select('*')
+          .order('bulletin_date', { ascending: false }),
+        fetchEtlWorkflowHistory('weekly'),
+        fetchEtlWorkflowHistory('pending-retry'),
+      ]);
+      if (!active) return;
 
-      try {
-        const [etlRes, pendingRes, dbRunsRes, ghRes] = await Promise.all([
-          supabase.from('doe_etl_state').select('*').single(),
-          supabase.from('doe_pending_downloads').select('*').order('bulletin_date', { ascending: false }),
-          (supabase as any).from('doe_etl_runs').select('*').order('run_at', { ascending: false }).limit(20),
-          fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=30`).catch(() => null),
-        ]);
-
-        if (etlRes.data) setEtlState(etlRes.data);
-        if (pendingRes.data) setPending(pendingRes.data);
-
-        let combinedRuns: WorkflowRun[] = [];
-
-        // 1. Process GitHub Actions API runs (real live history)
-        if (ghRes && ghRes.ok) {
-          const ghJson = await ghRes.json();
-          if (ghJson.workflow_runs && Array.isArray(ghJson.workflow_runs)) {
-            const ghRuns: WorkflowRun[] = ghJson.workflow_runs.map((r: any) => {
-              const isWeekly = r.name?.toLowerCase().includes('weekly');
-              const isRetry = r.name?.toLowerCase().includes('pending') || r.name?.toLowerCase().includes('retry');
-              const workflow = isWeekly ? 'weekly' : isRetry ? 'pending-retry' : r.name;
-              
-              let status: WorkflowRun['status'] = 'failed';
-              if (r.conclusion === 'success') status = 'success';
-              else if (r.status === 'in_progress' || r.status === 'queued') status = 'in_progress';
-              else if (r.conclusion === 'failure') status = 'failed';
-              else if (r.conclusion) status = r.conclusion;
-
-              return {
-                id: r.id,
-                run_at: r.run_started_at || r.created_at,
-                workflow,
-                status,
-                trigger_source: r.event === 'schedule' ? 'Schedule (cron)' : r.event === 'workflow_dispatch' ? 'Manual trigger' : r.event,
-                github_run_id: String(r.id),
-                html_url: r.html_url,
-                run_number: r.run_number,
-                duration_str: formatDuration(r.run_started_at || r.created_at, r.updated_at),
-              };
-            });
-            combinedRuns = [...ghRuns];
-          }
-        }
-
-        // 2. If GitHub API is rate-limited or db has runs, merge db runs
-        if (dbRunsRes.data && (dbRunsRes.data as any[]).length > 0) {
-          const existingIds = new Set(combinedRuns.map(r => r.github_run_id));
-          for (const dbRun of (dbRunsRes.data as any[])) {
-            if (!dbRun.github_run_id || !existingIds.has(dbRun.github_run_id)) {
-              combinedRuns.push({
-                id: dbRun.id,
-                run_at: dbRun.run_at,
-                workflow: dbRun.workflow,
-                status: dbRun.status,
-                trigger_source: dbRun.trigger_source || 'cli',
-                github_run_id: dbRun.github_run_id,
-                html_url: dbRun.github_run_id ? `https://github.com/${GITHUB_REPO}/actions/runs/${dbRun.github_run_id}` : undefined,
-                duration_str: dbRun.duration_s != null ? `${dbRun.duration_s}s` : undefined,
-                regions_ok: dbRun.regions_ok,
-                regions_failed: dbRun.regions_failed,
-                regions_skipped: dbRun.regions_skipped,
-                error_summary: dbRun.error_summary,
-              });
-            }
-          }
-        }
-
-        // Sort latest first
-        combinedRuns.sort((a, b) => new Date(b.run_at).getTime() - new Date(a.run_at).getTime());
-        setRuns(combinedRuns);
-
-      } catch (err: any) {
-        setErrorMsg(err?.message || 'Failed to load ETL history');
-      } finally {
-        setLoading(false);
+      const etlError = etlResult.status === 'fulfilled' ? etlResult.value.error : etlResult.reason;
+      const pendingError = pendingResult.status === 'fulfilled' ? pendingResult.value.error : pendingResult.reason;
+      setErrorMsg([loadErrorMessage(etlError), loadErrorMessage(pendingError)].filter(Boolean).join('\n') || null);
+      if (etlResult.status === 'fulfilled' && !etlResult.value.error) {
+        setEtlState(etlResult.value.data);
       }
+      setPendingAvailable(pendingResult.status === 'fulfilled' && !pendingResult.value.error);
+      if (pendingResult.status === 'fulfilled' && !pendingResult.value.error) {
+        setPending(pendingResult.value.data ?? []);
+      }
+      if (weeklyResult.status === 'fulfilled') {
+        setWeeklyRuns(weeklyResult.value.runs);
+        setWeeklyError(weeklyResult.value.warning);
+      } else {
+        setWeeklyError(loadErrorMessage(weeklyResult.reason, true));
+      }
+      if (retryResult.status === 'fulfilled') {
+        setRetryRuns(retryResult.value.runs);
+        setRetryError(retryResult.value.warning);
+      } else {
+        setRetryError(loadErrorMessage(retryResult.reason, true));
+      }
+      setLoading(false);
+      setRefreshing(false);
     }
 
     loadData();
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [refreshKey]));
 
-  if (loading) return <LoadingState message="Loading ETL Status & History..." />;
-
-  const weeklyRuns = runs.filter(r => r.workflow === 'weekly');
-  const retryRuns  = runs.filter(r => r.workflow === 'pending-retry');
-
-  const openRun = (url?: string) => {
-    if (url) Linking.openURL(url);
+  const refresh = () => {
+    setRefreshing(true);
+    setRefreshKey((key) => key + 1);
   };
 
+  if (loading) return <LoadingState message="Loading ETL status and history..." />;
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.headerTitle}>ETL Workflows</Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+    >
+      <View style={styles.pageHeader}>
+        <Text style={styles.headerTitle}>ETL Workflows</Text>
+        <TouchableOpacity onPress={refresh} disabled={refreshing} accessibilityRole="button" accessibilityLabel="Refresh ETL history">
+          <Text style={styles.refreshText}>{refreshing ? 'Refreshing…' : 'Refresh'}</Text>
+        </TouchableOpacity>
+      </View>
 
-      {errorMsg && (
-        <Text style={{ color: GasTaColors.error, marginBottom: 16 }}>Error: {errorMsg}</Text>
-      )}
+      {errorMsg ? <Text style={styles.loadError}>Error: {errorMsg}</Text> : null}
 
-      {/* ── Current state card ─────────────────────────────── */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Ionicons name="pulse-outline" size={20} color={GasTaColors.forest} />
@@ -170,7 +243,9 @@ export default function EtlStatusScreen() {
         <View style={styles.statusRow}>
           <Text style={styles.statusLabel}>Last Successful Fetch</Text>
           <Text style={styles.statusValue}>
-            {etlState?.last_website_fetch_at ? formatDate(etlState.last_website_fetch_at) : 'Unknown'}
+            {etlState?.last_website_fetch_at
+              ? formatTimestamp(etlState.last_website_fetch_at)
+              : 'Unknown'}
           </Text>
         </View>
         <View style={styles.statusRow}>
@@ -184,107 +259,41 @@ export default function EtlStatusScreen() {
           </Text>
         </View>
 
-        {pending.length > 0 && (
+        {pending.length > 0 ? (
           <View style={styles.pendingList}>
-            {pending.map(p => (
-              <View key={p.id} style={styles.pendingItem}>
-                <Text style={styles.pendingRegion}>{p.region_code} — {p.bulletin_date}</Text>
-                {p.last_error && <Text style={styles.pendingError}>{p.last_error}</Text>}
+            {pending.map((item) => (
+              <View key={item.id} style={styles.pendingItem}>
+                <Text style={styles.pendingRegion}>
+                  {item.region_code} — {item.bulletin_date}
+                </Text>
+                {item.last_error ? (
+                  <Text style={styles.pendingError}>{item.last_error}</Text>
+                ) : null}
               </View>
             ))}
           </View>
-        )}
+        ) : null}
       </View>
 
-      {/* ── Weekly ETL history ─────────────────────────────── */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <Ionicons name="calendar-outline" size={20} color={GasTaColors.forest} />
-          <Text style={styles.cardTitle}>DOE Weekly ETL</Text>
-        </View>
-        <Text style={styles.cardText}>
-          Runs every Tuesday at 19:00 PH (11:00 UTC). Fetches price bulletins for all regions.
-        </Text>
+      <RunHistory
+        title="DOE Weekly ETL"
+        description="Runs every Tuesday at 19:00 PH (11:00 UTC). Fetches price bulletins for all regions."
+        icon="calendar-outline"
+        workflow="weekly"
+        runs={weeklyRuns}
+        error={weeklyError}
+        pending={pendingAvailable ? pending : null}
+      />
 
-        {weeklyRuns.length === 0 ? (
-          <Text style={styles.emptyText}>No run history found.</Text>
-        ) : (
-          weeklyRuns.map(r => (
-            <TouchableOpacity
-              key={r.id}
-              style={styles.runRow}
-              onPress={() => openRun(r.html_url)}
-              activeOpacity={r.html_url ? 0.6 : 1}
-            >
-              <View style={styles.runLeft}>
-                <StatusBadge status={r.status} />
-                <View style={{ flex: 1 }}>
-                  <View style={styles.runTitleRow}>
-                    <Text style={styles.runDate}>
-                      {r.run_number ? `#${r.run_number} · ` : ''}{formatDate(r.run_at)}
-                    </Text>
-                  </View>
-                  <Text style={styles.runMeta}>
-                    {r.trigger_source}
-                    {r.duration_str ? ` · ${r.duration_str}` : ''}
-                    {r.regions_ok !== undefined ? ` · ${r.regions_ok} ok` : ''}
-                    {r.regions_failed ? ` · ${r.regions_failed} failed` : ''}
-                  </Text>
-                  {r.error_summary && <Text style={styles.runError}>{r.error_summary}</Text>}
-                </View>
-              </View>
-              {r.html_url && (
-                <Ionicons name="open-outline" size={16} color={GasTaColors.forest} style={{ marginTop: 2 }} />
-              )}
-            </TouchableOpacity>
-          ))
-        )}
-      </View>
-
-      {/* ── Pending retry history ─────────────────────────── */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <Ionicons name="refresh-outline" size={20} color={GasTaColors.forest} />
-          <Text style={styles.cardTitle}>DOE Pending PDF Retry</Text>
-        </View>
-        <Text style={styles.cardText}>
-          Runs daily at 06:00 PH (22:00 UTC). Retries PDFs unavailable during the weekly run.
-        </Text>
-
-        {retryRuns.length === 0 ? (
-          <Text style={styles.emptyText}>No retry history found.</Text>
-        ) : (
-          retryRuns.map(r => (
-            <TouchableOpacity
-              key={r.id}
-              style={styles.runRow}
-              onPress={() => openRun(r.html_url)}
-              activeOpacity={r.html_url ? 0.6 : 1}
-            >
-              <View style={styles.runLeft}>
-                <StatusBadge status={r.status} />
-                <View style={{ flex: 1 }}>
-                  <View style={styles.runTitleRow}>
-                    <Text style={styles.runDate}>
-                      {r.run_number ? `#${r.run_number} · ` : ''}{formatDate(r.run_at)}
-                    </Text>
-                  </View>
-                  <Text style={styles.runMeta}>
-                    {r.trigger_source}
-                    {r.duration_str ? ` · ${r.duration_str}` : ''}
-                    {r.regions_ok !== undefined ? ` · ${r.regions_ok} recovered` : ''}
-                    {r.regions_failed ? ` · ${r.regions_failed} errors` : ''}
-                  </Text>
-                  {r.error_summary && <Text style={styles.runError}>{r.error_summary}</Text>}
-                </View>
-              </View>
-              {r.html_url && (
-                <Ionicons name="open-outline" size={16} color={GasTaColors.forest} style={{ marginTop: 2 }} />
-              )}
-            </TouchableOpacity>
-          ))
-        )}
-      </View>
+      <RunHistory
+        title="DOE Pending PDF Retry"
+        description="Runs daily at 06:00 PH (22:00 UTC). Retries PDFs unavailable during the weekly run."
+        icon="refresh-outline"
+        workflow="pending-retry"
+        runs={retryRuns}
+        error={retryError}
+        pending={pendingAvailable ? pending : null}
+      />
     </ScrollView>
   );
 }
@@ -292,8 +301,15 @@ export default function EtlStatusScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: GasTaColors.creamLight },
   content: { padding: GasTaSpacing.lg },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: GasTaColors.forestDark, marginBottom: GasTaSpacing.lg },
-
+  pageHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 },
+  refreshText: { fontSize: 14, fontWeight: '600', color: GasTaColors.forest },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+    marginBottom: GasTaSpacing.lg,
+  },
+  loadError: { color: GasTaColors.error, marginBottom: GasTaSpacing.md },
   card: {
     backgroundColor: GasTaColors.white,
     borderRadius: radii.md,
@@ -305,37 +321,62 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   cardTitle: { fontSize: 16, fontWeight: '700', color: GasTaColors.textPrimary },
   cardText: { fontSize: 13, color: GasTaColors.textSoft, marginBottom: 12 },
-
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 16,
+    marginBottom: 6,
+  },
   statusLabel: { fontSize: 14, color: GasTaColors.textPrimary },
-  statusValue: { fontSize: 14, fontWeight: '600', color: GasTaColors.forestDark },
+  statusValue: {
+    flexShrink: 1,
+    textAlign: 'right',
+    fontSize: 14,
+    fontWeight: '600',
+    color: GasTaColors.forestDark,
+  },
   warning: { color: GasTaColors.error },
   ok: { color: GasTaColors.forest },
-
-  pendingList: { marginTop: 10, borderTopWidth: 1, borderTopColor: GasTaColors.forestGlow, paddingTop: 10 },
+  pendingList: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: GasTaColors.forestGlow,
+    paddingTop: 10,
+  },
   pendingItem: { marginBottom: 6 },
   pendingRegion: { fontSize: 13, fontWeight: '700', color: GasTaColors.textPrimary },
   pendingError: { fontSize: 11, color: GasTaColors.error, marginTop: 2 },
-
   emptyText: { fontSize: 13, color: GasTaColors.textSoft, fontStyle: 'italic' },
-
-  // Run history row
   runRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: GasTaColors.forestGlow,
     gap: 8,
   },
-  runLeft: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center' },
-  runTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  runMain: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  runDetails: { flex: 1 },
   runDate: { fontSize: 13, fontWeight: '700', color: GasTaColors.textPrimary },
   runMeta: { fontSize: 12, color: GasTaColors.textSoft, marginTop: 2 },
-  runError: { fontSize: 11, color: GasTaColors.error, marginTop: 3, flexShrink: 1 },
-
-  // Status badge
-  badge: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8 },
+  runCounts: { fontSize: 12, color: GasTaColors.textPrimary, marginTop: 4 },
+  failureBlock: {
+    marginTop: 6,
+    padding: 8,
+    borderRadius: radii.sm,
+    backgroundColor: '#FEF2F2',
+  },
+  warningBlock: { backgroundColor: '#FFFBEB' },
+  runWarning: { color: '#B45309' },
+  runError: { fontSize: 11, color: GasTaColors.error, flexShrink: 1 },
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
   badgeText: { fontSize: 10, fontWeight: '800' },
 });

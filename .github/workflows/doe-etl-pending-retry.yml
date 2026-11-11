@@ -21,6 +21,8 @@ jobs:
   retry-pending:
     name: Retry pending DOE PDFs
     runs-on: ubuntu-latest
+    outputs:
+      history_payload: ${{ steps.etl.outputs.history_payload }}
     timeout-minutes: 30
     defaults:
       run:
@@ -46,9 +48,43 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Retry pending downloads only
+        id: etl
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ETL_TRIGGER: pending-retry
           GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: python run.py retry-pending
+
+  record-history:
+    name: Record DOE Pending PDF Retry history
+    needs: retry-pending
+    if: ${{ always() }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download history reconciler
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/etl/record_workflow_run.py
+        run: >-
+          curl --fail --silent --show-error --location
+          --header "Authorization: Bearer $GITHUB_TOKEN"
+          "$SOURCE_URL" --output record_workflow_run.py
+
+      - name: Reconcile workflow history
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ETL_HISTORY_PAYLOAD: ${{ needs.retry-pending.outputs.history_payload }}
+        run: >-
+          python record_workflow_run.py
+          --workflow pending-retry
+          --job-name "Retry pending DOE PDFs"
+          --job-result "${{ needs.retry-pending.result }}"

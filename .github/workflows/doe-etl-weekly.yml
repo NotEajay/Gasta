@@ -25,6 +25,8 @@ jobs:
   sync-all:
     name: Sync latest bulletins (all regions)
     runs-on: ubuntu-latest
+    outputs:
+      history_payload: ${{ steps.etl.outputs.history_payload }}
     # OCR of scanned North Luzon (and similar) PDFs can exceed a short timeout.
     timeout-minutes: 60
     defaults:
@@ -51,9 +53,43 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Sync latest DOE bulletins to Supabase
+        id: etl
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ETL_TRIGGER: github-actions
           GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: python run.py sync-all ${{ inputs.force && '--force' || '' }}
+
+  record-history:
+    name: Record DOE Weekly ETL history
+    needs: sync-all
+    if: ${{ always() }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download history reconciler
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/etl/record_workflow_run.py
+        run: >-
+          curl --fail --silent --show-error --location
+          --header "Authorization: Bearer $GITHUB_TOKEN"
+          "$SOURCE_URL" --output record_workflow_run.py
+
+      - name: Reconcile workflow history
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ETL_HISTORY_PAYLOAD: ${{ needs.sync-all.outputs.history_payload }}
+        run: >-
+          python record_workflow_run.py
+          --workflow weekly
+          --job-name "Sync latest bulletins (all regions)"
+          --job-result "${{ needs.sync-all.result }}"
