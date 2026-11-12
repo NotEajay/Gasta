@@ -280,7 +280,7 @@ test('selecting More changes exact price/history queries, stays visible, survive
   const s = pricesScreen({ vehicles: [vehicle], defaultId: 'Default' }); await s.h.flush({});
   const filter = renderFuelFilter(s); await filter.sync(); await filter.selectMore('RON_97');
   assert.equal(s.queries.at(-1)[2], 'RON_97'); assert.equal(s.trends.at(-1)[1], 'RON_97');
-  assert.equal(filter.more().props.children[0].props.children, 'RON 97');
+  assert.equal(filter.more().props.children[1].props.children, 'More · RON 97');
   assert.equal(find(filter.h.tree, n => n.type === 'Modal'), null);
   s.h.focus(); await s.h.flush(); await filter.sync();
   assert.equal(s.filter().props.value, 'RON_97'); assert.equal(vehicle.fuel_type_id, 'gas95');
@@ -293,6 +293,6 @@ test('supported More fuel with no DOE records remains selected and uses the exis
   assert.equal(s.filter().props.value, 'KEROSENE');
   assert.equal(s.queries.at(-1)[2], 'KEROSENE'); assert.equal(s.trends.at(-1)[1], 'KEROSENE');
   assert(find(s.h.tree, n => n.props?.children === 'No DOE prices for these filters. Try another area or fuel type.'));
-  assert.equal(filter.more().props.children[0].props.children, 'Kerosene');
+  assert.equal(filter.more().props.children[1].props.children, 'More · Kerosene');
   filter.h.unmount(); s.h.unmount();
 });

@@ -8,7 +8,6 @@ import { Text } from '@/components/Themed';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
 import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import { designSystem as D, radii, spacing } from '@/constants/Theme';
-import { useResponsive } from '@/hooks/useResponsive';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 // Presentation only. Keep canonical labels and the existing order for More.
@@ -25,22 +24,20 @@ type Props = {
 
 export default function FuelTypeFilter({ label, value, onChange, context }: Props) {
   const [open, setOpen] = useState(false);
-  const { width } = useResponsive();
   const reduced = useReducedMotion();
   const insets = useSafeAreaInsets();
   const selectedOther = MORE_FUELS.find((fuel) => fuel.code === value);
   const otherPresentation = getFuelTypePresentation(selectedOther?.code);
   const supported = DOE_FUEL_TYPES.some((fuel) => fuel.code === value);
-  // Give an active More label room for its accent border and dropdown arrow.
-  const twoColumns = width < 480 && Boolean(selectedOther);
 
   useFocusEffect(useCallback(() => () => setOpen(false), []));
 
   return (
     <View style={styles.container}>
       <View style={styles.labelRow}><Text style={styles.label}>{label}</Text>{context}</View>
-      <View style={styles.choices} accessibilityRole="radiogroup" accessibilityLabel={label}>
-        {COMMON_FUELS.map((fuel) => {
+      <View style={styles.controls}>
+        <View style={styles.commonChoices} accessibilityRole="radiogroup" accessibilityLabel={label}>
+          {COMMON_FUELS.map((fuel) => {
           const selected = fuel.code === value;
           const presentation = getFuelTypePresentation(fuel.code);
           return (
@@ -50,7 +47,7 @@ export default function FuelTypeFilter({ label, value, onChange, context }: Prop
               accessibilityLabel={`${label}: ${fuel.name}`}
               accessibilityState={{ selected }}
               onPress={() => onChange(fuel.code)}
-              style={({ pressed }) => [styles.choice, twoColumns && styles.twoColumns,
+              style={({ pressed }) => [styles.choice,
                 selected && { ...styles.selected, backgroundColor: presentation.softBackground, borderColor: presentation.accent },
                 pressed && styles.pressed]}>
               {selected ? <MaterialCommunityIcons name="check" size={12} color={presentation.accent} />
@@ -58,18 +55,20 @@ export default function FuelTypeFilter({ label, value, onChange, context }: Prop
               <Text style={[styles.choiceText, selected && styles.selectedText]}>{fuel.name}</Text>
             </Pressable>
           );
-        })}
+          })}
+        </View>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={selectedOther ? `${label}: ${selectedOther.name}. More fuel types` : 'More fuel types'}
+          accessibilityLabel={selectedOther ? `${label}: ${selectedOther.name}. Open more fuel types` : 'More fuel types'}
           accessibilityState={{ selected: Boolean(selectedOther), expanded: open }}
           aria-pressed={Boolean(selectedOther)}
           onPress={() => setOpen(true)}
-          style={({ pressed }) => [styles.choice, twoColumns && styles.twoColumns,
+          style={({ pressed }) => [styles.moreChoice,
             selectedOther && { ...styles.selected, backgroundColor: otherPresentation.softBackground, borderColor: otherPresentation.accent },
             pressed && styles.pressed]}>
+          <View style={[styles.fuelDot, { backgroundColor: otherPresentation.accent }]} />
           <Text style={[styles.choiceText, selectedOther && styles.selectedText]}>
-            {selectedOther?.name ?? 'More'}
+            {selectedOther ? `More · ${selectedOther.name}` : 'More fuels'}
           </Text>
           {selectedOther ? <MaterialCommunityIcons name="check" size={12} color={otherPresentation.accent} accessible={false} /> : null}
           <MaterialCommunityIcons name="chevron-down" size={16}
@@ -90,8 +89,9 @@ export default function FuelTypeFilter({ label, value, onChange, context }: Prop
                   <MaterialCommunityIcons name="close" size={20} color={D.color.textPrimary} />
                 </Pressable>
               </View>
-              <FlatList
-                data={MORE_FUELS}
+              <View accessibilityRole="radiogroup" accessibilityLabel="More fuel types">
+                <FlatList
+                  data={MORE_FUELS}
                 keyExtractor={(fuel) => fuel.code}
                 style={styles.list}
                 renderItem={({ item }) => {
@@ -109,8 +109,9 @@ export default function FuelTypeFilter({ label, value, onChange, context }: Prop
                       {selected ? <MaterialCommunityIcons name="check" size={20} color={presentation.accent} /> : null}
                     </Pressable>
                   );
-                }}
-              />
+                  }}
+                />
+              </View>
             </Pressable>
           </Pressable>
         </Modal>
@@ -126,16 +127,23 @@ const styles = StyleSheet.create({
     color: D.color.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '500',
     letterSpacing: 0.6, textTransform: 'uppercase',
   },
-  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  controls: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  commonChoices: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   choice: {
-    flexBasis: '22%', flexGrow: 1, flexShrink: 0, minWidth: 44, minHeight: 44,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3,
-    paddingHorizontal: 3, paddingVertical: 4,
-    borderWidth: 1, borderRadius: 10,
+    minWidth: 88, minHeight: 44,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderWidth: 1, borderRadius: 999,
     borderColor: D.color.borderSubtle, backgroundColor: D.color.surface,
   },
-  twoColumns: { flexBasis: '46%' },
-  choiceText: { flexShrink: 1, fontSize: 13, fontWeight: '600', textAlign: 'center', color: D.color.textPrimary },
+  moreChoice: {
+    minWidth: 108, minHeight: 44,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderWidth: 1, borderRadius: 999,
+    borderColor: D.color.borderSubtle, backgroundColor: D.color.surface,
+  },
+  choiceText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: D.color.textPrimary },
   selected: { borderWidth: 2 },
   selectedText: { color: D.color.textPrimary, fontWeight: '600' },
   fuelDot: { width: 6, height: 6, borderRadius: 3 },

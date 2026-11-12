@@ -68,6 +68,21 @@ test('reloads once when a hashed Expo web module is missing', () => {
   assert(url.searchParams.has('__bundle_retry'));
 });
 
+test('reloads when a failed script event contains only the Expo bundle URL', () => {
+  const result = execute({
+    message: '',
+    sourceUrl: 'https://gasta.test/_expo/static/js/web/community-oldhash.js',
+  });
+  assert.equal(result.replacements.length, 1);
+});
+
+test('matches the exact production module failure text', () => {
+  const result = execute({
+    message: 'Error: Loading module https://gasta.test/_expo/static/js/web/community-caa9185a62f8a51993cc8f6fe173f92c.js failed.',
+  });
+  assert.equal(result.replacements.length, 1);
+});
+
 test('does not reload for application errors or non-Expo scripts', () => {
   assert.equal(execute({ message: 'SHELL_MAX_WIDTH is not defined' }).replacements.length, 0);
   assert.equal(execute({ message: 'Loading module failed', sourceUrl: 'https://cdn.test/app.js' }).replacements.length, 0);

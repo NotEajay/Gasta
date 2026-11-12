@@ -38,9 +38,9 @@ function selector(initial = 'RON_91', width = 390, platform = 'android') {
 const flatten = style => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style : {};
 test('common fuels appear directly in deliberate canonical order and More starts closed', async () => {
   const s = selector(); await s.flush();
-  const row = find(s.h.tree, n => n.props?.accessibilityRole === 'radiogroup');
-  assert.deepEqual(Array.from(row.props.children[0], n => n.props.accessibilityLabel), ['Fuel: RON 91', 'Fuel: RON 95', 'Fuel: Diesel']);
-  assert.equal(s.more().props.children[0].props.children, 'More');
+      const row = find(s.h.tree, n => n.props?.accessibilityRole === 'radiogroup' && n.props?.accessibilityLabel === 'Fuel');
+      assert.deepEqual(Array.from(row.props.children, n => n.props.accessibilityLabel), ['Fuel: RON 91', 'Fuel: RON 95', 'Fuel: Diesel']);
+  assert.equal(s.more().props.children[1].props.children, 'More fuels');
   assert.equal(find(s.h.tree, n => n.type === 'Modal'), null);
   assert.equal(find(s.h.tree, n => n.props?.accessibilityLabel === 'Fuel: RON 97'), null); s.h.unmount();
 });
@@ -54,11 +54,12 @@ test('More exposes every remaining supported fuel in canonical order', async () 
 for (const code of ['RON_97', 'RON_100', 'DIESEL_PLUS', 'KEROSENE']) test(`selecting ${code} closes More and surfaces its exact selected label`, async () => {
   const s = selector(); await s.flush(); s.more().props.onPress(); await s.flush();
   s.option(code).props.onPress(); await s.flush();
-  const name = fuels.DOE_FUEL_TYPES.find(f => f.code === code).name;
-  assert.deepEqual(s.changes, [code]); assert.equal(find(s.h.tree, n => n.type === 'Modal'), null);
-  assert.equal(s.more().props.children[0].props.children, name);
-  assert.equal(s.more().props.accessibilityState.selected, true);
-  assert.equal(s.more().props.accessibilityLabel, `Fuel: ${name}. More fuel types`);
+      const name = fuels.DOE_FUEL_TYPES.find(f => f.code === code).name;
+      assert.deepEqual(s.changes, [code]); assert.equal(find(s.h.tree, n => n.type === 'Modal'), null);
+      assert.equal(s.more().props.children[1].props.children, `More · ${name}`);
+      assert.equal(s.more().props.accessibilityState.selected, true);
+      assert.equal(s.more().props.accessibilityLabel, `Fuel: ${name}. Open more fuel types`);
+
   s.more().props.onPress(); await s.flush(); assert.equal(s.option(code).props.accessibilityState.selected, true); s.h.unmount();
 });
 for (const code of ['RON_91', 'RON_95', 'DIESEL']) test(`${code} can be selected directly after an uncommon fuel`, async () => {
@@ -67,7 +68,7 @@ for (const code of ['RON_91', 'RON_95', 'DIESEL']) test(`${code} can be selected
   find(s.h.tree, n => n.props?.accessibilityLabel === `Fuel: ${name}`).props.onPress(); await s.flush();
   assert.deepEqual(s.changes, [code]);
   assert.equal(find(s.h.tree, n => n.props?.accessibilityLabel === `Fuel: ${name}`).props.accessibilityState.selected, true);
-  assert.equal(s.more().props.children[0].props.children, 'More'); s.h.unmount();
+  assert.equal(s.more().props.children[1].props.children, 'More fuels'); s.h.unmount();
 });
 test('More can close through dismiss, backdrop, close button and screen blur without changing fuel', async () => {
   const s = selector('DIESEL'); await s.flush();
@@ -90,23 +91,41 @@ test('legacy unknown value never triggers a silent fuel substitution', async () 
 });
 for (const width of [320, 360, 390, 412, 1280]) {
   for (const code of ['RON_91', 'RON_97', 'DIESEL_PLUS', 'KEROSENE']) {
-    test(`${width}px ${code} uses readable wrapping, 44px targets and untruncated labels`, async () => {
+    test(`${width}px ${code} keeps compact wrapping chips, stable sizing and 44px targets`, async () => {
       const s = selector(code, width, width === 1280 ? 'web' : 'android'); await s.flush();
-      const row = find(s.h.tree, n => n.props?.accessibilityRole === 'radiogroup');
-      assert.equal(row.props.style.flexWrap, 'wrap');
-      const buttons = [...row.props.children[0], s.more()];
-      const twoColumns = width < 480 && ['RON_97', 'RON_100', 'DIESEL_PLUS', 'KEROSENE'].includes(code);
-      for (const button of buttons) {
+      const group = find(s.h.tree, n => n.props?.accessibilityRole === 'radiogroup' && n.props?.accessibilityLabel === 'Fuel');
+      assert.equal(group.props.style.flexWrap, 'wrap');
+      const common = Array.from(group.props.children);
+      for (const button of common) {
         const style = flatten(button.props.style({ pressed: false }));
         assert(style.minHeight >= 44); assert(style.minWidth >= 44);
-        assert.equal(style.flexBasis, twoColumns ? '46%' : '22%');
-        const text = find(button, n => n.type === 'Text');
-        assert.equal(text.props.numberOfLines, undefined);
+        assert.equal(style.flexBasis, undefined);
+        assert.equal(style.borderRadius, 999);
+        assert.equal(find(button, n => n.type === 'Text').props.numberOfLines, undefined);
       }
+      const moreStyle = flatten(s.more().props.style({ pressed: false }));
+      assert(moreStyle.minHeight >= 44); assert(moreStyle.minWidth >= 44);
+      assert.equal(moreStyle.flexBasis, undefined); assert.equal(moreStyle.borderRadius, 999);
+      assert.equal(s.more().props.accessibilityRole, 'button');
       assert.equal(find(s.h.tree, n => n.type === 'ScrollView'), null); s.h.unmount();
     });
   }
 }
+
+test('More is outside the common-fuel radiogroup and sheet options have their own group', async () => {
+  const s = selector('KEROSENE'); await s.flush();
+  const common = find(s.h.tree, n => n.props?.accessibilityRole === 'radiogroup' && n.props?.accessibilityLabel === 'Fuel');
+  assert.equal(Array.from(common.props.children).length, 3);
+  assert(!Array.from(common.props.children).includes(s.more()));
+  assert.equal(s.more().props.accessibilityRole, 'button');
+  s.more().props.onPress(); await s.flush();
+  const moreGroup = find(s.h.tree, n => n.props?.accessibilityRole === 'radiogroup' && n.props?.accessibilityLabel === 'More fuel types');
+  assert(moreGroup);
+  const list = find(moreGroup, n => n.type === 'FlatList');
+  assert(list);
+  for (const fuel of list.props.data) assert.equal(s.option(fuel.code).props.accessibilityRole, 'radio');
+  s.h.unmount();
+});
 
 for (const code of ['RON_91', 'RON_95', 'DIESEL']) test(`${code} primary chip uses shared accent/tint, readable text and a non-color selected indicator`, async () => {
   const s = selector(code); await s.flush(); const fuel = presentation.getFuelTypePresentation(code);
@@ -123,7 +142,7 @@ for (const code of ['RON_97', 'RON_100', 'DIESEL_PLUS', 'KEROSENE']) test(`${cod
   const s = selector(code); await s.flush(); const fuel = presentation.getFuelTypePresentation(code);
   let style = flatten(s.more().props.style({ pressed: false }));
   assert.equal(style.backgroundColor, fuel.softBackground); assert.equal(style.borderColor, fuel.accent);
-  assert.equal(flatten(s.more().props.children[0].props.style).fontWeight, '600');
+  assert.equal(flatten(s.more().props.children[1].props.style).fontWeight, '600');
   s.more().props.onPress(); await s.flush(); const option = s.option(code);
   style = flatten(option.props.style({ pressed: false }));
   assert.equal(style.backgroundColor, fuel.softBackground); assert.equal(style.borderColor, fuel.accent);
