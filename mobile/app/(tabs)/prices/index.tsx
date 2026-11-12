@@ -1115,7 +1115,7 @@ export default function FuelPricesScreen() {
         // Centred responsive shell. On phones this is transparent and the
         // column simply fills the width; on tablet/web it stops the content
         // from stretching edge to edge.
-        { maxWidth: SHELL_MAX_WIDTH, alignSelf: 'center', width: '100%', paddingHorizontal: isCompact ? 16 : 20 },
+        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%', paddingHorizontal: isCompact ? 16 : 20 },
       ]}
       refreshControl={
         <RefreshControl
