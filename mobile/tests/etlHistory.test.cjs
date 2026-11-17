@@ -86,9 +86,10 @@ function queuedPdf(overrides = {}) {
 }
 
 function setup({
-  weekly = [], retry = [], saved = [], savedError = null, rejectDatabase = false,
-  githubStatus = 200, failWeekly = false, failDetails = false, jobs = [], annotations = [],
-  pending = [], pendingError = null,
+  weekly = [], retry = [], fuelNews = [], saved = [], savedError = null, rejectDatabase = false,
+  githubStatus = 200, failWeekly = false, failRetry = false, failFuelNews = false,
+  failDetails = false, jobs = [], annotations = [],
+  pending = [], pendingError = null, autoExpand = true,
 } = {}) {
   const queries = [], requests = [], opened = [];
   const supabase = {
@@ -127,10 +128,16 @@ function setup({
     requests.push(url);
     const isWeekly = url.includes('/actions/workflows/doe-etl-weekly.yml/');
     const isRetry = url.includes('/actions/workflows/doe-etl-pending-retry.yml/');
-    if (failWeekly && isWeekly) throw new Error('Network offline');
-    if (failDetails && !isWeekly && !isRetry) throw new Error('Details unavailable');
-    const status = isWeekly || isRetry ? githubStatus : 200;
-    const data = isWeekly ? { workflow_runs: weekly } : isRetry ? { workflow_runs: retry }
+    const isFuelNews = url.includes('/actions/workflows/fuel-news-hourly.yml/');
+    if ((failWeekly && isWeekly) || (failRetry && isRetry) || (failFuelNews && isFuelNews)) {
+      throw new Error('Network offline');
+    }
+    const isWorkflowRequest = isWeekly || isRetry || isFuelNews;
+    if (failDetails && !isWorkflowRequest) throw new Error('Details unavailable');
+    const status = isWorkflowRequest ? githubStatus : 200;
+    const data = isWeekly ? { workflow_runs: weekly }
+      : isRetry ? { workflow_runs: retry }
+      : isFuelNews ? { workflow_runs: fuelNews }
       : url.includes('/annotations?') ? annotations : { jobs };
     return { ok: status === 200, status, json: async () => data };
   };
@@ -159,13 +166,30 @@ function setup({
     '@/lib/services/etlHistory': exports,
     'react-native': { Linking: { openURL: async url => opened.push(url) } },
   });
+  async function expandWorkflow(workflow) {
+    const toggle = find(expand(h.tree), node => node.props?.testID === `workflow-toggle-${workflow}`);
+    assert(toggle, `Missing workflow toggle for ${workflow}`);
+    if (toggle.props?.accessibilityState?.expanded !== true) {
+      toggle.props.onPress();
+      await h.flush();
+    }
+    return collectText(h.tree).replace(/\s+/g, ' ');
+  }
   async function render() {
     await h.flush({});
     await h.flush();
     await h.flush();
+    if (autoExpand) {
+      const workflow = fuelNews.length > 0 && weekly.length === 0 && retry.length === 0
+        ? 'fuel-news'
+        : retry.length > 0 && weekly.length === 0
+          ? 'pending-retry'
+          : 'weekly';
+      await expandWorkflow(workflow);
+    }
     return collectText(h.tree).replace(/\s+/g, ' ');
   }
-  return { h, service: exports, queries, requests, opened, render };
+  return { h, service: exports, queries, requests, opened, render, expandWorkflow };
 }
 
 test('GitHub determines runs and status; saved details enrich the exact run without showing CLI records', async () => {
@@ -255,15 +279,19 @@ test('fetches each GitHub workflow separately and displays at most ten newest ru
   assert.equal(result.runs[0].run_number, 12);
   assert.equal(result.runs[9].run_number, 3);
   await env.service.fetchEtlWorkflowHistory('pending-retry');
+  await env.service.fetchEtlWorkflowHistory('fuel-news');
   assert(env.requests.some(url => url.endsWith('/actions/workflows/doe-etl-weekly.yml/runs?per_page=10')));
   assert(env.requests.some(url => url.endsWith('/actions/workflows/doe-etl-pending-retry.yml/runs?per_page=10')));
+  assert(env.requests.some(url => url.endsWith('/actions/workflows/fuel-news-hourly.yml/runs?per_page=10')));
 });
 
 test('database schema errors cannot hide GitHub runs or current state', async () => {
   const env = setup({ weekly: [githubRun()], savedError: { message: 'column doe_etl_runs.workflow does not exist' } });
   const text = await env.render();
   assert(text.includes('Run #54'));
-  assert(text.includes('github-actions'));
+  assert(text.includes('Scheduled · master'));
+  assert(!text.includes('Triggered By'));
+  assert(!text.includes('github-actions'));
   assert(!text.includes('database migration'));
   assert(!text.includes('Unknown'));
 });
@@ -276,12 +304,127 @@ test('GitHub outage falls back only to saved GitHub records with an explicit war
   assert(result.warning.includes('Showing previously saved GitHub runs'));
 });
 
-test('one GitHub request failure does not hide the other workflow or claim an empty history', async () => {
-  const env = setup({ failWeekly: true, retry: [githubRun({ id: 456, run_number: 38 })] });
-  const text = await env.render();
-  assert(text.includes('Run #38'));
+test('one GitHub request failure stays inside its collapsed workflow card', async () => {
+  const env = setup({ failWeekly: true, retry: [githubRun({ id: 456, run_number: 38 })], autoExpand: false });
+  let text = await env.render();
+  assert(!text.includes('Run #38'));
+  assert(!text.includes('Could not load GitHub workflow history'));
+
+  text = await env.expandWorkflow('weekly');
   assert(text.includes('Could not load GitHub workflow history'));
-  assert(!text.includes('No GitHub runs found.'));
+  assert(!text.includes('Run #38'));
+
+  text = await env.expandWorkflow('pending-retry');
+  assert(text.includes('Run #38'));
+  assert(!text.includes('Could not load GitHub workflow history'));
+});
+
+test('Fuel News Import is GitHub-only and never displays DOE counts or PDF messaging', async () => {
+  const env = setup({
+    fuelNews: [githubRun({ id: 789, run_number: 21, conclusion: 'success' })],
+    saved: [savedRun({ workflow: 'weekly', regions_ok: 5, regions_failed: 0, regions_skipped: 0 })],
+    pending: [queuedPdf()],
+  });
+  const text = await env.render();
+  assert(text.includes('Fuel News Import'));
+  assert(text.includes('Run #21'));
+  const row = find(expand(env.h.tree), node => node.props?.testID === 'etl-run-789:1');
+  assert(row);
+  const rowText = collectText(row);
+  assert(rowText.includes('SUCCESS'));
+  assert(!/regions?|PDF|recovered|errors|skipped|pending/i.test(rowText));
+  const historyQueries = env.queries.filter(query => query.table === 'doe_etl_runs');
+  assert.equal(historyQueries.length, 2);
+  assert(!historyQueries.some(query => query.filters.some(([, value]) => value === 'fuel-news')));
+});
+
+test('Fuel News failures use workflow wording and remain independent from DOE requests', async () => {
+  const failed = setup({
+    fuelNews: [githubRun({ id: 790, run_number: 22, conclusion: 'failure' })],
+    failDetails: true,
+  });
+  const failedText = await failed.render();
+  const row = find(expand(failed.h.tree), node => node.props?.testID === 'etl-run-790:1');
+  assert(row);
+  assert(collectText(row).includes('The workflow failed. The cause was not recorded.'));
+  assert(!collectText(row).includes('The update failed'));
+
+  const partial = setup({
+    weekly: [githubRun({ id: 123, run_number: 54 })],
+    retry: [githubRun({ id: 456, run_number: 38 })],
+    failFuelNews: true,
+    autoExpand: false,
+  });
+  await partial.render();
+  let partialText = await partial.expandWorkflow('weekly');
+  assert(partialText.includes('Run #54'));
+  assert(!partialText.includes('Run #38'));
+  partialText = await partial.expandWorkflow('pending-retry');
+  assert(partialText.includes('Run #38'));
+  assert(!partialText.includes('Run #54'));
+  partialText = await partial.expandWorkflow('fuel-news');
+  assert(partialText.includes('Could not load GitHub workflow history'));
+  assert(!failedText.includes('0 ok'));
+});
+
+test('workflow screen copy is neutral and labels the DOE-specific state explicitly', async () => {
+  const env = setup();
+  const text = await env.render();
+  assert(text.includes('Workflows'));
+  assert(text.includes('DOE Current State'));
+  assert(text.includes('DOE Weekly ETL'));
+  assert(text.includes('Runs every Tuesday at 07:00 PH (23:00 UTC Monday).'));
+  assert(text.includes('DOE Pending PDF Retry'));
+  assert(text.includes('Fuel News Import'));
+  assert(!text.includes('ETL Status & Workflows'));
+  assert(find(env.h.tree, node => node.props?.accessibilityLabel === 'Refresh workflows'));
+});
+
+test('workflow page omits the duplicate in-page Back control and Triggered By row', async () => {
+  const env = setup({ autoExpand: false });
+  const text = await env.render();
+  assert(!text.includes('Triggered By'));
+  assert(!text.includes('github-actions'));
+  assert.equal(find(env.h.tree, node => node.props?.accessibilityLabel === 'Back to profile'), null);
+  assert.equal(find(env.h.tree, node => node.props?.name === 'arrow-back'), null);
+});
+
+test('workflow cards start collapsed and opening one closes the previous card', async () => {
+  const env = setup({
+    weekly: [githubRun({ id: 123, run_number: 54 })],
+    retry: [githubRun({ id: 456, run_number: 38 })],
+    fuelNews: [githubRun({ id: 789, run_number: 21 })],
+    autoExpand: false,
+  });
+  let text = await env.render();
+  assert(!text.includes('Run #54'));
+  assert(!text.includes('Run #38'));
+  assert(!text.includes('Run #21'));
+  assert.equal(find(expand(env.h.tree), node => node.props?.testID === 'workflow-runs-weekly'), null);
+
+  const weeklyToggle = find(expand(env.h.tree), node => node.props?.testID === 'workflow-toggle-weekly');
+  assert.equal(weeklyToggle.props.accessibilityLabel, 'Show DOE Weekly ETL runs');
+  assert.equal(weeklyToggle.props.accessibilityState.expanded, false);
+  weeklyToggle.props.onPress();
+  await env.h.flush();
+  text = collectText(env.h.tree);
+  assert(text.includes('Run #54'));
+  assert(!text.includes('Run #38'));
+  assert.equal(find(expand(env.h.tree), node => node.props?.testID === 'workflow-toggle-weekly').props.accessibilityLabel,
+    'Hide DOE Weekly ETL runs');
+  assert(find(expand(env.h.tree), node => node.props?.name === 'chevron-up'));
+
+  find(expand(env.h.tree), node => node.props?.testID === 'workflow-toggle-fuel-news').props.onPress();
+  await env.h.flush();
+  text = collectText(env.h.tree);
+  assert(!text.includes('Run #54'));
+  assert(text.includes('Run #21'));
+  assert.equal(find(expand(env.h.tree), node => node.props?.testID === 'workflow-runs-weekly'), null);
+  assert(find(expand(env.h.tree), node => node.props?.testID === 'workflow-runs-fuel-news'));
+
+  find(expand(env.h.tree), node => node.props?.testID === 'workflow-toggle-fuel-news').props.onPress();
+  await env.h.flush();
+  assert.equal(find(expand(env.h.tree), node => node.props?.testID === 'workflow-runs-fuel-news'), null);
 });
 
 test('matching region and PDF identify the failed download as already queued for retry', async () => {
@@ -434,11 +577,16 @@ test('recovered GitHub error shows the actual problem without invented processin
   assert.equal(row.props.onPress, undefined);
 });
 
-test('empty states mean GitHub has no runs, not that only local tests exist', async () => {
-  const env = setup({ saved: [savedRun({ github_run_id: null })] });
-  const text = await env.render();
-  assert.equal((text.match(/No GitHub runs found\./g) ?? []).length, 2);
+test('empty states appear only after their workflow is expanded', async () => {
+  const env = setup({ saved: [savedRun({ github_run_id: null })], autoExpand: false });
+  let text = await env.render();
+  assert(!text.includes('No GitHub runs found.'));
   assert(!text.includes('SOUTH_LUZON'));
+
+  for (const workflow of ['weekly', 'pending-retry', 'fuel-news']) {
+    text = await env.expandWorkflow(workflow);
+    assert.equal((text.match(/No GitHub runs found\./g) ?? []).length, 1);
+  }
 });
 
 for (const [code, name] of regions) {
@@ -583,7 +731,7 @@ test('confirmed retry snapshot survives later removal and failed lookup of the c
   let row = find(expand(env.h.tree), node => node.props?.testID === 'etl-run-123:1');
   assert(collectText(row).includes('Mindanao: not fetched. Queued for PDF retry.'));
   pending.splice(0);
-  const refresh = find(env.h.tree, node => node.props?.accessibilityLabel === 'Refresh ETL history');
+  const refresh = find(env.h.tree, node => node.props?.accessibilityLabel === 'Refresh workflows');
   refresh.props.onPress();
   await env.render();
   row = find(expand(env.h.tree), node => node.props?.testID === 'etl-run-123:1');

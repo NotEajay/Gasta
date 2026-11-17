@@ -77,7 +77,8 @@ function StatusBadge({ status }: { status: EtlRun['status'] }) {
 }
 
 function runCounts(run: EtlRun, workflow: Workflow): string | null {
-  if (run.regions_ok == null || run.regions_failed == null || run.regions_skipped == null) return null;
+  if (workflow === 'fuel-news'
+    || run.regions_ok == null || run.regions_failed == null || run.regions_skipped == null) return null;
   if (workflow === 'pending-retry') {
     return `${run.regions_ok} recovered · ${run.regions_failed} errors · ${run.regions_skipped} still pending`;
   }
@@ -92,6 +93,8 @@ function RunHistory({
   runs,
   error,
   pending,
+  expanded,
+  onToggle,
 }: {
   title: string;
   description: string;
@@ -100,55 +103,75 @@ function RunHistory({
   runs: EtlRun[];
   error: string | null;
   pending: PendingDownload[] | null;
+  expanded: boolean;
+  onToggle: () => void;
 }) {
   return (
     <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <Ionicons name={icon} size={20} color={GasTaColors.forest} />
-        <Text style={styles.cardTitle}>{title}</Text>
-      </View>
-      <Text style={styles.cardText}>{description}</Text>
-      <Text style={styles.cardText}>Latest 10 GitHub runs · newest first · times shown in your local time</Text>
+      <TouchableOpacity
+        testID={`workflow-toggle-${workflow}`}
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityLabel={`${expanded ? 'Hide' : 'Show'} ${title} runs`}
+        accessibilityState={{ expanded }}
+        style={styles.workflowToggle}>
+        <View style={styles.cardHeader}>
+          <Ionicons name={icon} size={20} color={GasTaColors.forest} />
+          <Text style={styles.cardTitle}>{title}</Text>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={18}
+            color={GasTaColors.textMuted}
+          />
+        </View>
+        <Text style={styles.cardText}>{description}</Text>
+      </TouchableOpacity>
 
-      {error ? <Text style={styles.loadError}>{error}</Text> : null}
-      {runs.length === 0 ? (
-        error ? null : <Text style={styles.emptyText}>No GitHub runs found.</Text>
-      ) : (
-        runs.map((run) => {
-          const message = describeEtlFailure(run, pending);
-          const failed = isFailedWorkflow(run.status);
-          return (
-            <View key={run.id} testID={`etl-run-${run.id}`} style={styles.runRow}>
-              <View style={styles.runMain}>
-                <StatusBadge status={run.status} />
-                <View style={styles.runDetails}>
-                  {run.run_number != null ? (
-                    <Text style={styles.runDate}>
-                      {`Run #${run.run_number}${run.run_attempt > 1 ? ` · Attempt ${run.run_attempt}` : ''}`}
-                    </Text>
-                  ) : null}
-                  <Text style={styles.runMeta}>Started {formatTimestamp(run.started_at)}</Text>
-                  <Text style={styles.runMeta}>
-                    {run.ended_at ? `Ended ${formatTimestamp(run.ended_at)}` : 'Not completed yet'}
-                  </Text>
-                  <Text style={styles.runMeta}>
-                    {triggerLabel(run.trigger_source)}{run.branch ? ` · ${run.branch}` : ''}
-                    {run.duration_s != null ? ` · ${formatDuration(run.duration_s)}` : ''}
-                  </Text>
-                  {runCounts(run, workflow) ? (
-                    <Text style={styles.runCounts}>{runCounts(run, workflow)}</Text>
-                  ) : null}
-                  {message ? (
-                    <View testID={`etl-message-${run.id}`} style={[styles.failureBlock, !failed && styles.warningBlock]}>
-                      <Text style={[styles.runError, !failed && styles.runWarning]}>{message}</Text>
+      {expanded ? (
+        <View testID={`workflow-runs-${workflow}`}>
+          <Text style={styles.cardText}>Latest 10 GitHub runs · newest first · times shown in your local time</Text>
+
+          {error ? <Text style={styles.loadError}>{error}</Text> : null}
+          {runs.length === 0 ? (
+            error ? null : <Text style={styles.emptyText}>No GitHub runs found.</Text>
+          ) : (
+            runs.map((run) => {
+              const message = describeEtlFailure(run, workflow === 'fuel-news' ? null : pending);
+              const failed = isFailedWorkflow(run.status);
+              return (
+                <View key={run.id} testID={`etl-run-${run.id}`} style={styles.runRow}>
+                  <View style={styles.runMain}>
+                    <StatusBadge status={run.status} />
+                    <View style={styles.runDetails}>
+                      {run.run_number != null ? (
+                        <Text style={styles.runDate}>
+                          {`Run #${run.run_number}${run.run_attempt > 1 ? ` · Attempt ${run.run_attempt}` : ''}`}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.runMeta}>Started {formatTimestamp(run.started_at)}</Text>
+                      <Text style={styles.runMeta}>
+                        {run.ended_at ? `Ended ${formatTimestamp(run.ended_at)}` : 'Not completed yet'}
+                      </Text>
+                      <Text style={styles.runMeta}>
+                        {triggerLabel(run.trigger_source)}{run.branch ? ` · ${run.branch}` : ''}
+                        {run.duration_s != null ? ` · ${formatDuration(run.duration_s)}` : ''}
+                      </Text>
+                      {runCounts(run, workflow) ? (
+                        <Text style={styles.runCounts}>{runCounts(run, workflow)}</Text>
+                      ) : null}
+                      {message ? (
+                        <View testID={`etl-message-${run.id}`} style={[styles.failureBlock, !failed && styles.warningBlock]}>
+                          <Text style={[styles.runError, !failed && styles.runWarning]}>{message}</Text>
+                        </View>
+                      ) : null}
                     </View>
-                  ) : null}
+                  </View>
                 </View>
-              </View>
-            </View>
-          );
-        })
-      )}
+              );
+            })
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -160,9 +183,12 @@ export default function EtlStatusScreen() {
   const [pendingAvailable, setPendingAvailable] = useState(false);
   const [weeklyRuns, setWeeklyRuns] = useState<EtlRun[]>([]);
   const [retryRuns, setRetryRuns] = useState<EtlRun[]>([]);
+  const [fuelNewsRuns, setFuelNewsRuns] = useState<EtlRun[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [weeklyError, setWeeklyError] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [fuelNewsError, setFuelNewsError] = useState<string | null>(null);
+  const [expandedWorkflow, setExpandedWorkflow] = useState<Workflow | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -170,7 +196,7 @@ export default function EtlStatusScreen() {
     let active = true;
 
     async function loadData() {
-      const [etlResult, pendingResult, weeklyResult, retryResult] = await Promise.allSettled([
+      const [etlResult, pendingResult, weeklyResult, retryResult, fuelNewsResult] = await Promise.allSettled([
         supabase.from('doe_etl_state').select('*').maybeSingle(),
         supabase
           .from('doe_pending_downloads')
@@ -178,6 +204,7 @@ export default function EtlStatusScreen() {
           .order('bulletin_date', { ascending: false }),
         fetchEtlWorkflowHistory('weekly'),
         fetchEtlWorkflowHistory('pending-retry'),
+        fetchEtlWorkflowHistory('fuel-news'),
       ]);
       if (!active) return;
 
@@ -203,6 +230,12 @@ export default function EtlStatusScreen() {
       } else {
         setRetryError(loadErrorMessage(retryResult.reason, true));
       }
+      if (fuelNewsResult.status === 'fulfilled') {
+        setFuelNewsRuns(fuelNewsResult.value.runs);
+        setFuelNewsError(fuelNewsResult.value.warning);
+      } else {
+        setFuelNewsError(loadErrorMessage(fuelNewsResult.reason, true));
+      }
       setLoading(false);
       setRefreshing(false);
     }
@@ -213,12 +246,16 @@ export default function EtlStatusScreen() {
     };
   }, [refreshKey]));
 
+  const toggleWorkflow = (workflow: Workflow) => {
+    setExpandedWorkflow((current) => current === workflow ? null : workflow);
+  };
+
   const refresh = () => {
     setRefreshing(true);
     setRefreshKey((key) => key + 1);
   };
 
-  if (loading) return <LoadingState message="Loading ETL status and history..." />;
+  if (loading) return <LoadingState message="Loading workflows..." />;
 
   return (
     <ScrollView
@@ -227,8 +264,8 @@ export default function EtlStatusScreen() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
     >
       <View style={styles.pageHeader}>
-        <Text style={styles.headerTitle}>ETL Workflows</Text>
-        <TouchableOpacity onPress={refresh} disabled={refreshing} accessibilityRole="button" accessibilityLabel="Refresh ETL history">
+        <Text style={styles.headerTitle}>Workflows</Text>
+        <TouchableOpacity onPress={refresh} disabled={refreshing} accessibilityRole="button" accessibilityLabel="Refresh workflows">
           <Text style={styles.refreshText}>{refreshing ? 'Refreshing…' : 'Refresh'}</Text>
         </TouchableOpacity>
       </View>
@@ -238,7 +275,7 @@ export default function EtlStatusScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Ionicons name="pulse-outline" size={20} color={GasTaColors.forest} />
-          <Text style={styles.cardTitle}>Current State</Text>
+          <Text style={styles.cardTitle}>DOE Current State</Text>
         </View>
         <View style={styles.statusRow}>
           <Text style={styles.statusLabel}>Last Successful Fetch</Text>
@@ -247,10 +284,6 @@ export default function EtlStatusScreen() {
               ? formatTimestamp(etlState.last_website_fetch_at)
               : 'Unknown'}
           </Text>
-        </View>
-        <View style={styles.statusRow}>
-          <Text style={styles.statusLabel}>Triggered By</Text>
-          <Text style={styles.statusValue}>{etlState?.last_trigger || 'N/A'}</Text>
         </View>
         <View style={styles.statusRow}>
           <Text style={styles.statusLabel}>Pending PDFs</Text>
@@ -277,12 +310,14 @@ export default function EtlStatusScreen() {
 
       <RunHistory
         title="DOE Weekly ETL"
-        description="Runs every Tuesday at 19:00 PH (11:00 UTC). Fetches price bulletins for all regions."
+        description="Runs every Tuesday at 07:00 PH (23:00 UTC Monday). Fetches price bulletins for all regions."
         icon="calendar-outline"
         workflow="weekly"
         runs={weeklyRuns}
         error={weeklyError}
         pending={pendingAvailable ? pending : null}
+        expanded={expandedWorkflow === 'weekly'}
+        onToggle={() => toggleWorkflow('weekly')}
       />
 
       <RunHistory
@@ -293,6 +328,20 @@ export default function EtlStatusScreen() {
         runs={retryRuns}
         error={retryError}
         pending={pendingAvailable ? pending : null}
+        expanded={expandedWorkflow === 'pending-retry'}
+        onToggle={() => toggleWorkflow('pending-retry')}
+      />
+
+      <RunHistory
+        title="Fuel News Import"
+        description="Runs hourly. Imports fuel-price headlines from approved publisher RSS feeds."
+        icon="newspaper-outline"
+        workflow="fuel-news"
+        runs={fuelNewsRuns}
+        error={fuelNewsError}
+        pending={null}
+        expanded={expandedWorkflow === 'fuel-news'}
+        onToggle={() => toggleWorkflow('fuel-news')}
       />
     </ScrollView>
   );
@@ -318,9 +367,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: GasTaColors.forestBorder,
   },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: GasTaColors.textPrimary },
-  cardText: { fontSize: 13, color: GasTaColors.textSoft, marginBottom: 12 },
+  cardHeader: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  workflowToggle: { width: '100%' },
+  cardTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: GasTaColors.textPrimary },
+  cardText: { fontSize: 13, color: GasTaColors.textSoft, marginTop: 8, marginBottom: 12 },
   statusRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

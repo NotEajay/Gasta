@@ -2,7 +2,9 @@ import { supabase } from '@/lib/supabase';
 import { DOE_REGIONS, type DoeRegionCode } from '@/constants/regions';
 import type { Database, Json } from '@/types/database';
 
-export type EtlWorkflow = 'weekly' | 'pending-retry';
+export type DoeEtlWorkflow = 'weekly' | 'pending-retry';
+export type GitHubOnlyWorkflow = 'fuel-news';
+export type EtlWorkflow = DoeEtlWorkflow | GitHubOnlyWorkflow;
 type SavedRun = Database['public']['Tables']['doe_etl_runs']['Row'];
 
 type GitHubRun = {
@@ -157,6 +159,13 @@ function formatRegionalNotices(notices: RegionalNotice[]): string {
 }
 
 export function describeEtlFailure(run: EtlWorkflowRun, pending: PendingRetryEntry[] | null): string {
+  if (run.workflow === 'fuel-news') {
+    if (!isFailedWorkflow(run.status)) return '';
+    if (run.status === 'cancelled') return 'The workflow was cancelled on GitHub.';
+    if (run.status === 'timed_out') return 'The workflow exceeded its GitHub Actions time limit.';
+    return run.failure_reason || 'The workflow failed. The cause was not recorded.';
+  }
+
   const regions = structuredRegions(run.region_results);
   if (regions !== null) {
     const notices: RegionalNotice[] = regions.flatMap((region) => {
@@ -241,6 +250,7 @@ const API = `https://api.github.com/repos/${ETL_GITHUB_REPO}`;
 const WORKFLOW_FILES: Record<EtlWorkflow, string> = {
   weekly: 'doe-etl-weekly.yml',
   'pending-retry': 'doe-etl-pending-retry.yml',
+  'fuel-news': 'fuel-news-hourly.yml',
 };
 const FAILURE_STATUSES = new Set(['failure', 'failed', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 const failureCache = new Map<string, { reason: string; step: string | null }>();
@@ -262,14 +272,16 @@ async function githubJson<T>(path: string): Promise<T> {
   return response.json();
 }
 
-function fallbackReason(status: string): string {
+function fallbackReason(status: string, workflow: EtlWorkflow): string {
   if (status === 'cancelled') return 'The workflow was cancelled on GitHub.';
   if (status === 'timed_out') return 'The workflow exceeded its GitHub Actions time limit.';
-  return 'The update failed. The cause was not recorded.';
+  return workflow === 'fuel-news'
+    ? 'The workflow failed. The cause was not recorded.'
+    : 'The update failed. The cause was not recorded.';
 }
 
-async function githubFailure(run: GitHubRun): Promise<{ reason: string; step: string | null }> {
-  const key = `${run.id}:${run.run_attempt || 1}:${run.conclusion}`;
+async function githubFailure(run: GitHubRun, workflow: EtlWorkflow): Promise<{ reason: string; step: string | null }> {
+  const key = `${workflow}:${run.id}:${run.run_attempt || 1}:${run.conclusion}`;
   const cached = failureCache.get(key);
   if (cached) return cached;
   try {
@@ -278,9 +290,9 @@ async function githubFailure(run: GitHubRun): Promise<{ reason: string; step: st
     );
     const job = jobs.find((item) => isFailedWorkflow(item.conclusion || ''));
     const step = job?.steps?.find((item) => isFailedWorkflow(item.conclusion || ''))?.name ?? null;
-    let reason = step ? `The GitHub step “${step}” failed.` : fallbackReason(run.conclusion || 'failed');
+    let reason = step ? `The GitHub step “${step}” failed.` : fallbackReason(run.conclusion || 'failed', workflow);
     if (run.conclusion === 'cancelled' || run.conclusion === 'timed_out') {
-      reason = fallbackReason(run.conclusion);
+      reason = fallbackReason(run.conclusion, workflow);
     }
     if (job) {
       try {
@@ -300,7 +312,7 @@ async function githubFailure(run: GitHubRun): Promise<{ reason: string; step: st
     failureCache.set(key, result);
     return result;
   } catch {
-    return { reason: fallbackReason(run.conclusion || 'failed'), step: null };
+    return { reason: fallbackReason(run.conclusion || 'failed', workflow), step: null };
   }
 }
 
@@ -321,37 +333,13 @@ function savedGitHubRun(run: SavedRun): EtlWorkflowRun {
   };
 }
 
-export async function fetchEtlWorkflowHistory(workflow: EtlWorkflow): Promise<{
-  runs: EtlWorkflowRun[];
-  warning: string | null;
-}> {
-  const [githubResult, savedResult] = await Promise.allSettled([
-    githubJson<{ workflow_runs: GitHubRun[] }>(`/actions/workflows/${WORKFLOW_FILES[workflow]}/runs?per_page=10`),
-    supabase.from('doe_etl_runs').select('*')
-      .eq('workflow', workflow)
-      .not('github_run_id', 'is', null)
-      .order('started_at', { ascending: false })
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(10),
-  ]);
-  const saved = savedResult.status === 'fulfilled' && !savedResult.value.error
-    ? (savedResult.value.data ?? []).filter((row) => row.github_run_id && row.workflow === workflow)
-    : [];
-
-  if (githubResult.status === 'rejected') {
-    const message = githubResult.reason instanceof Error
-      ? githubResult.reason.message
-      : 'Could not load GitHub workflow history.';
-    return {
-      runs: saved.slice(0, 10).map(savedGitHubRun),
-      warning: saved.length ? `${message} Showing previously saved GitHub runs.` : message,
-    };
-  }
-  const githubRuns = githubResult.value.workflow_runs;
-  if (!Array.isArray(githubRuns)) throw new Error('GitHub returned an invalid workflow history response.');
+async function mapGitHubRuns(
+  workflow: EtlWorkflow,
+  githubRuns: GitHubRun[],
+  saved: SavedRun[],
+): Promise<EtlWorkflowRun[]> {
   const details = new Map(saved.map((row) => [`${row.github_run_id}:${row.github_run_attempt || 1}`, row]));
-  const runs = await Promise.all(githubRuns
+  return Promise.all(githubRuns
     .slice()
     .sort((a, b) => Date.parse(b.run_started_at || b.created_at) - Date.parse(a.run_started_at || a.created_at))
     .slice(0, 10)
@@ -371,7 +359,7 @@ export async function fetchEtlWorkflowHistory(workflow: EtlWorkflow): Promise<{
         failureReason = detail?.failure_reason || detail?.error_summary || null;
         failedStep = detail?.failed_step || null;
         if (!failureReason) {
-          const failure = await githubFailure(run);
+          const failure = await githubFailure(run, workflow);
           failureReason = failure.reason;
           failedStep = failedStep || failure.step;
         }
@@ -396,5 +384,51 @@ export async function fetchEtlWorkflowHistory(workflow: EtlWorkflow): Promise<{
         failed_step: failedStep,
       };
     }));
-  return { runs, warning: null };
+}
+
+function githubHistoryError(reason: unknown): string {
+  return reason instanceof Error ? reason.message : 'Could not load GitHub workflow history.';
+}
+
+export async function fetchEtlWorkflowHistory(workflow: EtlWorkflow): Promise<{
+  runs: EtlWorkflowRun[];
+  warning: string | null;
+}> {
+  if (workflow === 'fuel-news') {
+    let response: { workflow_runs: GitHubRun[] };
+    try {
+      response = await githubJson(`/actions/workflows/${WORKFLOW_FILES[workflow]}/runs?per_page=10`);
+    } catch (error) {
+      return { runs: [], warning: githubHistoryError(error) };
+    }
+    if (!Array.isArray(response.workflow_runs)) {
+      throw new Error('GitHub returned an invalid workflow history response.');
+    }
+    return { runs: await mapGitHubRuns(workflow, response.workflow_runs, []), warning: null };
+  }
+
+  const [githubResult, savedResult] = await Promise.allSettled([
+    githubJson<{ workflow_runs: GitHubRun[] }>(`/actions/workflows/${WORKFLOW_FILES[workflow]}/runs?per_page=10`),
+    supabase.from('doe_etl_runs').select('*')
+      .eq('workflow', workflow)
+      .not('github_run_id', 'is', null)
+      .order('started_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(10),
+  ]);
+  const saved = savedResult.status === 'fulfilled' && !savedResult.value.error
+    ? (savedResult.value.data ?? []).filter((row) => row.github_run_id && row.workflow === workflow)
+    : [];
+
+  if (githubResult.status === 'rejected') {
+    const message = githubHistoryError(githubResult.reason);
+    return {
+      runs: saved.slice(0, 10).map(savedGitHubRun),
+      warning: saved.length ? `${message} Showing previously saved GitHub runs.` : message,
+    };
+  }
+  const githubRuns = githubResult.value.workflow_runs;
+  if (!Array.isArray(githubRuns)) throw new Error('GitHub returned an invalid workflow history response.');
+  return { runs: await mapGitHubRuns(workflow, githubRuns, saved), warning: null };
 }

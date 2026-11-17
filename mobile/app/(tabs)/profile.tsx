@@ -237,13 +237,13 @@ export default function ProfileScreen() {
               onPress={() => router.push('/admin/etl')}
             >
               <View style={styles.iconBox}>
-                <Ionicons name="server-outline" size={16} color={GasTaColors.forest} />
+                <Ionicons name="git-network-outline" size={16} color={GasTaColors.forest} />
               </View>
-              <Text style={styles.detailLabel}>ETL Status & Workflows</Text>
+              <Text style={styles.detailLabel}>Workflows</Text>
               <Ionicons name="chevron-forward" size={16} color={GasTaColors.textMuted} />
             </Pressable>
 
-            {role === 'admin' && (
+            {role === 'admin' ? (
               <>
                 <View style={styles.detailDivider} />
                 <Pressable
@@ -257,7 +257,7 @@ export default function ProfileScreen() {
                   <Ionicons name="chevron-forward" size={16} color={GasTaColors.textMuted} />
                 </Pressable>
               </>
-            )}
+            ) : null}
           </View>
         </>
       )}

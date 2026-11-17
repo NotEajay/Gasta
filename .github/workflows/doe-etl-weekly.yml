@@ -6,8 +6,8 @@ name: DOE Weekly ETL
 on:
   schedule:
     # Tuesday only (PH). DOE bulletin weeks start Tuesday.
-    # Runs at 19:00 PH (11:00 UTC) on Tuesday.
-    - cron: "0 11 * * 2"
+    # Runs at 07:00 PH on Tuesday (23:00 UTC on Monday).
+    - cron: "0 23 * * 1"
 
 
   workflow_dispatch:

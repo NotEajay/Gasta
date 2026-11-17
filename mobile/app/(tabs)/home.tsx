@@ -9,6 +9,7 @@ import { floatingNavContentInset } from '@/app/(tabs)/_layout';
 
 import { Text } from '@/components/Themed';
 import AuthPrompt from '@/components/AuthPrompt';
+import { ExternalLink } from '@/components/ExternalLink';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import BrandWordmark from '@/components/ui/BrandWordmark';
 import LoadingState from '@/components/ui/LoadingState';
@@ -39,6 +40,10 @@ import {
   type DashboardReport,
 } from '@/lib/services/dashboard';
 import { resolveCurrentPlace } from '@/lib/services/location';
+import {
+  fetchFuelNewsPreview,
+  type FuelNewsPreviewItem,
+} from '@/lib/services/fuelNews';
 import { fetchRecentTrips } from '@/lib/services/trips';
 import { fetchVehicles } from '@/lib/services/vehicles';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -184,6 +189,8 @@ export default function HomeScreen() {
   const [budget, setBudget] = useState<DashboardBudgetSummary | null>(null);
   const [trips, setTrips] = useState<TripRecord[]>([]);
   const [reports, setReports] = useState<DashboardReport[]>([]);
+  const [fuelNews, setFuelNews] = useState<FuelNewsPreviewItem[]>([]);
+  const [fuelNewsState, setFuelNewsState] = useState<'loading' | 'ready' | 'error'>('loading');
   /**
    * Owned vehicles only, for the "At a glance" cards.
    *
@@ -205,21 +212,22 @@ export default function HomeScreen() {
     }
 
     setLoading(true);
+    setFuelNewsState('loading');
     const now = new Date();
 
     /*
      * Two phases, both internally parallel.
      *
      * Phase 1 is everything that does not depend on a resolved value: budget,
-     * trips, reports, vehicles, pending, and the location read. Phase 2 is the
-     * price query, because it needs the region and fuel type that phase 1
+     * trips, reports, vehicles, pending, fuel news, and the location read. Phase 2
+     * is the price query, because it needs the region and fuel type that phase 1
      * produces.
      *
      * Every call keeps its own `.catch()`, so one failing source degrades to an
      * empty section instead of an error screen. There is still no N+1 and no
      * per-vehicle refill query.
      */
-    const [nextBudget, nextTrips, nextReports, nextVehicles, nextPending, place] =
+    const [nextBudget, nextTrips, nextReports, nextVehicles, nextPending, place, newsResult] =
       await Promise.all([
         fetchDashboardBudgetSummary(user.id, now.getFullYear(), now.getMonth() + 1).catch(
           () => null
@@ -230,6 +238,9 @@ export default function HomeScreen() {
         fetchDashboardPendingSummary(),
         // Non-prompting: reads an existing grant, returns null otherwise.
         resolveCurrentPlace({ requestIfNeeded: false }).catch(() => null),
+        fetchFuelNewsPreview()
+          .then((items) => ({ items, failed: false as const }))
+          .catch(() => ({ items: [] as FuelNewsPreviewItem[], failed: true as const })),
       ]);
 
     setBudget(nextBudget);
@@ -237,6 +248,8 @@ export default function HomeScreen() {
     setReports(nextReports);
     setVehicles(nextVehicles);
     setPending(nextPending);
+    setFuelNews(newsResult.items);
+    setFuelNewsState(newsResult.failed ? 'error' : 'ready');
 
     // The primary vehicle's own fuel type, resolved id -> DOE code. A failure
     // resolves to null, which falls back to the labelled reference fuel.
@@ -478,6 +491,47 @@ export default function HomeScreen() {
     </View>
   );
 
+  const fuelNewsPreview = (
+    <View testID="home-fuel-news" style={styles.newsSection}>
+      <Text accessibilityRole="header" style={styles.sectionTitle}>Fuel news</Text>
+      {fuelNewsState === 'error' ? (
+        <Text style={styles.newsEmpty}>Fuel news unavailable</Text>
+      ) : fuelNews.length === 0 ? (
+        <Text style={styles.newsEmpty}>No fuel news yet</Text>
+      ) : (
+        <View style={styles.newsList}>
+          {fuelNews.slice(0, 3).map((item, index, items) => (
+            <ExternalLink
+              key={item.id}
+              href={item.canonicalUrl}
+              asChild
+              style={styles.newsLink}
+              accessibilityRole="link"
+              accessibilityLabel={`Open ${item.headline} from ${item.publisher} in browser`}
+              accessibilityHint="Opens the original publisher article">
+              <Pressable>
+                <View
+                  testID="home-fuel-news-row"
+                  style={[
+                    styles.newsRow,
+                    index < items.length - 1 && styles.newsRowDivider,
+                  ]}>
+                  <View style={styles.newsCopy}>
+                    <Text numberOfLines={2} style={styles.newsHeadline}>{item.headline}</Text>
+                    <Text numberOfLines={1} style={styles.newsSource}>{item.publisher}</Text>
+                  </View>
+                  <View style={styles.newsOpenIcon}>
+                    <Ionicons name="open-outline" size={15} color={GasTaColors.forest} />
+                  </View>
+                </View>
+              </Pressable>
+            </ExternalLink>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
   const insightPreview = (
     <FuelInsightsPanel userId={user.id} year={insightNow.getFullYear()} month={insightNow.getMonth() + 1}
       compact highlight onViewHistory={goToFuelHistory} />
@@ -584,6 +638,7 @@ export default function HomeScreen() {
         <View style={[styles.mainColumn, isDesktop && styles.mainColumnDesktop]}>
           {pricePreview}
           {quickActions}
+          {fuelNewsPreview}
           {isDesktop ? recentActivity : null}
         </View>
         <View style={[styles.sideColumn, isDesktop && styles.sideColumnDesktop]}>
@@ -637,6 +692,16 @@ const styles = StyleSheet.create({
   quickActions: { flexDirection: 'row', gap: 12, marginTop: 12 },
   quickAction: { flex: 1, minWidth: 0, minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, borderRadius: 16 },
   quickLabel: { flexShrink: 1, color: GasTaColors.textPrimary, fontSize: 13, fontWeight: '600' },
+  newsSection: { marginTop: 24 },
+  newsList: { marginTop: 10, borderRadius: 18, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, overflow: 'hidden' },
+  newsLink: { width: '100%', textDecorationLine: 'none' },
+  newsRow: { minHeight: 82, width: '100%', flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: GasTaColors.white },
+  newsRowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: GasTaColors.glassBorderSubtle },
+  newsCopy: { flex: 1, minWidth: 0 },
+  newsHeadline: { color: GasTaColors.textPrimary, fontSize: 14, lineHeight: 20, fontWeight: '700', letterSpacing: -0.1 },
+  newsSource: { color: GasTaColors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 5, fontWeight: '500' },
+  newsOpenIcon: { width: 30, height: 30, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: GasTaColors.forestGlow },
+  newsEmpty: { color: GasTaColors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 10, padding: 16, borderRadius: 18, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle },
   fuelFeature: { borderRadius: 26, padding: 20, backgroundColor: GasTaColors.forestDark },
   fuelTop: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   fuelEyebrow: { color: ON_FOREST.label, fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },

@@ -21,10 +21,16 @@ const basePrice = { price: 65.5, stationName: 'Petron', source: 'doe', regionCod
   bulletinDate: '2026-10-05', vsLastBulletin: -0.5, savingsOnFill: null, runnersUp: [] };
 const vehicle = { id: 'car', nickname: 'Daily drive', brand: 'Toyota', model: 'Vios',
   fuel_type_id: 'gas', fuel_efficiency_km_per_liter: 14, last_refill_price: 65.5, last_refill_at: '2026-11-05T10:00:00Z' };
-function setup({ budget = baseBudget, price = basePrice, vehicles = [vehicle], trips = [], desktop = false } = {}) {
+const baseNews = [
+  { id: 'news-1', headline: 'Diesel prices roll back Tuesday', publisher: 'Publisher One', canonicalUrl: 'https://publisher.example/one' },
+  { id: 'news-2', headline: 'Fuel firms announce new pump prices', publisher: 'Publisher Two', canonicalUrl: 'https://publisher.example/two' },
+  { id: 'news-3', headline: 'Weekly fuel price update', publisher: 'Publisher Three', canonicalUrl: 'https://publisher.example/three' },
+];
+function setup({ budget = baseBudget, price = basePrice, vehicles = [vehicle], trips = [], news = baseNews, newsError = null, desktop = false } = {}) {
   const pushed = [], navigated = []; const router = { push: value => pushed.push(value), navigate: value => navigated.push(value) };
   const h = harness(path.join(__dirname, '../app/(tabs)/home.tsx'), {
     '@/constants/Theme': theme, '@/lib/format': format,
+    '@/components/ExternalLink': { ExternalLink: 'ExternalLink' },
     'expo-router': { useRouter: () => router },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 20 }) },
     '@/app/(tabs)/_layout': { floatingNavContentInset: value => 100 + value },
@@ -39,12 +45,23 @@ function setup({ budget = baseBudget, price = basePrice, vehicles = [vehicle], t
       fetchDashboardBudgetSummary: async () => budget, fetchDashboardPendingSummary: async () => ({ count: 1, total: 250 }),
       fetchDashboardPriceSummary: async () => price, fetchRecentUserReports: async () => [], resolveVehicleFuelCode: async () => 'RON_91' },
     '@/lib/services/location': { resolveCurrentPlace: async () => null },
+    '@/lib/services/fuelNews': { fetchFuelNewsPreview: async () => {
+      if (newsError) throw newsError;
+      return news;
+    } },
     '@/lib/services/trips': { fetchRecentTrips: async () => trips },
     '@/lib/services/vehicles': { fetchVehicles: async () => vehicles },
   });
   return { h, pushed, navigated, async ready() { await h.flush({}); await h.flush(); } };
 }
 const text = node => Array.isArray(node) ? node.map(text).join(' ') : typeof node === 'string' ? node : node && typeof node === 'object' ? text(node.props?.children) : '';
+const all = (tree, predicate, found = []) => {
+  if (Array.isArray(tree)) { for (const node of tree) all(node, predicate, found); return found; }
+  if (!tree || typeof tree !== 'object') return found;
+  if (predicate(tree)) found.push(tree);
+  all(tree.props?.children, predicate, found);
+  return found;
+};
 const byLabel = (h, label) => find(h.tree, node => node.props?.accessibilityLabel === label);
 
 test('phone Home uses the full viewport with one gutter and puts fuel prices and two primary actions before spending', async () => {
@@ -59,6 +76,50 @@ test('phone Home uses the full viewport with one gutter and puts fuel prices and
   assert(body.includes('₱1,250')); assert(body.includes('₱3,750')); assert(!body.includes('99,999'));
   assert(find(env.h.tree, node => node.props?.compact === true && node.props?.highlight === true));
 });
+test('fuel news stays compact, caps rows, and links each whole row directly to its publisher', async () => {
+  const news = [...baseNews, { id: 'news-4', headline: 'Must be capped', publisher: 'Publisher Four', canonicalUrl: 'https://publisher.example/four' }];
+  const env = setup({ news }); await env.ready();
+  const section = find(env.h.tree, node => node.props?.testID === 'home-fuel-news');
+  const body = text(section);
+  const links = all(section, node => node.type === 'ExternalLink');
+  assert.equal(links.length, 3);
+  assert.deepEqual(links.map(node => node.props.href), baseNews.map(item => item.canonicalUrl));
+  assert(links.every(node => node.props.accessibilityRole === 'link' && /in browser$/.test(node.props.accessibilityLabel)));
+  assert(links.every(node => node.props.accessibilityHint === 'Opens the original publisher article'));
+  const rows = all(section, node => node.props?.testID === 'home-fuel-news-row');
+  assert.equal(rows.length, 3);
+  assert(rows.every(node => Array.isArray(node.props.style) && node.props.style[0].width === '100%'));
+  assert.equal(rows.filter(node => node.props.style[1]).length, 2);
+  assert.equal(all(section, node => node.type === 'Ionicons' && node.props?.name === 'open-outline').length, 3);
+  assert(body.includes('Fuel news'));
+  for (const item of baseNews) { assert(body.includes(item.headline)); assert(body.includes(item.publisher)); }
+  assert(!body.includes('Must be capped'));
+  for (const forbidden of ['excerpt', 'Published', 'Effective', 'View all', 'Read more', '₱/L']) assert(!body.includes(forbidden));
+});
+
+test('fuel news distinguishes successful empty results from schema or query failure', async () => {
+  const empty = setup({ news: [] }); await empty.ready();
+  assert(text(empty.h.tree).includes('No fuel news yet'));
+  assert(!text(empty.h.tree).includes('Fuel news unavailable'));
+
+  const failed = setup({ newsError: new Error('fuel_news_events missing') }); await failed.ready();
+  assert(text(failed.h.tree).includes('Fuel news unavailable'));
+  assert(text(failed.h.tree).includes('FUEL PRICE WATCH'));
+  assert(text(failed.h.tree).includes('Your spending'));
+});
+
+test('fuel news follows quick actions and precedes phone spending and desktop recent activity', async () => {
+  const phone = setup(); await phone.ready();
+  const phoneBody = text(phone.h.tree);
+  assert(phoneBody.indexOf('Log refill') < phoneBody.indexOf('Fuel news'));
+  assert(phoneBody.indexOf('Fuel news') < phoneBody.indexOf('Your spending'));
+
+  const desktop = setup({ desktop: true }); await desktop.ready();
+  const desktopBody = text(desktop.h.tree);
+  assert(desktopBody.indexOf('Log refill') < desktopBody.indexOf('Fuel news'));
+  assert(desktopBody.indexOf('Fuel news') < desktopBody.indexOf('Recent activity'));
+});
+
 test('all main shortcuts, profile, pending shares and price actions keep their routes', async () => {
   const env = setup(); await env.ready();
   for (const [label, route] of [['Log refill', '/(tabs)/vehicles'], ['Plan a trip', '/(tabs)/trip'], ['View budget', '/(tabs)/budget'], ['Review pending refill responsibility', '/(tabs)/vehicles'], ['See all fuel prices', '/(tabs)/prices']]) {
