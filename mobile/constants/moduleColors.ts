@@ -12,6 +12,7 @@ const forest = {
 
 export const moduleColors = {
   prices: forest,
+  news: forest,
   trip: forest,
   vehicles: forest,
   budget: forest,
@@ -23,6 +24,7 @@ export type ModuleKey = keyof typeof moduleColors;
 
 export const tabConfig = {
   prices: { label: 'Prices', module: 'prices' as ModuleKey, icon: 'pricetag' as const },
+  news: { label: 'News', module: 'news' as ModuleKey, icon: 'newspaper' as const },
   trip: { label: 'Trip', module: 'trip' as ModuleKey, icon: 'navigate' as const },
   vehicles: { label: 'Vehicles', module: 'vehicles' as ModuleKey, icon: 'car' as const },
   budget: { label: 'Budget', module: 'budget' as ModuleKey, icon: 'wallet' as const },

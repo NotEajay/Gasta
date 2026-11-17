@@ -66,6 +66,23 @@ python run.py discover-region --region visayas   # latest week only
 |----------|---------|--------------|
 | `doe-etl-weekly.yml` | **Tuesday only** — several PH slots (06:00–23:00) | `sync-all` |
 | `doe-etl-pending-retry.yml` | **Daily** 06:00 PH (and manual) | `retry-pending` — only PDFs weekly sync could not download; **idle/green** when empty; **fails/red** while a queued PDF is still 403 |
+| `fuel-news-hourly.yml` | **Hourly** at minute 17 UTC (and manual) | Polls the approved GMA Money, Inquirer Business, and Philstar Business RSS feeds; imports only attributed fuel-news metadata and extracted facts |
+
+### Fuel news import
+
+Apply `supabase/migrations/20261116000000_fuel_news.sql` before enabling the
+workflow. It uses the same `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+secrets listed below. Run a read-only live check from `etl/` with:
+
+```bash
+python -m src.fuel_news --dry-run
+```
+
+The importer reads publisher RSS metadata only: it does not request article
+pages, copy images, or store full article bodies. A feed item without a safe,
+explicit per-liter amount remains an attributed unstructured news item rather
+than receiving an inferred adjustment. Manual trigger: **Actions → Fuel News
+Import → Run workflow**.
 
 DOE bulletin weeks start Tuesday and files can appear at different times that day, so the weekly workflow tries multiple Tuesday slots. Runs after the first successful one are no-ops because each region's week is already stored. Use **Run workflow** manually if DOE publishes after Tuesday.
 

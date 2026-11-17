@@ -35,8 +35,8 @@ const NAV_BAR_HEIGHT = 74;
 const NAV_BAR_RADIUS = radii.lg;
 const NAV_BAR_SIDE_MARGIN = 12;
 const NAV_BAR_BOTTOM_GAP = 10;
-const NAV_ICON_SIZE = 23;
-const NAV_ICON_CHIP = 40;
+const NAV_ICON_SIZE = 22;
+const NAV_ICON_CHIP = 36;
 
 /**
  * Bottom clearance a screen's own scroll content must reserve so its last row can
@@ -54,6 +54,7 @@ export function floatingNavContentInset(bottomInset: number): number {
 const tabIconNames = {
   home: { active: 'home', inactive: 'home-outline' },
   prices: { active: 'pricetag', inactive: 'pricetag-outline' },
+  news: { active: 'newspaper', inactive: 'newspaper-outline' },
   trip: { active: 'navigate', inactive: 'navigate-outline' },
   vehicles: { active: 'car', inactive: 'car-outline' },
   budget: { active: 'wallet', inactive: 'wallet-outline' },
@@ -88,6 +89,13 @@ const DESKTOP_NAV = [
     href: '/(tabs)/prices',
     icon: 'pricetag-outline',
     activeIcon: 'pricetag',
+  },
+  {
+    label: 'News',
+    path: '/news',
+    href: '/(tabs)/news',
+    icon: 'newspaper-outline',
+    activeIcon: 'newspaper',
   },
   {
     label: 'Trip',
@@ -202,10 +210,11 @@ function TabLabel({
   focused: boolean;
 }) {
   const { isCompact } = useResponsive();
+  const label = isCompact && children === 'Vehicles' ? 'Cars' : children;
 
   return (
     <Text numberOfLines={1} style={[styles.tabLabel, isCompact && styles.tabLabelCompact, focused && styles.tabLabelActive, { color }]}>
-      {children}
+      {label}
     </Text>
   );
 }
@@ -431,6 +440,15 @@ export default function TabLayout() {
               }}
             />
             <Tabs.Screen
+              name="news"
+              options={{
+                title: tabConfig.news.label,
+                tabBarIcon: ({ color, focused }) => (
+                  <TabIcon name="news" focused={focused} color={typeof color === 'string' ? color : focused ? HomeColors.primary : HomeColors.muted} />
+                ),
+              }}
+            />
+            <Tabs.Screen
               name="trip"
               options={{
                 title: tabConfig.trip.label,
@@ -585,11 +603,11 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   tabBarItem: {
-    // Vertical centring only. The 40px chip + 2px label gap + 14px line = 56px
-    // of content in a 70px bar leaves 14px of slack, so 7px should sit above the
-    // icon and 7px below the label. React Navigation's own item padding starts
-    // the group at 5px, which leaves 9px underneath, so nudge it down 2px.
-    paddingTop: 2,
+    // Seven destinations share the phone bar. Keep the icon/label group compact
+    // while retaining the full item as the touch target.
+    paddingTop: 4,
+    paddingHorizontal: 0,
+    minWidth: 0,
   },
   iconWrap: {
     width: NAV_ICON_CHIP,
@@ -602,13 +620,13 @@ const styles = StyleSheet.create({
     backgroundColor: GasTaColors.accent,
   },
   tabLabel: {
-    fontSize: 11,
-    lineHeight: 14,
+    fontSize: 10,
+    lineHeight: 13,
     fontWeight: '500',
-    marginTop: 2,
+    marginTop: 1,
     textAlign: 'center',
   },
-  tabLabelCompact: { fontSize: 10, letterSpacing: -0.2 },
+  tabLabelCompact: { fontSize: 9, letterSpacing: -0.35 },
   tabLabelActive: {
     fontWeight: '700',
   },
