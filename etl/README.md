@@ -22,7 +22,9 @@ source .venv/bin/activate
 python run.py sync-all
 ```
 
-This discovers, downloads, parses, and loads **NCR, North Luzon, South Luzon, Visayas, and Mindanao**. Each region is skipped independently if that region's prices for the bulletin week already exist in Supabase, so re-running is safe and cheap.
+This discovers, downloads, parses, and loads **NCR, North Luzon, South Luzon, Visayas, and Mindanao**. A stored region/week is skipped only when its complete price identities and values match the newly parsed source. Missing entries, changed values, and obsolete rows trigger reconciliation.
+
+Prices are never copied from an older bulletin into a newer week. Missing source coverage remains missing; older observations remain available under their original dates in history. Re-imports upload and verify source rows before removing obsolete rows, scoped to that region and bulletin. A failed upload retains the previously stored rows. Recovering one sub-region preserves its same-week siblings and recomputes regional minima across those areas.
 
 **Core fuels:** every sync checks that **RON 91** and **Diesel Plus** are present. If a week was stored without them (bad parse / older loader), the next ETL run **reloads** that week instead of skipping. A remaining gap fails the run (`FUEL GAP`).
 
@@ -248,9 +250,12 @@ DOE occasionally publishes a week as page scans. Two cases are detected:
 | Image-only PDF | No text layer at all |
 | Scan with a corrupt OCR text layer | Unmapped glyphs (`(cid:NN)`), or numbers with more than two decimals (`87.488` for a single `87.48` cell) |
 
-**Automatic OCR fallback:** when either case is detected, the ETL runs
+**Automatic OCR fallback:** every page is checked, including image-only pages
+inside a PDF whose first pages already have text. When either case is detected, the ETL runs
 `ocrmypdf` + Tesseract to build a sidecar `*.ocr.pdf`, then parses that file.
-Native text PDFs are never re-OCR'd. Disable with `GASTA_ETL_DISABLE_OCR=1`.
+Usable existing text is preserved; corrupt text is replaced. Scanned tables are deskewed and their headers/grid columns are read separately so small prices are not assigned using another page's layout. Continuation pages reuse a header only when their physical column boundaries match. OpenCV is installed through `requirements.txt`. Disable OCR with `GASTA_ETL_DISABLE_OCR=1`.
+
+South Luzon week headings accept DOE's attributed list tags, retain all sibling PDFs, and keep the nearest archive year even when its heading is more than 4 KB away. A discovered bulletin older than the stored latest week fails instead of advancing the refresh timestamp. `--force` reloads validated sources; it does not bypass source validation. Scheduled weekly/retry jobs run the regression suite before ingestion.
 
 Local prerequisites (same as GitHub Actions):
 

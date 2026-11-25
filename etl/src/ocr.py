@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pdfplumber
@@ -27,12 +28,10 @@ def ocr_disabled() -> bool:
     }
 
 
-def _extract_full_text(path: Path) -> str:
-    parts: list[str] = []
+def _page_text_layers(path: Path) -> list[tuple[str, bool]]:
+    """Inspect every page, including scans inside an otherwise searchable PDF."""
     with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            parts.append(page.extract_text() or "")
-    return "\n".join(parts)
+        return [(page.extract_text() or "", bool(page.images)) for page in pdf.pages]
 
 
 def pdf_needs_ocr(path: Path) -> bool:
@@ -40,13 +39,16 @@ def pdf_needs_ocr(path: Path) -> bool:
     # Lazy import avoids a circular dependency with parse_bulletin.
     from .parse_bulletin import BulletinNotMachineReadable, _reject_corrupt_text_layer
 
-    text = _extract_full_text(path)
-    if not text.strip():
+    pages = _page_text_layers(path)
+    if not any(text.strip() for text, _ in pages):
         return True
-    try:
-        _reject_corrupt_text_layer(path.name, text)
-    except BulletinNotMachineReadable:
-        return True
+    for text, has_images in pages:
+        if not text.strip() and has_images:
+            return True
+        try:
+            _reject_corrupt_text_layer(path.name, text)
+        except BulletinNotMachineReadable:
+            return True
     return False
 
 
@@ -83,20 +85,28 @@ def _require_ocr_tools() -> str:
 
 
 def run_ocr(input_path: Path, output_path: Path) -> Path:
-    """Create a searchable PDF via ocrmypdf (--force-ocr)."""
-    from .parse_bulletin import BulletinNotMachineReadable
+    """OCR image pages while retaining usable native text and its coordinates."""
+    from .parse_bulletin import BulletinNotMachineReadable, _reject_corrupt_text_layer
 
     input_path = Path(input_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     launcher = _require_ocr_tools()
+    mode = "--skip-text"
+    for text, _ in _page_text_layers(input_path):
+        try:
+            _reject_corrupt_text_layer(input_path.name, text)
+        except BulletinNotMachineReadable:
+            mode = "--force-ocr"
+            break
     if launcher == "python":
         cmd = [
-            "python",
+            sys.executable,
             "-m",
             "ocrmypdf",
-            "--force-ocr",
+            mode,
+            "--jobs", "2",
             "--language",
             "eng",
             "--optimize",
@@ -108,7 +118,8 @@ def run_ocr(input_path: Path, output_path: Path) -> Path:
     else:
         cmd = [
             launcher,
-            "--force-ocr",
+            mode,
+            "--jobs", "2",
             "--language",
             "eng",
             "--optimize",
