@@ -259,9 +259,9 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
     if any(actual.get(identity) != value for identity, value in expected.items()):
         raise RuntimeError("Source price verification failed; obsolete rows were retained")
     stale_ids = [row["id"] for row in stored if next(iter(_stored_price_map([row]))) not in expected]
-    for offset in range(0, len(stale_ids), 250):
+    for offset in range(0, len(stale_ids), 100):
         (client.table("fuel_prices").delete().eq("bulletin_id", bulletin_id)
-            .eq("region_id", region_id).in_("id", stale_ids[offset:offset + 250]).execute())
+            .eq("region_id", region_id).in_("id", stale_ids[offset:offset + 100]).execute())
     if stale_ids and _stored_price_map(_read_region_prices(client, bulletin_id, region_id)) != expected:
         raise RuntimeError("Stored prices still differ from the source after reconciliation")
 
