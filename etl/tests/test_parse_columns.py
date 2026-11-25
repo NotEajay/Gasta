@@ -23,7 +23,51 @@ from src.parse_bulletin import (
     _reject_corrupt_text_layer,
     detect_company_columns,
     missing_core_fuels,
+    _propagate_block_areas,
+    ColumnAnchor,
+    _assign_page_prices,
+    _scanned_continuation_header,
 )
+
+
+def test_city_blocks_restart_when_zero_stock_ron100_rows_were_omitted():
+    rows = [('', 'RON 95', {'PETRON': [70]}), ('Manila', 'RON 91', {'PETRON': [69]}),
+            ('', 'DIESEL', {'PETRON': [80]}), ('', 'RON 95', {'PETRON': [72]}),
+            ('Makati', 'RON 91', {'PETRON': [71]}), ('', 'DIESEL', {'PETRON': [82]})]
+    assert [area for area, _, _ in _propagate_block_areas(rows)] == ['Manila'] * 3 + ['Makati'] * 3
+
+
+def test_scanned_cell_boundaries_keep_unknown_brands_and_overall_ranges_out_of_prices():
+    anchors = [ColumnAnchor(145, 'PETRON', 'PETRON', 120, 170),
+        ColumnAnchor(195, 'UNKNOWN', None, 170, 220),
+        ColumnAnchor(245, 'SHELL', 'SHELL', 220, 270),
+        ColumnAnchor(300, 'OVERALL', None, 270, 330)]
+    row = [{'text': text, 'x0': x, 'x1': x + 8, 'top': 20, 'bottom': 28}
+           for text, x in [('RON', 80), ('91', 100), ('70.00', 122), ('72.00', 155),
+                           ('1.00', 190), ('75.00', 225), ('80.00', 260), ('1.00', 290)]]
+    assert _assign_prices_by_column(row, anchors)[2] == {'PETRON': [70, 72], 'SHELL': [75, 80]}
+
+
+def test_city_cell_between_product_rows_still_labels_the_entire_block():
+    anchors = [ColumnAnchor(35, 'CITY / MUNICIPALITY', None, 10, 60),
+        ColumnAnchor(85, 'PRODUCT', None, 60, 110), ColumnAnchor(135, 'PETRON', 'PETRON', 110, 160)]
+    def row(values, y):
+        return [{'text': value, 'x0': x, 'x1': x + 8, 'top': y, 'bottom': y + 4} for value, x in values]
+    rows = [row([('RON', 70), ('95', 90), ('70.00', 120)], 20),
+            row([('Manila', 20)], 28),
+            row([('RON', 70), ('91', 90), ('69.00', 120)], 35),
+            row([('DIESEL', 70), ('80.00', 120)], 50)]
+    values = _propagate_block_areas(_assign_page_prices(rows, anchors))
+    assert [value[0] for value in values] == ['Manila'] * 3
+
+
+def test_continuation_header_requires_matching_physical_column_boundaries():
+    previous = [ColumnAnchor(135, 'PETRON', 'PETRON', 110, 160),
+                ColumnAnchor(185, 'SHELL', 'SHELL', 160, 210)]
+    marker = {'table_columns': [110.5, 160.5, 210.5], 'recognized_headers': 0}
+    assert len(_scanned_continuation_header([marker], previous)) == 2
+    assert _scanned_continuation_header([{**marker, 'table_columns': [90, 140, 190]}], previous) == []
+    assert _scanned_continuation_header([{**marker, 'recognized_headers': 1}], previous) == []
 
 # x positions copied from a real NCR bulletin's header row.
 HEADER = [

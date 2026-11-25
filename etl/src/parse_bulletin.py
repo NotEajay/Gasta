@@ -336,6 +336,8 @@ class ColumnAnchor:
     x: float
     label: str
     company: str | None  # None for non-brand columns (AREA, OVERALL RANGE, …)
+    left: float | None = None
+    right: float | None = None
 
 
 def _cluster_words_into_rows(words: list[dict]) -> list[list[dict]]:
@@ -358,7 +360,7 @@ def _header_anchors(row: list[dict]) -> list[ColumnAnchor]:
     anchors: list[ColumnAnchor] = []
     index = 0
     while index < len(row):
-        text = row[index]["text"].upper().strip(":.,")
+        text = row[index]["text"].upper().strip(":.,|{}[]_—–~ \t")
         pair = (
             f"{text} {row[index + 1]['text'].upper().strip(':.,')}"
             if index + 1 < len(row)
@@ -368,13 +370,19 @@ def _header_anchors(row: list[dict]) -> list[ColumnAnchor]:
             anchors.append(ColumnAnchor(row[index]["x0"], pair, ALIAS_TO_COMPANY[pair]))
             index += 2
             continue
-        anchors.append(ColumnAnchor(row[index]["x0"], text, ALIAS_TO_COMPANY.get(text)))
+        anchors.append(ColumnAnchor(row[index]["x0"], text, ALIAS_TO_COMPANY.get(text),
+            row[index].get('column_left'), row[index].get('column_right')))
         index += 1
     return anchors
 
 
 def _find_header_anchors(rows: list[list[dict]]) -> list[ColumnAnchor] | None:
     """The row naming the most brands is the table header."""
+    scanned_header = [word for row in rows for word in row if word.get('table_header')]
+    if scanned_header:
+        anchors = _header_anchors(sorted(scanned_header, key=lambda word: word['x0']))
+        if len({anchor.company for anchor in anchors if anchor.company}) >= 3:
+            return anchors
     best: list[ColumnAnchor] | None = None
     best_brands = 0
     for row in rows:
@@ -395,6 +403,28 @@ def detect_company_columns(anchors: list[ColumnAnchor]) -> list[str]:
     return seen
 
 
+def _scanned_continuation_header(words: list[dict], previous: list[ColumnAnchor] | None) -> list[dict]:
+    """Reuse a continuation's header only when its actual grid still matches."""
+    marker = next((word for word in words if 'table_columns' in word), None)
+    if not previous or not marker or marker['recognized_headers']:
+        return []
+    columns = marker['table_columns']
+    if not columns:
+        return []
+    headers = []
+    for anchor in previous:
+        if anchor.left is None or anchor.right is None:
+            return []
+        left = min(columns, key=lambda x: abs(x - anchor.left))
+        right = min(columns, key=lambda x: abs(x - anchor.right))
+        if abs(left - anchor.left) > 3 or abs(right - anchor.right) > 3:
+            return []
+        headers.append({'text': anchor.label, 'x0': (left + right) / 2, 'x1': right,
+            'top': -20, 'bottom': -10, 'table_header': True,
+            'column_left': left, 'column_right': right})
+    return headers
+
+
 # A price cell is centred on its header, so its left edge can sit a little left of the
 # header's. This is how far left of the first brand header the price area still reaches.
 CELL_LEFT_BLEED = 20.0
@@ -402,6 +432,12 @@ CELL_LEFT_BLEED = 20.0
 
 def _table_left_edge(anchors: list[ColumnAnchor]) -> float | None:
     """The x where the price area begins; label columns are everything left of it."""
+    product = next((anchor for anchor in anchors if anchor.label == 'PRODUCT' and anchor.right is not None), None)
+    if product:
+        return product.right
+    bounded = [anchor.left for anchor in anchors if anchor.company and anchor.left is not None]
+    if bounded:
+        return min(bounded)
     brand_xs = [a.x for a in anchors if a.company]
     return min(brand_xs) - CELL_LEFT_BLEED if brand_xs else None
 
@@ -462,7 +498,13 @@ def _assign_prices_by_column(
         price = _parse_price_token(word["text"])
         if price is None:
             continue
-        anchor = min(anchors, key=lambda a: abs(a.x - word["x0"]))
+        bounded = [a for a in anchors if a.left is not None and a.right is not None]
+        if bounded:
+            anchor = next((a for a in bounded if a.left <= word['x0'] < a.right), None)
+            if anchor is None:
+                continue
+        else:
+            anchor = min(anchors, key=lambda a: abs(a.x - word["x0"]))
         if anchor.company:
             by_company.setdefault(anchor.company, []).append(price)
     return area_name, fuel_label, by_company
@@ -481,8 +523,13 @@ def _propagate_block_areas(
 
     blocks: list[list[tuple[str, str, dict[str, list[float]]]]] = []
     current: list[tuple[str, str, dict[str, list[float]]]] = []
+    order = {fuel: index for index, fuel in enumerate(
+        ("RON 100", "RON 97", "RON 95", "RON 91", "DIESEL", "DIESEL PLUS", "KEROSENE"))}
     for area_name, fuel_label, by_company in rows:
-        if fuel_label == "RON 100" and current:
+        # Zero/no-stock RON 100 rows do not reach this function. Detect the
+        # product-order restart as well, so a city's other fuels never inherit
+        # the previous city's label when the first available product is RON 95.
+        if current and order[fuel_label] <= order[current[-1][1]]:
             blocks.append(current)
             current = []
         current.append((area_name, fuel_label, by_company))
@@ -496,6 +543,31 @@ def _propagate_block_areas(
             # Prefer the row's own city when present; only fill blanks from the block.
             filled.append((area_name or block_area, fuel_label, by_company))
     return filled
+
+
+def _assign_page_prices(rows: list[list[dict]], anchors: list[ColumnAnchor]):
+    """Keep merged city cells even when their text sits between product rows."""
+    assigned = [(row, result) for row in rows if (result := _assign_prices_by_column(row, anchors))]
+    city = next((anchor for anchor in anchors if anchor.left is not None and
+                 ('CITY' in anchor.label or 'MUNICIPALITY' in anchor.label)), None)
+    if not city or not assigned:
+        return [result for _, result in assigned]
+    centers = [(min(word['top'] for word in row) + max(word['bottom'] for word in row)) / 2
+               for row, _ in assigned]
+    result = [('', value[1], value[2]) for _, value in assigned]
+    for row in rows:
+        if any(word.get('table_header') for word in row):
+            continue
+        label_words = [word for word in row if city.left <= word['x0'] < city.right]
+        label = _normalize_area_name(' '.join(word['text'] for word in label_words))
+        if not label or label in {'City', 'Municipality'}:
+            continue
+        center = (min(word['top'] for word in label_words) + max(word['bottom'] for word in label_words)) / 2
+        if center < min(centers) - 5 or center > max(centers) + 5:
+            continue
+        index = min(range(len(centers)), key=lambda index: abs(center - centers[index]))
+        result[index] = (label, result[index][1], result[index][2])
+    return result
 
 
 def missing_core_fuels(prices: list[ParsedPrice]) -> list[str]:
@@ -665,15 +737,30 @@ def parse_bulletin_pdf(
     # Scanned / corrupt-text DOE PDFs (often North Luzon): OCR once into a
     # sidecar, then parse as usual. Native text PDFs are unchanged.
     from .ocr import ensure_machine_readable_pdf
+    from .scanned_tables import extract_scanned_words, is_scanned_page
 
     path = ensure_machine_readable_pdf(path)
 
     full_text_parts: list[str] = []
     page_rows: list[list[list[dict]]] = []
+    previous_scanned_anchors = None
     with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
+        for page_number, page in enumerate(pdf.pages, start=1):
             full_text_parts.append(page.extract_text() or "")
-            page_rows.append(_cluster_words_into_rows(page.extract_words()))
+            if is_scanned_page(page):
+                words = extract_scanned_words(page, path, page_number)
+                rows = _cluster_words_into_rows(words)
+                if not _find_header_anchors(rows):
+                    words.extend(_scanned_continuation_header(words, previous_scanned_anchors))
+                    rows = _cluster_words_into_rows(words)
+                if not _find_header_anchors(rows):
+                    raise BulletinNotMachineReadable(
+                        f"{path.name} page {page_number} has no reliable scanned table header"
+                    )
+                previous_scanned_anchors = _find_header_anchors(rows)
+                page_rows.append(rows)
+            else:
+                page_rows.append(_cluster_words_into_rows(page.extract_words()))
     full_text = "\n".join(full_text_parts)
 
     if not full_text.strip():
@@ -717,11 +804,7 @@ def parse_bulletin_pdf(
             if company not in company_columns:
                 company_columns.append(company)
 
-        for row in rows:
-            assigned = _assign_prices_by_column(row, anchors)
-            if not assigned:
-                continue
-            assigned_rows.append(assigned)
+        assigned_rows.extend(_assign_page_prices(rows, anchors))
 
     if anchors is not None:
         for area_name, fuel_label, by_company in _propagate_block_areas(assigned_rows):

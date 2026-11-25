@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+from decimal import Decimal
 from datetime import date, datetime, timezone
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,7 @@ from supabase import Client, create_client
 
 from .constants import FUEL_TYPE_CODES, REGION_CODES
 from .freshness import estimated_doe_posted_date
-from .parse_bulletin import ParsedBulletin, slugify_company
+from .parse_bulletin import ParsedBulletin, ParsedPrice, slugify_company
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -147,9 +149,65 @@ def _ensure_oil_companies(client: Client, names: set[str]) -> dict[str, str]:
     return ids
 
 
+def _source_price_map(parsed: ParsedBulletin) -> dict[tuple[str, str, str], Decimal]:
+    """Only prices present in this week's source may belong to this bulletin."""
+    prices: dict[tuple[str, str, str], Decimal] = {}
+    for price in parsed.prices:
+        value = Decimal(str(price.price_per_liter))
+        if not value.is_finite() or value <= 0:
+            raise ValueError("Source prices must be finite positive numbers")
+        identity = (slugify_company(price.company), price.fuel_type_code, price.area_name or "")
+        if identity in prices:
+            raise ValueError(f"Duplicate source price identity: {identity}")
+        prices[identity] = value
+    if not prices:
+        raise ValueError("Refusing to replace a bulletin with no source prices")
+    return prices
+
+
+def _stored_price_map(rows: list[dict]) -> dict[tuple[str, str, str], Decimal]:
+    return {
+        (row["oil_companies"]["slug"], row["fuel_types"]["code"], row.get("area_name") or ""):
+        Decimal(str(row["price_per_liter"]))
+        for row in rows
+    }
+
+
+def _read_region_prices(client: Client, bulletin_id: str, region_id: str) -> list[dict]:
+    """Read the whole scope; a region can exceed PostgREST's first-page limit."""
+    rows: list[dict] = []
+    page_size = 500
+    for offset in range(0, 1_000_000, page_size):
+        response = (client.table("fuel_prices")
+            .select("id,area_name,price_per_liter,oil_companies(name,slug),fuel_types(code)")
+            .eq("bulletin_id", bulletin_id).eq("region_id", region_id)
+            .order("id").range(offset, offset + page_size - 1).execute())
+        page = response.data or []
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+    raise RuntimeError("Price scope exceeded the pagination safety limit")
+
+
+def stored_prices_match(parsed: ParsedBulletin) -> bool:
+    """Detect missing prices, changed source values, and old carried-forward rows."""
+    expected = _source_price_map(parsed)
+    client = _client()
+    bulletin = (client.table("fuel_price_bulletins").select("id")
+        .eq("bulletin_date", parsed.bulletin_date.isoformat()).maybe_single().execute())
+    region = (client.table("regions").select("id")
+        .eq("code", parsed.region_code).maybe_single().execute())
+    if not bulletin or not bulletin.data or not region or not region.data:
+        return False
+    return _stored_price_map(_read_region_prices(client, bulletin.data["id"], region.data["id"])) == expected
+
+
 def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str, int]:
     if parsed.region_code not in REGION_CODES.values():
         raise ValueError(f"Unknown region code: {parsed.region_code}")
+    expected = _source_price_map(parsed)
+    if parsed.validation_errors:
+        raise ValueError("Source validation failed: " + "; ".join(parsed.validation_errors))
 
     if dry_run:
         return {
@@ -165,19 +223,15 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
     region_ids = _fetch_id_map(client, "regions", "code")
     fuel_type_ids = _fetch_id_map(client, "fuel_types", "code")
     region_id = region_ids[parsed.region_code]
+    unknown = {price.fuel_type_code for price in parsed.prices} - fuel_type_ids.keys()
+    if unknown:
+        raise ValueError(f"Unknown source fuel types: {sorted(unknown)}")
 
     bulletin_id = _upsert_bulletin(client, parsed)
     company_ids = _ensure_oil_companies(client, {p.company for p in parsed.prices})
 
-    # Replace this region's rows for the week so city/area grain can expand safely.
-    client.table("fuel_prices").delete().eq("bulletin_id", bulletin_id).eq(
-        "region_id", region_id
-    ).execute()
-
     rows_to_upsert = []
     for price in parsed.prices:
-        if price.fuel_type_code not in fuel_type_ids:
-            continue
         company_id = company_ids[price.company]
         fuel_type_id = fuel_type_ids[price.fuel_type_code]
         rows_to_upsert.append(
@@ -192,11 +246,24 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
         )
 
     duplicates_skipped = 0
-    if rows_to_upsert:
+    # Verify every source row exists before removing obsolete rows. A failed
+    # upload must never empty a region/week that was already serving prices.
+    for offset in range(0, len(rows_to_upsert), 500):
         client.table("fuel_prices").upsert(
-            rows_to_upsert,
+            rows_to_upsert[offset:offset + 500],
             on_conflict="bulletin_id,region_id,oil_company_id,fuel_type_id,area_name",
         ).execute()
+
+    stored = _read_region_prices(client, bulletin_id, region_id)
+    actual = _stored_price_map(stored)
+    if any(actual.get(identity) != value for identity, value in expected.items()):
+        raise RuntimeError("Source price verification failed; obsolete rows were retained")
+    stale_ids = [row["id"] for row in stored if next(iter(_stored_price_map([row]))) not in expected]
+    for offset in range(0, len(stale_ids), 250):
+        (client.table("fuel_prices").delete().eq("bulletin_id", bulletin_id)
+            .eq("region_id", region_id).in_("id", stale_ids[offset:offset + 250]).execute())
+    if stale_ids and _stored_price_map(_read_region_prices(client, bulletin_id, region_id)) != expected:
+        raise RuntimeError("Stored prices still differ from the source after reconciliation")
 
     return {
         "bulletin_date": parsed.bulletin_date.isoformat(),
@@ -207,73 +274,37 @@ def load_bulletin(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str,
 
 
 def merge_bulletin_prices(parsed: ParsedBulletin, *, dry_run: bool = False) -> dict[str, int]:
-    """Upsert prices for one PDF into an existing region/week without wiping siblings.
+    """Merge a recovered same-week source and recompute all regional minima.
 
-    Used when a previously 403 sub-region PDF (e.g. Bicol) becomes available: keep
-    Calabarzon/Mimaropa rows, replace only the area_names present in this parse
-    (so carried-forward placeholders for those cities are overwritten).
+    Sibling sub-regions remain under the same original week. A partial source's
+    regional summary must never overwrite the minima of the complete region.
     """
-    if parsed.region_code not in REGION_CODES.values():
-        raise ValueError(f"Unknown region code: {parsed.region_code}")
-
+    _source_price_map(parsed)
     if dry_run:
-        return {
-            "bulletin_date": parsed.bulletin_date.isoformat(),
-            "price_rows": len(parsed.prices),
-            "companies": len({p.company for p in parsed.prices}),
-            "duplicates_skipped": 0,
-            "dry_run": 1,
-            "merged": 1,
-        }
-
+        return {**load_bulletin(parsed, dry_run=True), "merged": 1}
     client = _client()
-    require_history_schema()
-    region_ids = _fetch_id_map(client, "regions", "code")
-    fuel_type_ids = _fetch_id_map(client, "fuel_types", "code")
-    region_id = region_ids[parsed.region_code]
-
-    bulletin_id = _upsert_bulletin(client, parsed)
-    company_ids = _ensure_oil_companies(client, {p.company for p in parsed.prices})
-
-    areas = sorted({p.area_name or "" for p in parsed.prices})
-    for area_name in areas:
-        query = (
-            client.table("fuel_prices")
-            .delete()
-            .eq("bulletin_id", bulletin_id)
-            .eq("region_id", region_id)
-            .eq("area_name", area_name)
-        )
-        query.execute()
-
-    rows_to_upsert = []
-    for price in parsed.prices:
-        if price.fuel_type_code not in fuel_type_ids:
-            continue
-        rows_to_upsert.append(
-            {
-                "bulletin_id": bulletin_id,
-                "region_id": region_id,
-                "oil_company_id": company_ids[price.company],
-                "fuel_type_id": fuel_type_ids[price.fuel_type_code],
-                "area_name": price.area_name or "",
-                "price_per_liter": price.price_per_liter,
-            }
-        )
-
-    if rows_to_upsert:
-        client.table("fuel_prices").upsert(
-            rows_to_upsert,
-            on_conflict="bulletin_id,region_id,oil_company_id,fuel_type_id,area_name",
-        ).execute()
-
-    return {
-        "bulletin_date": parsed.bulletin_date.isoformat(),
-        "price_rows": len(rows_to_upsert),
-        "companies": len(company_ids),
-        "duplicates_skipped": 0,
-        "merged": 1,
-    }
+    bulletin = (client.table("fuel_price_bulletins").select("id,source_urls")
+        .eq("bulletin_date", parsed.bulletin_date.isoformat()).maybe_single().execute())
+    region = (client.table("regions").select("id")
+        .eq("code", parsed.region_code).maybe_single().execute())
+    areas = {price.area_name for price in parsed.prices if price.area_name}
+    if not bulletin or not bulletin.data or not region or not region.data or not areas:
+        return {**load_bulletin(parsed), "merged": 1}
+    existing = _read_region_prices(client, bulletin.data["id"], region.data["id"])
+    prices = [ParsedPrice(row["oil_companies"]["name"], row["fuel_types"]["code"],
+                          float(row["price_per_liter"]), row["area_name"])
+              for row in existing if row.get("area_name") and row["area_name"] not in areas]
+    prices.extend(price for price in parsed.prices if price.area_name)
+    minima: dict[tuple[str, str], float] = {}
+    for price in prices:
+        identity = price.company, price.fuel_type_code
+        minima[identity] = min(minima.get(identity, price.price_per_liter), price.price_per_liter)
+    prices.extend(ParsedPrice(company, fuel, value) for (company, fuel), value in minima.items())
+    previous_sources = (bulletin.data.get("source_urls") or {}).get(parsed.region_code, "")
+    sources = dict.fromkeys(source.strip() for source in
+        [*previous_sources.split(";"), *(parsed.source_url or "").split(";")] if source.strip())
+    combined = replace(parsed, prices=prices, source_url="; ".join(sources) or parsed.source_url)
+    return {**load_bulletin(combined), "merged": 1}
 
 
 def touch_bulletin_fetched_at(bulletin_date: date) -> None:

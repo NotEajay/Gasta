@@ -63,7 +63,6 @@ def weekly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     ))
     monkeypatch.setattr(automation, "clear_pending_download", Mock())
     monkeypatch.setattr(automation, "parse_region_pdfs", lambda paths, code, **_: parsed(code))
-    monkeypatch.setattr(automation, "carry_forward_missing_areas", lambda _: [])
     monkeypatch.setattr(automation, "missing_core_fuels", lambda _: [])
     monkeypatch.setattr(automation, "_region_already_loaded", lambda *_: False)
     load = Mock(return_value={"price_rows": 12, "companies": 3})
