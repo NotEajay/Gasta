@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-11-12",
+  "reviewed_by": "Codex",
+  "records": [
+    {
+      "source_station_id": "3",
+      "source_name": "Unioil NAIA RD., STO.NINO",
+      "source_address": "Ninoy Aquino Ave., Sto. Niño, Parañaque City",
+      "source_fingerprint": "a306fed767915c37b315409cb178b8e77e6cd935f7c2d79808030efa5096f662",
+      "published_coordinates": [
+        14.62152,
+        121.005367
+      ],
+      "reason": "The locator publishes the same pin for NAIA Road in Paranaque and Quezon Avenue in Quezon City. Separate official IDs, names, addresses and city lists establish different branches. Omit GPS for both; retain address-only identities without selecting or guessing a replacement pin."
+    },
+    {
+      "source_station_id": "1",
+      "source_name": "Unioil QUEZON AVE., LOURDES",
+      "source_address": "Quezon Avenue, Lourdes, Sta. Mesa Heights, Quezon City",
+      "source_fingerprint": "406e1d683b13365e39f55ee5f0e101bfb2d93b84ee08f8fe0607d357a771dcd7",
+      "published_coordinates": [
+        14.62152,
+        121.005367
+      ],
+      "reason": "The locator publishes the same pin for NAIA Road in Paranaque and Quezon Avenue in Quezon City. Separate official IDs, names, addresses and city lists establish different branches. Omit GPS for both; retain address-only identities without selecting or guessing a replacement pin."
+    }
+  ]
+}

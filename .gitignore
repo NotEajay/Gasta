@@ -25,3 +25,6 @@ venv/
 etl/data/
 etl/.venv/
 etl/.env
+
+# Local Supabase CLI connection/cache metadata
+supabase/.temp/

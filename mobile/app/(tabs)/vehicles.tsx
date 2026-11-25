@@ -1,12 +1,9 @@
-import type { ComponentRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import ScreenHeader from '@/components/ui/ScreenHeader';
 import AuthPrompt from '@/components/AuthPrompt';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import VehicleSharePanel from '@/components/VehicleSharePanel';
@@ -25,18 +22,15 @@ import {
   GasTaRadius,
   GasTaSpacing,
   palette,
-  shadow,
   typeScale,
 } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
-import { useResponsive } from '@/hooks/useResponsive';
 import { formatCurrency, formatDate } from '@/lib/format';
 import {
   archiveVehicle,
   createVehicle,
   deleteVehicle,
-  DUPLICATE_VEHICLE_NAME_MESSAGE,
   fetchArchivedVehicles,
   fetchFuelTypeIdByCode,
   fetchSharedVehicles,
@@ -51,59 +45,11 @@ import {
 import { isSupabaseConfigured } from '@/lib/supabase';
 import type { SharedVehicle, Vehicle, VehicleCatalogEntry } from '@/types';
 
-/**
- * Normalization rule for vehicle-nickname uniqueness, mirroring the DB index
- * `lower(btrim(nickname))`. Trims surrounding whitespace and lower-cases, so
- * "My Car", "my car" and " MY CAR " are all treated as the same name.
- */
-const normalizeVehicleName = (value: string) => value.trim().toLowerCase();
-
 export default function VehiclesScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
-  const { contentMaxWidth, isDesktop } = useResponsive();
-  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
-  const insets = useSafeAreaInsets();
-  const scrollOffset = useRef(0);
-  const keyboardTarget = useRef<ComponentRef<typeof View> | null>(null);
-  const keyboardScrollFrame = useRef<number | null>(null);
-  const revealAboveKeyboard = useCallback((target: ComponentRef<typeof View> | null) => {
-    keyboardTarget.current = target;
-    if (keyboardScrollFrame.current !== null) cancelAnimationFrame(keyboardScrollFrame.current);
-    if (!target || !Keyboard.isVisible()) return;
-    keyboardScrollFrame.current = requestAnimationFrame(() => {
-      keyboardScrollFrame.current = null;
-      const scroll = scrollRef.current;
-      if (!scroll || keyboardTarget.current !== target) return;
-      scroll.getNativeScrollRef()?.measureInWindow((_x, top, _width, height) => {
-        target.measureInWindow((_targetX, targetTop, _targetWidth, targetHeight) => {
-          if (keyboardTarget.current !== target || !Keyboard.isVisible()) return;
-          const keyboardTop = Keyboard.metrics()?.screenY ?? top + height;
-          const visibleBottom = Math.min(top + height, keyboardTop) - GasTaSpacing.md;
-          const overflow = targetTop + targetHeight - visibleBottom;
-          // Move only by the obscured portion, never jump to the panel's top.
-          const visibleTop = top + GasTaSpacing.md;
-          const adjustment = overflow > 0 ? overflow : Math.min(0, targetTop - visibleTop);
-          if (adjustment !== 0) {
-            scroll.scrollTo({ y: Math.max(0, scrollOffset.current + adjustment), animated: true });
-          }
-        });
-      });
-    });
-  }, []);
-
-  useEffect(() => {
-    const shown = Keyboard.addListener('keyboardDidShow', () => revealAboveKeyboard(keyboardTarget.current));
-    const hidden = Keyboard.addListener('keyboardDidHide', () => {
-      keyboardTarget.current = null;
-    });
-    return () => {
-      shown.remove();
-      hidden.remove();
-      if (keyboardScrollFrame.current !== null) cancelAnimationFrame(keyboardScrollFrame.current);
-    };
-  }, [revealAboveKeyboard]);
+  const scrollRef = useRef<ScrollView>(null);
   // The add/edit form is collapsed by default so saved vehicles lead the page.
   const [formOpen, setFormOpen] = useState(false);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -113,7 +59,6 @@ export default function VehiclesScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const restoreRequestRef = useRef<{ phase: 'confirming' | 'restoring' } | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [destructiveBusy, setDestructiveBusy] = useState(false);
 
@@ -130,18 +75,6 @@ export default function VehiclesScreen() {
   const [lastRefillPrice, setLastRefillPrice] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
-
-  // Duplicate active-nickname modal. Fully independent of the overflow-menu
-  // Modal so the two never interfere. `name` is the conflicting nickname shown
-  // in the message; opened by both the client pre-check and the DB 23505
-  // fallback, and reused for a restore conflict surfaced on this screen.
-  const [duplicateNameModal, setDuplicateNameModal] = useState<{
-    visible: boolean;
-    name: string;
-  }>({
-    visible: false,
-    name: '',
-  });
 
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editLastRefillPrice, setEditLastRefillPrice] = useState('');
@@ -172,20 +105,10 @@ export default function VehiclesScreen() {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number } | null>(
     null,
   );
-  const triggerNodes = useRef<Record<string, ComponentRef<typeof View> | null>>({});
+  const triggerNodes = useRef<Record<string, View | null>>({});
   // Guards the async probe against a closed menu / a second menu opening:
   // only the latest probe for the currently open vehicle may write state.
   const menuProbeSeq = useRef(0);
-  // Deferred menu cleanup. The fade-out Modal keeps its children
-  // mounted for the whole native animation (iOS until the
-  // 'modalDismissed' event, web until the CSS animation ends),
-  // so closeMenu() freezes the menu's visual state and scrubs
-  // it only once the Modal reports onDismiss. Otherwise the
-  // fading menu teleports to the fallback corner and swaps its
-  // content mid-fade. menuClosePendingRef marks a close whose
-  // scrub is still pending; a reopen cancels it.
-  const menuClosePendingRef = useRef(false);
-  const menuCleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const toggleShare = useCallback((vehicleId: string) => {
     setShareOpenId((current) => (current === vehicleId ? null : vehicleId));
@@ -205,13 +128,6 @@ export default function VehiclesScreen() {
   const openMenu = useCallback((vehicle: Vehicle) => {
     const seq = menuProbeSeq.current + 1;
     menuProbeSeq.current = seq;
-    // This menu replaces any pending close: cancel its deferred
-    // scrub so it can never clear this menu's fresh state.
-    menuClosePendingRef.current = false;
-    if (menuCleanupTimerRef.current != null) {
-      clearTimeout(menuCleanupTimerRef.current);
-      menuCleanupTimerRef.current = null;
-    }
     // Measure BEFORE showing the modal: menuVisible stays false until the
     // anchor resolves, so the first painted frame is already positioned and
     // there is no jump from the fallback corner.
@@ -252,46 +168,14 @@ export default function VehiclesScreen() {
       });
   }, []);
 
-  /**
-   * Scrubs the menu's visual state. Only safe once the Modal
-   * is fully dismissed: while the fade-out animation runs, the
-   * menu must keep its anchor and content frozen or it
-   * visibly jumps.
-   */
-  const scrubMenuVisualState = useCallback(() => {
+  const closeMenu = useCallback(() => {
+    menuProbeSeq.current += 1;
+    menuForRef.current = null;
+    setMenuVisible(false);
     setMenuFor(null);
     setMenuHistoryState('idle');
     setMenuAnchor(null);
   }, []);
-
-  const closeMenu = useCallback(() => {
-    // Stale-probe invalidation stays IMMEDIATE: no in-flight
-    // probe may write state after close, and a rapid reopen
-    // must never observe the previous menu's state.
-    menuProbeSeq.current += 1;
-    menuForRef.current = null;
-    // Fade-out first, scrub after. The Modal keeps its children
-    // mounted while animating out (iOS 'modalDismissed' and the
-    // web CSS animation end both surface as onDismiss), so
-    // clearing menuFor / menuAnchor / menuHistoryState here made
-    // the fading menu teleport to the fallback corner and swap
-    // its content mid-fade — the "floating card" artifact.
-    // onDismiss scrubs as soon as the animation finishes; the
-    // timer is the fallback for platforms that never call
-    // onDismiss (Android), where the content unmounts
-    // immediately anyway.
-    menuClosePendingRef.current = true;
-    if (menuCleanupTimerRef.current != null) {
-      clearTimeout(menuCleanupTimerRef.current);
-    }
-    setMenuVisible(false);
-    menuCleanupTimerRef.current = setTimeout(() => {
-      menuCleanupTimerRef.current = null;
-      if (!menuClosePendingRef.current) return;
-      menuClosePendingRef.current = false;
-      scrubMenuVisualState();
-    }, 400);
-  }, [scrubMenuVisualState]);
 
   // Leaving Vehicles (tab switch / stack push) must never leave a stale
   // overlay behind: close the menu, clear the anchor, and invalidate any
@@ -299,21 +183,14 @@ export default function VehiclesScreen() {
   useFocusEffect(
     useCallback(() => {
       return () => {
-        keyboardTarget.current = null;
-        if (keyboardScrollFrame.current !== null) cancelAnimationFrame(keyboardScrollFrame.current);
-        // The screen is unmounting, so the deferred close can
-        // never run — cancel it and force-clean immediately.
         menuProbeSeq.current += 1;
         menuForRef.current = null;
-        menuClosePendingRef.current = false;
-        if (menuCleanupTimerRef.current != null) {
-          clearTimeout(menuCleanupTimerRef.current);
-          menuCleanupTimerRef.current = null;
-        }
         setMenuVisible(false);
-        scrubMenuVisualState();
+        setMenuFor(null);
+        setMenuHistoryState('idle');
+        setMenuAnchor(null);
       };
-    }, [scrubMenuVisualState]),
+    }, []),
   );
 
   const searchResults = useMemo(() => {
@@ -432,25 +309,6 @@ export default function VehiclesScreen() {
     setFormOpen(false);
   };
 
-  /**
-   * Opens the shared duplicate-name modal for a given nickname. Used by the
-   * client pre-check (create/edit) and by the DB 23505 fallback so both paths
-   * show the exact same friendly dialog. Never clears the entered value.
-   */
-  const showDuplicateNameModal = (name: string) => {
-    setDuplicateNameModal({ visible: true, name });
-  };
-
-  /**
-   * Dismisses the duplicate-name modal. The form is left open and the entered
-   * value untouched; we scroll the form back into view so the Vehicle name
-   * field — which still shows its inline error — keeps the user's attention.
-   */
-  const hideDuplicateNameModal = () => {
-    setDuplicateNameModal((prev) => ({ ...prev, visible: false }));
-    if (formOpen) revealForm();
-  };
-
   const handleAdd = async () => {
     if (!user) return;
 
@@ -465,26 +323,6 @@ export default function VehiclesScreen() {
 
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
-      return;
-    }
-
-    // Active per-owner nickname uniqueness (mirrors the DB partial unique index
-    // vehicles_user_active_nickname_unique). Compare only nicknames — never
-    // brand/model — against this user's ACTIVE vehicles. On edit, exclude the
-    // vehicle being edited so it may keep (or merely re-case / re-space) its
-    // own name, while still being blocked from taking another vehicle's name.
-    const normalizedName = normalizeVehicleName(vehicleName);
-    const nicknameClash = vehicles.some(
-      (v) =>
-        v.id !== editingVehicle?.id &&
-        v.nickname != null &&
-        normalizeVehicleName(v.nickname) === normalizedName,
-    );
-    if (nicknameClash) {
-      // Keep the inline field error AND surface the shared modal. The form
-      // stays open with the entered value intact.
-      setFieldErrors((prev) => ({ ...prev, vehicleName: DUPLICATE_VEHICLE_NAME_MESSAGE }));
-      showDuplicateNameModal(vehicleName);
       return;
     }
 
@@ -536,16 +374,7 @@ export default function VehiclesScreen() {
         editingVehicle ? 'Vehicle updated successfully.' : 'Vehicle added to your profile.',
       );
     } catch (e) {
-      // A duplicate returned from the DB/service arrives here as
-      // DUPLICATE_VEHICLE_NAME_MESSAGE (service maps 23505 → that message).
-      // Show the SAME custom modal — never a second native Alert on top of it —
-      // and keep the inline field error. All other errors keep the native path.
-      if (e instanceof Error && e.message === DUPLICATE_VEHICLE_NAME_MESSAGE) {
-        setFieldErrors((prev) => ({ ...prev, vehicleName: DUPLICATE_VEHICLE_NAME_MESSAGE }));
-        showDuplicateNameModal(vehicleName);
-      } else {
-        Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save vehicle');
-      }
+      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save vehicle');
     } finally {
       setSaving(false);
     }
@@ -666,31 +495,18 @@ export default function VehiclesScreen() {
   };
 
   const handleRestore = (vehicleId: string, label: string) => {
-    if (restoreRequestRef.current) return;
-    const request = { phase: 'confirming' as 'confirming' | 'restoring' };
-    restoreRequestRef.current = request;
     Alert.alert('Restore vehicle?', `Return "${label}" to your active vehicles?`, [
-      { text: 'Cancel', style: 'cancel', onPress: () => { if (restoreRequestRef.current === request) restoreRequestRef.current = null; } },
+      { text: 'Cancel', style: 'cancel' },
       {
         text: 'Restore',
         onPress: async () => {
-          if (restoreRequestRef.current !== request || request.phase !== 'confirming') return;
-          request.phase = 'restoring';
           setRestoringId(vehicleId);
           try {
             await restoreVehicle(vehicleId);
             await load();
           } catch (e) {
-            // Restoring an archived vehicle can collide with an ACTIVE vehicle
-            // of the same name; the service maps that 23505 to the duplicate
-            // message. Surface the SAME custom modal instead of a native Alert.
-            if (e instanceof Error && e.message === DUPLICATE_VEHICLE_NAME_MESSAGE) {
-              showDuplicateNameModal(label);
-            } else {
-              Alert.alert('Error', e instanceof Error ? e.message : 'Failed to restore');
-            }
+            Alert.alert('Error', e instanceof Error ? e.message : 'Failed to restore');
           } finally {
-            if (restoreRequestRef.current === request) restoreRequestRef.current = null;
             setRestoringId(null);
           }
         },
@@ -698,31 +514,33 @@ export default function VehiclesScreen() {
     ]);
   };
 
-  // Same friendly dialog in either native host. A second native Modal on top
-  // of the archive sheet can fail to present on iOS.
-  const duplicateNameContent = (
-    <View style={styles.dupNameCard}>
-      <View style={styles.dupNameIcon}>
-        <Ionicons name="information-circle" size={22} color={GasTaColors.forest} />
-      </View>
-      <Text style={styles.dupNameTitle}>Vehicle name already used</Text>
-      <Text style={styles.dupNameMessage}>
-        You already have an active vehicle named “{duplicateNameModal.name}”. Please use a
-        different name.
+  /**
+   * Archive is the safe destructive direction, so it stays
+   * actionable both while history is unresolved (loading/idle)
+   * and once it resolves to has-history / unknown. Defined
+   * once so the fixed two-row menu slot can render it in
+   * either row without duplicating markup.
+   */
+  const archiveAction = (
+    <Pressable
+      accessibilityRole="menuitem"
+      accessibilityLabel="Archive vehicle"
+      onPress={() => {
+        const target = menuFor;
+        closeMenu();
+        if (target) handleDelete(target.id, 'has-history');
+      }}
+      style={({ pressed }) => [
+        styles.menuItem,
+        styles.menuSlotRow,
+        pressed && styles.menuItemPressed,
+      ]}>
+      <Ionicons name="archive-outline" size={16} color={palette.danger} />
+      <Text style={[styles.menuItemText, styles.menuItemDanger]} numberOfLines={1}>
+        Archive vehicle
       </Text>
-      <PrimaryButton label="Got it" onPress={hideDuplicateNameModal} />
-    </View>
+    </Pressable>
   );
-  const closeArchived = () => {
-    if (duplicateNameModal.visible) hideDuplicateNameModal();
-    else setArchivedOpen(false);
-  };
-
-  const menuActionLoading = menuHistoryState === 'loading' || menuHistoryState === 'idle';
-  const menuActionIsDelete = menuHistoryState === 'no-history';
-  const menuActionLabel = menuActionLoading
-    ? 'Checking action…'
-    : menuActionIsDelete ? 'Delete vehicle' : 'Archive vehicle';
 
   if (!isSupabaseConfigured) {
     return (
@@ -748,27 +566,17 @@ export default function VehiclesScreen() {
     // `app/(tabs)/_layout.tsx`, which sits above this scene's safe-area and
     // tab-bar insets, so the cream reaches the physical top and bottom edges.
     <HideWhenBlurred>
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}>
     <ScrollView
       ref={scrollRef}
-      onScroll={(event) => {
-        scrollOffset.current = event.nativeEvent.contentOffset.y;
-        tabBarScrollHandler(event);
-      }}
-      onLayout={() => revealAboveKeyboard(keyboardTarget.current)}
-      keyboardShouldPersistTaps="handled"
-      keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
       style={styles.flex}
-      contentContainerStyle={[
-        styles.content,
-        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' },
-      ]}
+      contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}>
-      <ScreenHeader eyebrow="Your garage" title="Vehicles" subtitle="Every vehicle. Every refill. All in one place." />
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Vehicles</Text>
+        <Text style={styles.headerSubtitle}>Manage your vehicles and fuel details.</Text>
+      </View>
 
       {formOpen ? (
         <View style={styles.formCard}>
@@ -949,16 +757,13 @@ export default function VehiclesScreen() {
       ) : (
         <>
           <Text style={styles.sectionLabel}>Saved vehicles</Text>
-          <View style={[styles.vehicleGrid, isDesktop && styles.vehicleGridDesktop]}>
           {vehicles.map((v) => {
             const hasRefill = v.last_refill_price != null;
             const showRefillForm = editingVehicleId === v.id;
             const isEditingThis = editingVehicle?.id === v.id;
 
             return (
-              <View
-                key={v.id}
-                style={[styles.vehicleCard, isDesktop && styles.vehicleCardDesktop]}>
+              <View key={v.id} style={styles.vehicleCard}>
                 <View style={styles.vehicleCardHead}>
                   <View style={styles.vehicleIcon}>
                     <Ionicons name="car-outline" size={18} color={GasTaColors.forest} />
@@ -974,12 +779,12 @@ export default function VehiclesScreen() {
 
                   {/* Header controls. Icon-only so they never crowd the vehicle
                       name on a 320-375px screen; both carry accessibility
-                      labels. Access management drives the panel's controlled
-                      expansion — no sharing logic moved. */}
+                      labels. Sharing drives the panel's controlled expansion —
+                      no sharing logic moved. */}
                   {showRefillForm || isEditingThis ? null : (
                     <View style={styles.cardHeadActions}>
                       <Pressable
-                        accessibilityLabel="Manage access"
+                        accessibilityLabel="Share vehicle"
                         accessibilityRole="button"
                         accessibilityState={{ expanded: shareOpenId === v.id }}
                         hitSlop={8}
@@ -989,7 +794,7 @@ export default function VehiclesScreen() {
                           pressed && styles.cardHeadBtnPressed,
                         ]}>
                         <Ionicons
-                          name={shareOpenId === v.id ? 'chevron-up' : 'people-outline'}
+                          name={shareOpenId === v.id ? 'chevron-up' : 'share-social-outline'}
                           size={17}
                           color={GasTaColors.forest}
                         />
@@ -1075,7 +880,6 @@ export default function VehiclesScreen() {
                     ownerId={user.id}
                     expanded={shareOpenId === v.id}
                     onToggle={() => toggleShare(v.id)}
-                    onRequestKeyboardReveal={revealAboveKeyboard}
                   />
                 )}
 
@@ -1101,7 +905,6 @@ export default function VehiclesScreen() {
               </View>
             );
           })}
-          </View>
         </>
       )}
 
@@ -1171,28 +974,14 @@ export default function VehiclesScreen() {
           action row used — no logic was duplicated or moved.
           Lifecycle: menuVisible is set ONLY after measureInWindow
           resolves, so the first painted frame is already anchored
-          (no corner jump). The destructive/status slot is a SINGLE
-          fixed-height row: the history probe resolving only swaps that
-          row's content in place (Delete / Archive / disabled "Checking…"),
-          so the menu never resizes or jumps mid-open. */}
+          (no corner jump). The destructive slot is a fixed
+          two-row layout: the probe resolving swaps row content
+          in place, so the menu never resizes mid-open. */}
       <Modal
         animationType="fade"
         transparent
         visible={menuVisible}
-        onRequestClose={closeMenu}
-        onDismiss={() => {
-          // The fade-out animation finished (iOS
-          // 'modalDismissed', web CSS animation end).
-          // Safe to scrub the frozen menu state now —
-          // the menu is gone, so nothing can flash.
-          if (!menuClosePendingRef.current) return;
-          menuClosePendingRef.current = false;
-          if (menuCleanupTimerRef.current != null) {
-            clearTimeout(menuCleanupTimerRef.current);
-            menuCleanupTimerRef.current = null;
-          }
-          scrubMenuVisualState();
-        }}>
+        onRequestClose={closeMenu}>
         <Pressable style={styles.menuBackdrop} onPress={closeMenu} accessibilityLabel="Close menu">
           <View
             pointerEvents="box-none"
@@ -1216,11 +1005,11 @@ export default function VehiclesScreen() {
                 if (target) handleEditVehicle(target);
               }}
               style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
-              <View style={styles.menuIcon}>
-                <Ionicons name="create-outline" size={18} color={GasTaColors.forestDark} />
-              </View>
-              <Text style={styles.menuItemText} numberOfLines={1}>Edit vehicle</Text>
+              <Ionicons name="create-outline" size={16} color={GasTaColors.forestDark} />
+              <Text style={styles.menuItemText}>Edit vehicle</Text>
             </Pressable>
+
+            <View style={styles.menuDivider} />
 
             <Pressable
               accessibilityRole="menuitem"
@@ -1237,148 +1026,145 @@ export default function VehiclesScreen() {
                 );
               }}
               style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
-              <View style={styles.menuIcon}>
-                <Ionicons name="cash-outline" size={18} color={GasTaColors.forestDark} />
-              </View>
-              <Text style={styles.menuItemText} numberOfLines={1}>
+              <Ionicons name="cash-outline" size={16} color={GasTaColors.forestDark} />
+              <Text style={styles.menuItemText}>
                 {menuFor?.last_refill_price != null ? 'Update refill price' : 'Set refill price'}
               </Text>
             </Pressable>
 
             <View style={styles.menuDivider} />
 
-            {/* One stable row: unresolved is disabled, explicit no-history
-                permits Delete, and has-history/unknown always use Archive. */}
-            <Pressable
-              accessibilityRole="menuitem"
-              accessibilityLabel={menuActionLabel}
-              accessibilityState={{ disabled: menuActionLoading, busy: menuActionLoading }}
-              disabled={menuActionLoading}
-              onPress={() => {
-                if (menuActionLoading) return;
-                const target = menuFor;
-                closeMenu();
-                if (target) handleDelete(target.id, menuActionIsDelete ? 'no-history' : 'has-history');
-              }}
-              style={({ pressed }) => [
-                styles.menuItem,
-                menuActionLoading && styles.menuItemDisabled,
-                pressed && !menuActionLoading && styles.menuItemPressed,
-              ]}>
-              <View style={styles.menuIcon}>
-                {menuActionLoading ? (
-                  <ActivityIndicator size="small" color={GasTaColors.forestMuted} />
-                ) : (
+            {/* Destructive slot — gated on resolved history and
+                laid out as a FIXED two-row block: a primary
+                action row plus a context row, each with a
+                fixed min-height and capped line count. When
+                the history probe resolves, row content swaps
+                in place, so the open menu never resizes or
+                jumps. While loading/idle, Delete is NEVER
+                actionable — the menu shows a non-actionable
+                status row plus Archive (the safe direction).
+                Only an explicit 'no-history' renders the
+                Delete action; has-history and unknown both
+                render Archive. */}
+            <View style={styles.menuDestructiveSlot}>
+              {menuHistoryState === 'no-history' ? (
+                <Pressable
+                  accessibilityRole="menuitem"
+                  accessibilityLabel="Delete vehicle"
+                  onPress={() => {
+                    const target = menuFor;
+                    closeMenu();
+                    if (target) handleDelete(target.id, 'no-history');
+                  }}
+                  style={({ pressed }) => [
+                    styles.menuItem,
+                    styles.menuSlotRow,
+                    pressed && styles.menuItemPressed,
+                  ]}>
+                  <Ionicons name="trash-outline" size={16} color={palette.danger} />
+                  <Text style={[styles.menuItemText, styles.menuItemDanger]} numberOfLines={1}>
+                    Delete vehicle
+                  </Text>
+                </Pressable>
+              ) : menuHistoryState === 'loading' || menuHistoryState === 'idle' ? (
+                <View
+                  accessibilityRole="text"
+                  accessibilityLabel="Checking vehicle history"
+                  style={[styles.menuItem, styles.menuSlotRow, styles.menuItemDisabled]}>
+                  <Ionicons name="hourglass-outline" size={16} color={GasTaColors.textMuted} />
+                  <Text style={[styles.menuItemText, styles.menuItemMuted]} numberOfLines={1}>
+                    Checking vehicle history…
+                  </Text>
+                </View>
+              ) : (
+                archiveAction
+              )}
+
+              {menuHistoryState === 'no-history' ? (
+                <View
+                  accessibilityRole="text"
+                  accessibilityLabel="No refill, trip, or shared history"
+                  style={[styles.menuItem, styles.menuSlotContextRow]}>
                   <Ionicons
-                    name={menuActionIsDelete ? 'trash-outline' : 'archive-outline'}
-                    size={18}
-                    color={menuActionIsDelete ? MENU_DELETE_COLOR : palette.warning}
+                    name="checkmark-circle-outline"
+                    size={16}
+                    color={GasTaColors.textMuted}
                   />
-                )}
-              </View>
-              <Text style={[
-                styles.menuItemText,
-                menuActionLoading ? styles.menuItemMuted : menuActionIsDelete ? styles.menuItemDanger : styles.menuItemArchive,
-              ]} numberOfLines={1}>
-                {menuActionLabel}
-              </Text>
-            </Pressable>
+                  <Text style={styles.menuHintText} numberOfLines={2}>
+                    No refill, trip, or shared history
+                  </Text>
+                </View>
+              ) : menuHistoryState === 'loading' || menuHistoryState === 'idle' ? (
+                archiveAction
+              ) : (
+                <View
+                  accessibilityRole="text"
+                  accessibilityLabel="Keeps refill, trip, expense, and shared history."
+                  style={[styles.menuItem, styles.menuSlotContextRow]}>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={16}
+                    color={GasTaColors.textMuted}
+                  />
+                  <Text style={styles.menuHintText} numberOfLines={2}>
+                    Keeps refill, trip, expense, and shared history.
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
         </Pressable>
       </Modal>
 
-      {/* ------------------------------------------- duplicate vehicle name
-          Friendly in-app dialog shown when a create/edit duplicate is detected
-          client-side, when the DB returns 23505, or when a restore collides
-          with an active vehicle of the same name. Independent of the overflow
-          menu Modal above. Centered card, dim backdrop, single primary action —
-          no destructive red, no oversized graphics. */}
-      <Modal
-        animationType="fade"
-        transparent
-        visible={duplicateNameModal.visible && !archivedOpen}
-        onRequestClose={hideDuplicateNameModal}>
-        <Pressable style={styles.dupNameBackdrop} onPress={hideDuplicateNameModal}>
-          {duplicateNameContent}
-        </Pressable>
-      </Modal>
-
-      {/* A compact owner-only entry; archived cards live only in the management sheet. */}
+      {/* ------------------------------------------- archived vehicles
+          Owner-only management section. Archived rows never appear in active
+          selectors; Restore returns the row to active use. */}
       {archivedVehicles.length > 0 ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Archived vehicles, ${archivedVehicles.length} ${archivedVehicles.length === 1 ? 'vehicle' : 'vehicles'}`}
-          onPress={() => { Keyboard.dismiss(); setArchivedOpen(true); }}
-          style={({ pressed }) => [styles.archivedEntry, pressed && styles.cardHeadBtnPressed]}>
-          <View style={styles.archivedEntryIcon}><Ionicons name="archive-outline" size={20} color={GasTaColors.forest} /></View>
-          <View style={styles.archivedEntryTitles}>
-            <Text style={styles.archivedTitle}>Archived vehicles</Text>
-            <Text style={styles.archivedMeta}>{archivedVehicles.length} {archivedVehicles.length === 1 ? 'vehicle' : 'vehicles'}</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={GasTaColors.forestMuted} />
-        </Pressable>
+        <View style={styles.archivedSection}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={archivedOpen ? 'Hide archived vehicles' : 'Show archived vehicles'}
+            onPress={() => setArchivedOpen((open) => !open)}
+            style={styles.archivedToggle}>
+            <Text style={styles.archivedTitle}>Archived vehicles ({archivedVehicles.length})</Text>
+            <Ionicons
+              name={archivedOpen ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={GasTaColors.textSoft}
+            />
+          </Pressable>
+          {archivedOpen
+            ? archivedVehicles.map((v) => (
+                <View key={v.id} style={styles.archivedCard}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={styles.vehicleName}>
+                      {v.nickname ?? `${v.brand} ${v.model}`}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.vehicleMeta}>
+                      {v.brand} {v.model} · {v.year}
+                      {v.archived_at ? ` · archived ${formatDate(v.archived_at)}` : ''}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Restore ${v.nickname ?? `${v.brand} ${v.model}`}`}
+                    disabled={restoringId === v.id}
+                    onPress={() => handleRestore(v.id, v.nickname ?? `${v.brand} ${v.model}`)}
+                    style={({ pressed }) => [
+                      styles.archivedRestoreBtn,
+                      pressed && styles.cardHeadBtnPressed,
+                    ]}>
+                    <Text style={styles.archivedRestoreText}>
+                      {restoringId === v.id ? 'Restoring…' : 'Restore'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ))
+            : null}
+        </View>
       ) : null}
 
-      <Modal animationType="fade" transparent visible={archivedOpen} onRequestClose={closeArchived}>
-        <View style={styles.archivedBackdrop}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Close archived vehicles" onPress={closeArchived} style={styles.archivedDismissArea} />
-          <View style={styles.archivedSheet}>
-            <View style={styles.archivedSheetHead}>
-              <View style={styles.archivedEntryIcon}><Ionicons name="archive-outline" size={20} color={GasTaColors.forest} /></View>
-              <Text accessibilityRole="header" style={styles.archivedSheetTitle}>Archived vehicles</Text>
-              <Pressable accessibilityRole="button" accessibilityLabel="Close archived vehicles sheet" onPress={closeArchived} style={styles.archivedCloseButton}>
-                <Ionicons name="close" size={20} color={GasTaColors.forestMuted} />
-              </Pressable>
-            </View>
-            <Text style={styles.archivedSheetHelper}>Archived vehicles are hidden from active use but their history is preserved.</Text>
-            <FlatList
-              data={archivedVehicles}
-              keyExtractor={(vehicle) => vehicle.id}
-              style={styles.archivedList}
-              contentContainerStyle={styles.archivedListContent}
-              showsVerticalScrollIndicator={false}
-              ListEmptyComponent={<EmptyState variant="canonical" icon="archive-outline" title="No archived vehicles" message="Archived vehicles will appear here." />}
-              renderItem={({ item: vehicle }) => {
-                const label = vehicle.nickname ?? `${vehicle.brand} ${vehicle.model}`;
-                const fuelName = catalog.find((entry) => entry.fuel_type_id === vehicle.fuel_type_id)?.fuel_type?.name;
-                const restoring = restoringId === vehicle.id;
-                return (
-                  <View style={styles.archivedCard}>
-                    <View style={styles.archivedEntryTitles}>
-                      <Text numberOfLines={2} style={styles.archivedVehicleName}>{label}</Text>
-                      <Text numberOfLines={2} style={styles.archivedMeta}>
-                        {vehicle.brand} {vehicle.model} · {vehicle.year}{fuelName ? ` · ${fuelName}` : ''}
-                      </Text>
-                      <View style={styles.archivedStatusRow}>
-                        <View style={styles.archivedBadge}><Text style={styles.archivedBadgeText}>Archived</Text></View>
-                        {vehicle.archived_at ? <Text style={styles.archivedDate}>{formatDate(vehicle.archived_at)}</Text> : null}
-                      </View>
-                    </View>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Restore ${label}`}
-                      accessibilityState={{ disabled: restoringId !== null, busy: restoring }}
-                      disabled={restoringId !== null}
-                      onPress={() => handleRestore(vehicle.id, label)}
-                      style={({ pressed }) => [styles.archivedRestoreBtn, pressed && styles.cardHeadBtnPressed, restoringId !== null && styles.archivedRestoreDisabled]}>
-                      {restoring ? <ActivityIndicator size="small" color={GasTaColors.forest} /> : null}
-                      <Text style={styles.archivedRestoreText}>{restoring ? 'Restoring…' : 'Restore'}</Text>
-                    </Pressable>
-                  </View>
-                );
-              }}
-            />
-          </View>
-          {duplicateNameModal.visible ? (
-            <Pressable accessibilityViewIsModal style={[styles.dupNameBackdrop, styles.archivedDuplicateOverlay]} onPress={hideDuplicateNameModal}>
-              {duplicateNameContent}
-            </Pressable>
-          ) : null}
-        </View>
-      </Modal>
-
     </ScrollView>
-    </KeyboardAvoidingView>
     </HideWhenBlurred>
   );
 }
@@ -1387,8 +1173,7 @@ export default function VehiclesScreen() {
  * Faint forest tint, the same value the auth and Profile surfaces use. Replaces
  * the old `primarySoft` / `navySoft` green and blue-gray washes.
  */
-const TINT_BG = 'rgba(49, 91, 218, 0.06)';
-const MENU_DELETE_COLOR = '#A34F3F';
+const TINT_BG = 'rgba(1, 68, 33, 0.06)';
 
 /** Layout rhythm. Matches the Home screen so both tabs read as one app. */
 const SECTION_GAP = 28;
@@ -1401,7 +1186,6 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
     paddingHorizontal: GasTaSpacing.lg,
-    paddingTop: GasTaSpacing.md,
     paddingBottom: GasTaSpacing.xl,
   },
   header: {
@@ -1456,12 +1240,6 @@ const styles = StyleSheet.create({
 
   // Collapsible add/edit form. Flat surface — no blur, no gradient.
   formCard: {
-    // Keep single-column inputs at a readable measure on a wide browser, and
-    // centre the card inside the wider page shell instead of leaving it
-    // hanging off the left edge.
-    maxWidth: 760,
-    width: '100%',
-    alignSelf: 'center',
     padding: SURFACE_PAD,
     borderRadius: GasTaRadius.md,
     borderWidth: StyleSheet.hairlineWidth,
@@ -1534,13 +1312,6 @@ const styles = StyleSheet.create({
   },
 
   // Compact vehicle card — flat surface, hairline border, no shadow.
-  vehicleGrid: {},
-  vehicleGridDesktop: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'flex-start',
-    gap: GasTaSpacing.md,
-  },
   vehicleCard: {
     padding: SURFACE_PAD,
     borderRadius: GasTaRadius.md,
@@ -1548,12 +1319,6 @@ const styles = StyleSheet.create({
     borderColor: GasTaColors.glassBorderSubtle,
     backgroundColor: GasTaColors.white,
     marginBottom: GasTaSpacing.md,
-  },
-  vehicleCardDesktop: {
-    flexBasis: '45%',
-    flexGrow: 1,
-    maxWidth: '49%',
-    marginBottom: 0,
   },
   vehicleCardHead: {
     flexDirection: 'row',
@@ -1605,37 +1370,27 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     shadowColor: GasTaColors.forestDark,
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 8,
   },
   menuItem: {
-    height: 46,
     flexDirection: 'row',
     alignItems: 'center',
     gap: GasTaSpacing.sm,
     paddingHorizontal: GasTaSpacing.md,
-  },
-  menuIcon: {
-    width: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 11,
   },
   menuItemPressed: {
     backgroundColor: TINT_BG,
   },
   menuItemText: {
-    flex: 1,
     ...typeScale.bodySmall,
     fontWeight: '600',
     color: GasTaColors.forestDark,
   },
   menuItemDanger: {
-    color: MENU_DELETE_COLOR,
-  },
-  menuItemArchive: {
-    color: palette.warning,
+    color: palette.danger,
   },
   menuItemDisabled: {
     opacity: 0.7,
@@ -1644,91 +1399,62 @@ const styles = StyleSheet.create({
     color: GasTaColors.textMuted,
     fontWeight: '600',
   },
-
-  // ---- duplicate vehicle name modal --------------------------------------
-  dupNameBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(1, 48, 25, 0.42)',
-    alignItems: 'center',
+  // Fixed two-row destructive slot. Both rows keep a
+  // constant height (capped line counts included) so the
+  // menu never resizes when menuHistoryState resolves.
+  menuDestructiveSlot: {},
+  menuSlotRow: {
+    minHeight: 44,
     justifyContent: 'center',
-    paddingHorizontal: GasTaSpacing.lg,
   },
-  dupNameCard: {
-    width: '100%',
-    maxWidth: 360,
+  menuSlotContextRow: {
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  menuHintText: {
+    ...typeScale.label,
+    fontSize: 11,
+    color: GasTaColors.textMuted,
+    flex: 1,
+  },
+  archivedToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  archivedTitle: {
+    ...typeScale.bodySmall,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  archivedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: GasTaSpacing.sm,
+    marginTop: GasTaSpacing.sm,
+    paddingTop: GasTaSpacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.glassBorderSubtle,
+  },
+  archivedRestoreBtn: {
+    paddingHorizontal: GasTaSpacing.md,
+    paddingVertical: 8,
+    borderRadius: GasTaRadius.pill,
+    backgroundColor: TINT_BG,
+  },
+  archivedRestoreText: {
+    ...typeScale.label,
+    fontWeight: '700',
+    color: GasTaColors.forest,
+  },
+  archivedSection: {
+    marginTop: SECTION_GAP,
     backgroundColor: GasTaColors.white,
-    borderRadius: 20,
+    borderRadius: GasTaRadius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: GasTaColors.glassBorderSubtle,
-    paddingHorizontal: GasTaSpacing.lg,
-    paddingTop: GasTaSpacing.lg,
-    paddingBottom: GasTaSpacing.lg,
-    alignItems: 'center',
-    // Restrained lift — present, never heavy.
-    shadowColor: GasTaColors.forestDark,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.14,
-    shadowRadius: 20,
-    elevation: 6,
+    padding: SURFACE_PAD,
   },
-  dupNameIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: TINT_BG,
-    marginBottom: GasTaSpacing.md,
-  },
-  dupNameTitle: {
-    ...typeScale.sectionHeading,
-    color: GasTaColors.forestDark,
-    textAlign: 'center',
-  },
-  dupNameMessage: {
-    ...typeScale.body,
-    color: GasTaColors.textMuted,
-    textAlign: 'center',
-    marginTop: GasTaSpacing.sm,
-    marginBottom: GasTaSpacing.lg,
-    lineHeight: 21,
-  },
-  archivedEntry: {
-    ...shadow('light', 'sm'),
-    flexDirection: 'row', alignItems: 'center', gap: GasTaSpacing.sm,
-    marginTop: SECTION_GAP, padding: GasTaSpacing.md,
-    backgroundColor: GasTaColors.glassFillStrong, borderRadius: GasTaRadius.md,
-    borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle,
-  },
-  archivedEntryIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: GasTaColors.forestGlow, alignItems: 'center', justifyContent: 'center' },
-  archivedEntryTitles: { flex: 1, minWidth: 0, gap: GasTaSpacing.xs },
-  archivedTitle: { ...typeScale.bodySmall, fontWeight: '700', color: GasTaColors.forestDark },
-  archivedMeta: { fontSize: 12, lineHeight: 17, color: GasTaColors.textMuted },
-  archivedBackdrop: { flex: 1, backgroundColor: 'rgba(1, 48, 25, 0.42)', justifyContent: 'center', padding: GasTaSpacing.md },
-  archivedDismissArea: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  archivedSheet: {
-    ...shadow('light', 'sm'),
-    width: '100%', maxWidth: 520, maxHeight: '82%', flexShrink: 1, alignSelf: 'center',
-    backgroundColor: GasTaColors.white, borderRadius: GasTaRadius.lg,
-    borderWidth: 1, borderColor: GasTaColors.forestBorder,
-    paddingTop: GasTaSpacing.md,
-  },
-  archivedSheetHead: { flexDirection: 'row', alignItems: 'center', gap: GasTaSpacing.sm, paddingHorizontal: GasTaSpacing.md },
-  archivedSheetTitle: { ...typeScale.sectionHeading, flex: 1, color: GasTaColors.forestDark },
-  archivedCloseButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  archivedSheetHelper: { fontSize: 12, lineHeight: 18, color: GasTaColors.textMuted, paddingHorizontal: GasTaSpacing.md, marginTop: GasTaSpacing.sm, marginBottom: GasTaSpacing.md },
-  archivedList: { flexShrink: 1, flexGrow: 0 },
-  archivedListContent: { paddingHorizontal: GasTaSpacing.md, paddingBottom: GasTaSpacing.md },
-  archivedCard: { flexDirection: 'row', alignItems: 'center', gap: GasTaSpacing.sm, padding: GasTaSpacing.sm + GasTaSpacing.xs, backgroundColor: GasTaColors.creamLight, borderRadius: GasTaRadius.md, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, marginBottom: GasTaSpacing.sm },
-  archivedVehicleName: { fontSize: 14, lineHeight: 19, fontWeight: '700', color: GasTaColors.forestDark },
-  archivedStatusRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: GasTaSpacing.xs },
-  archivedBadge: { paddingHorizontal: GasTaSpacing.sm, paddingVertical: 2, borderRadius: GasTaRadius.pill, backgroundColor: GasTaColors.creamDark },
-  archivedBadgeText: { color: GasTaColors.forestMuted, fontSize: 10, lineHeight: 14, fontWeight: '700' },
-  archivedDate: { color: GasTaColors.textMuted, fontSize: 10, lineHeight: 14 },
-  archivedRestoreBtn: { flexDirection: 'row', alignItems: 'center', gap: GasTaSpacing.xs, paddingHorizontal: GasTaSpacing.sm, minHeight: 38, borderRadius: GasTaRadius.pill, borderWidth: 1, borderColor: GasTaColors.forestBorder, backgroundColor: GasTaColors.white },
-  archivedRestoreText: { fontSize: 12, fontWeight: '700', color: GasTaColors.forest },
-  archivedRestoreDisabled: { opacity: 0.55 },
-  archivedDuplicateOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
   menuDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: GasTaColors.glassBorderSubtle,

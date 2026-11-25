@@ -5,12 +5,14 @@ import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import BrandMark from '@/components/ui/BrandMark';
 import { GasTaColors as C, radii, spacing } from '@/constants/Theme';
+import { getFuelTypeColor } from '@/constants/fuelTypeColors';
 import { formatCurrency } from '@/lib/format';
 
 type Props = {
   company: string;
   slug: string;
   sourceLabel: string;
+  fuelType?: string;
   price?: number | null;
   unavailableLabel?: string;
   subtitle?: string;
@@ -23,9 +25,10 @@ type Props = {
 
 /** Shared presentation for DOE company estimates; no station/price fetching. */
 export default function CompanyEstimateCard({
-  company, slug, sourceLabel, price, unavailableLabel, subtitle, expanded: controlledExpanded,
+  company, slug, sourceLabel, fuelType, price, unavailableLabel, subtitle, expanded: controlledExpanded,
   onToggle, onViewStations, onReport, children,
 }: Props) {
+  const fuelTone = fuelType ? getFuelTypeColor(fuelType) : null;
   const hasPrice = typeof price === 'number' && Number.isFinite(price);
   const [localExpanded, setLocalExpanded] = useState(false);
   const expanded = controlledExpanded ?? localExpanded;
@@ -37,7 +40,7 @@ export default function CompanyEstimateCard({
     return () => animation.stop();
   }, [expanded, reveal]);
 
-  return <View style={styles.card}>
+  return <View testID={`fuel-company-${slug}`} style={[styles.card, fuelTone && { backgroundColor: fuelTone.soft, borderColor: fuelTone.border, borderLeftColor: fuelTone.strong, borderLeftWidth: 4 }]}>
     <Pressable accessibilityRole="button"
       accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${company} actions`}
       accessibilityState={{ expanded }}
@@ -51,7 +54,7 @@ export default function CompanyEstimateCard({
         {subtitle ? <Text style={styles.secondary}>{subtitle}</Text> : null}
       </View>
       <View style={styles.right}>
-        {hasPrice ? <Text accessibilityLabel={`DOE estimate ${formatCurrency(price)} per liter`} style={styles.price}>{formatCurrency(price)}<Text style={styles.unit}>/L</Text></Text> : null}
+        {hasPrice ? <Text accessibilityLabel={`DOE estimate ${formatCurrency(price)} per liter`} style={[styles.price, fuelTone && { color: fuelTone.text }]}>{formatCurrency(price)}<Text style={styles.unit}>/L</Text></Text> : null}
         <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={C.forest} />
       </View>
     </Pressable>

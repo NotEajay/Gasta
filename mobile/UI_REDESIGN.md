@@ -36,3 +36,17 @@ SDK 58 migration: native dependencies and the lockfile now match Expo Go 58 on i
 Home leads with a navy fuel price feature showing its actual source, region, fuel reference, bulletin date and fallback qualifiers. The lime comparison action opens Prices. Plan a trip and Log refill retain their existing routes. A smaller spending summary, one historical insight, the vehicle preview and recent activity follow. Desktop places spending and insights beside the price feature. Full comparisons remain on Prices; complete historical explanations remain in Budget. No calculation or write path changes.
 
 Palette refinement: quieter neutral surfaces and slate-blue insight fills reduce the amount of saturated blue. Citron is reserved for featured actions and selected navigation. The supplied logo keeps its original artwork and colors. Layout, typography and behavior are unchanged.
+
+## Fuel Prices page
+
+Prices uses the same full-width phone gutter as Home, with a single grouped mode/filter panel, a navy lowest-listed-price feature and a quieter range summary. Fuel shortcuts lead with RON 91, RON 95 and Diesel; More holds RON 97, RON 100, Diesel Plus and Kerosene and displays the selected additional fuel. Region and Area share a compact row. Weekly mode puts company estimates and community reports before the trend; Past prices puts history before those lists. Empty trusted-price results have an explicit state. Existing fetching, source precedence, confirmations, company disclosure, report routes and history selection remain unchanged. Browser fixtures verify area/fuel query parameters, mode order, community navigation and empty results at 320px, 390px and 1440px.
+
+## Imported multi-brand station directories
+
+The live database now has 4,232 stations after the screened multi-brand import. Company cards share one paginated official-directory flow, with a selected-area view and an All locations option for unmapped addresses. Search and reporting retain the physical station UUID. Price comparisons count source facts independently of directory size: one DOE company/area estimate plus verified community observations, without promoting pending reports. See `../etl/stations/IMPORT_RESULTS.md` for import counts, schema guards and validation.
+
+## Fuel type colors
+
+Fuel Prices uses one shared presentation map in `constants/fuelTypeColors.ts`: RON 91 green, RON 95 blue, RON 97 violet, RON 100 rose, Diesel amber, Diesel Plus burnt orange and Kerosene teal. These are GasTa UI identifiers, independent of company logos, verification status and price movement. Names remain visible, selected buttons use a solid fill, and compact badges keep the same color in summaries, trends and community reports. Unknown fuel codes use a neutral label. All selected-button and badge text pairs exceed 4.5:1 contrast. Common fuels and the More menu retain their original values and query behavior.
+
+Fuel colors also apply to the cards: the lowest-price feature uses the selected fuel’s solid color with white copy; range/trend and DOE company cards use matching soft surfaces and borders. Company and community report cards carry a stronger fuel-colored edge. Community cards use their own report fuel code. Status badges and price-movement cues retain their separate meanings. Company logos, queries, prices and reporting handlers are unchanged.

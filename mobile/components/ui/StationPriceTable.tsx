@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import ReportStationSelector, { type ReportStationContext } from '@/components/ReportStationSelector';
-import CompanyEstimateCard from '@/components/ui/CompanyEstimateCard';
 import OfficialStationDirectory from '@/components/OfficialStationDirectory';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -116,8 +115,7 @@ export default function StationPriceTable({
       region: region ?? '', fuelType: fuelType ?? '',
       doeContext: row.status ?? 'DOE Area/Brand Estimate',
     });
-    if (row.slug === 'seaoil') {
-      return <OfficialStationDirectory key={row.id}
+    return <OfficialStationDirectory key={row.id} company={row.brand} slug={row.slug} fuelType={fuelType}
         selectedRegion={region}
         selectedArea={selectedArea ?? (row.areaName === region ? '' : row.areaName)}
         doeSummary={{ price: hasPrice(row) ? row.price : null, sourceLabel: row.status ?? 'DOE Area/Brand Estimate' }}
@@ -125,18 +123,6 @@ export default function StationPriceTable({
         expanded={expandedCompany === row.slug}
         onToggle={() => setExpandedCompany((current) => current === row.slug ? null : row.slug)}
         onReport={reportCompany} />;
-    }
-    return <CompanyEstimateCard key={row.id}
-      company={row.brand} slug={row.slug} price={hasPrice(row) ? row.price : null}
-      unavailableLabel={`No available price in this ${selectedArea ? 'area' : 'region'}`}
-      sourceLabel={row.status ?? 'DOE Area/Brand Estimate'}
-      expanded={expandedCompany === row.slug}
-      onToggle={() => setExpandedCompany((current) => current === row.slug ? null : row.slug)}
-      onReport={reportCompany}>
-      <Text style={styles.directoryTitle}>Station directory</Text>
-      <Text style={styles.directoryCopy}>Official branch directory not available yet.</Text>
-      <Text style={styles.directoryCopy}>You can still report a price for a known station.</Text>
-    </CompanyEstimateCard>;
 
   };
 

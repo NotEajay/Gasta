@@ -57,3 +57,10 @@ test('aliases, postcodes, and country suffixes remain conservative', () => {
   assert.equal(service.isSupportedStationArea('Babcoorlaocda Cyity'), false);
   assert.equal(service.isSupportedStationArea('Quezon'), false);
 });
+
+for (const address of ['MAIN ROAD, MANILA CITY, PH', 'ROAD, QUEZON CITY, NCR, (SECOND DISTRICT)', 'ROAD, METRO MANILA']) {
+  test(`explicit NCR address: ${address}`, () => {
+    assert.equal(service.matchesSelectedRegion(station('ncr', address), 'NCR'), true);
+    assert.equal(service.matchesSelectedRegion(station('ncr', address), 'SOUTH_LUZON'), false);
+  });
+}
