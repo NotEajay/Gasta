@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 
@@ -82,3 +83,34 @@ def test_ensure_reuses_fresh_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyP
     ):
         assert ensure_machine_readable_pdf(pdf) == sidecar
         run.assert_not_called()
+
+
+def test_mixed_native_and_scanned_pages_require_ocr() -> None:
+    pages = [("RON 91 DIESEL 77.25 89.60", True), ("", True)]
+    with patch("src.ocr._page_text_layers", return_value=pages):
+        assert pdf_needs_ocr(Path("mixed.pdf")) is True
+
+
+def test_blank_page_without_an_image_does_not_force_ocr() -> None:
+    with patch("src.ocr._page_text_layers", return_value=[("RON 91 DIESEL", False), ("", False)]):
+        assert pdf_needs_ocr(Path("blank.pdf")) is False
+
+
+def test_corruption_on_one_page_is_not_diluted_by_other_pages() -> None:
+    pages = [("RON 91 77.25 " * 1000, False), ("(cid:55)" * 6, True)]
+    with patch("src.ocr._page_text_layers", return_value=pages):
+        assert pdf_needs_ocr(Path("corrupt-page.pdf")) is True
+
+
+@pytest.mark.parametrize("corrupt, expected", [(False, "--skip-text"), (True, "--force-ocr")])
+def test_ocr_mode_preserves_good_text_but_replaces_corrupt_text(tmp_path, corrupt, expected) -> None:
+    from src.ocr import run_ocr
+    source, output = tmp_path / "source.pdf", tmp_path / "output.pdf"
+    text = "(cid:55)" * 6 if corrupt else "RON 91 77.25"
+    def render(command, **kwargs):
+        output.write_bytes(b"%PDF-ocr")
+    with patch("src.ocr._require_ocr_tools", return_value="python"), \
+         patch("src.ocr._page_text_layers", return_value=[(text, True), ("", True)]), \
+         patch("src.ocr.subprocess.run", side_effect=render) as run:
+        run_ocr(source, output)
+    assert expected in run.call_args.args[0]

@@ -8,12 +8,11 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from .constants import ALL_REGION_KEYS, CORE_FUEL_CODES, REGION_KEY_BY_CODE
-from .carry_forward import carry_forward_missing_areas, db_missing_areas_vs_prior
+from .constants import ALL_REGION_KEYS, REGION_KEY_BY_CODE
 from .discover import DiscoveredBulletin, UpstreamUnavailableError, discover_latest_weeks
 from .download import download_region_bulletins, normalize_region
 from .freshness import describe_freshness, is_bulletin_stale
-from .load_supabase import _client, load_bulletin, record_doe_website_fetch, touch_bulletin_fetched_at, try_record_etl_run
+from .load_supabase import _client, load_bulletin, stored_prices_match, record_doe_website_fetch, touch_bulletin_fetched_at, try_record_etl_run
 from .parse_bulletin import (
     BulletinDateUnknown,
     BulletinNotMachineReadable,
@@ -134,57 +133,6 @@ def _region_already_loaded(bulletin_date: date, region_code: str) -> bool:
     )
     rows = prices_resp.data if prices_resp else []
     return bool(rows)
-
-
-def _missing_core_fuels_in_db(bulletin_date: date, region_code: str) -> list[str]:
-    """Which CORE_FUEL_CODES are absent for this region/week in Supabase.
-
-    Every scheduled ETL run uses this so a week that was stored without RON 91 or
-    Diesel Plus (bad parse / old loader) is reloaded instead of skipped.
-    """
-    client = _client()
-    bulletin_resp = (
-        client.table("fuel_price_bulletins")
-        .select("id")
-        .eq("bulletin_date", bulletin_date.isoformat())
-        .maybe_single()
-        .execute()
-    )
-    if not bulletin_resp or not bulletin_resp.data:
-        return list(CORE_FUEL_CODES)
-
-    region_resp = (
-        client.table("regions").select("id").eq("code", region_code).maybe_single().execute()
-    )
-    if not region_resp or not region_resp.data:
-        return list(CORE_FUEL_CODES)
-
-    fuel_resp = (
-        client.table("fuel_types").select("id, code").in_("code", list(CORE_FUEL_CODES)).execute()
-    )
-    fuel_rows = fuel_resp.data if fuel_resp else []
-    if not fuel_rows:
-        return list(CORE_FUEL_CODES)
-
-    bulletin_id = bulletin_resp.data["id"]
-    region_id = region_resp.data["id"]
-    missing: list[str] = []
-    for fuel in fuel_rows:
-        prices_resp = (
-            client.table("fuel_prices")
-            .select("id")
-            .eq("bulletin_id", bulletin_id)
-            .eq("region_id", region_id)
-            .eq("fuel_type_id", fuel["id"])
-            .limit(1)
-            .execute()
-        )
-        rows = prices_resp.data if prices_resp else []
-        if not rows:
-            missing.append(fuel["code"])
-    # Preserve CORE_FUEL_CODES order for stable logs.
-    order = {code: index for index, code in enumerate(CORE_FUEL_CODES)}
-    return sorted(missing, key=lambda code: order.get(code, 99))
 
 
 def _newest_stored_week(region_code: str) -> date | None:
@@ -318,10 +266,13 @@ def _sync_discovered_bulletin(
         fallback_week_start=discovered.week_start,
         source_urls=list(downloaded.urls),
     )
-    # When a sub-region PDF is 403/missing, keep showing those cities using the
-    # previous week's rows for any area_name the new parse does not cover.
-    region_result.step = "carry forward prices"
-    carried_areas = carry_forward_missing_areas(parsed)
+    if newest_known and parsed.bulletin_date < newest_known:
+        raise RuntimeError(
+            f"Discovered bulletin {parsed.bulletin_date} is older than stored "
+            f"{newest_known}; refusing to report an older source as refreshed"
+        )
+    # Older prices remain under their original bulletin dates in history. Never
+    # relabel them as this week's prices when a source is missing or unreadable.
 
     freshness_note = describe_freshness(judged_week, today)
     region_result.step = "validation"
@@ -334,10 +285,6 @@ def _sync_discovered_bulletin(
             f" Skipped {len(downloaded.skipped)} inaccessible PDF(s): "
             + "; ".join(downloaded.skip_notes[:3])
             + "."
-        )
-    if carried_areas:
-        coverage_note += (
-            f" Carried forward {len(carried_areas)} area(s) from the prior week."
         )
     if parsed_missing:
         coverage_note += (
@@ -354,20 +301,19 @@ def _sync_discovered_bulletin(
 
     # Check for validation errors
     if parsed.validation_errors:
-        if not force:
-            region_result.issue("error", "; ".join(parsed.validation_errors))
-            return SyncResult(
-                region_code=region_code,
-                week_start=parsed.bulletin_date.isoformat(),
-                pdf_path="; ".join(str(p) for p in pdf_paths),
-                price_rows=len(parsed.prices),
-                companies=len({p.company for p in parsed.prices}),
-                skipped=True,
-                message=f"Validation errors: {'; '.join(parsed.validation_errors)}",
-                stale=stale,
-                missing_fuels=parsed_missing,
-                pending_queue_error=bool(pending_queue_errors),
-            )
+        region_result.issue("error", "; ".join(parsed.validation_errors))
+        return SyncResult(
+            region_code=region_code,
+            week_start=parsed.bulletin_date.isoformat(),
+            pdf_path="; ".join(str(p) for p in pdf_paths),
+            price_rows=len(parsed.prices),
+            companies=len({p.company for p in parsed.prices}),
+            skipped=True,
+            message=f"Failed: source validation: {'; '.join(parsed.validation_errors)}",
+            stale=stale,
+            missing_fuels=parsed_missing,
+            pending_queue_error=bool(pending_queue_errors),
+        )
 
     region_result.step = "read existing prices"
     already = (
@@ -376,9 +322,7 @@ def _sync_discovered_bulletin(
         and _region_already_loaded(parsed.bulletin_date, region_code)
     )
     if already:
-        db_missing = _missing_core_fuels_in_db(parsed.bulletin_date, region_code)
-        gaps = db_missing_areas_vs_prior(parsed) if not dry_run else []
-        if not db_missing and not gaps and not carried_areas:
+        if stored_prices_match(parsed):
             region_result.step = "bulletin fetch state"
             touch_bulletin_fetched_at(parsed.bulletin_date)
             return SyncResult(
@@ -396,16 +340,7 @@ def _sync_discovered_bulletin(
                 stale=stale,
                 pending_queue_error=bool(pending_queue_errors),
             )
-        # Week was stored without RON 91 / Diesel Plus — reload on every ETL trigger.
-        # Also reload when prior-week cities (e.g. Bicol) were never written.
-        extra = []
-        if db_missing:
-            extra.append(f"missing {', '.join(db_missing)}")
-        if gaps or carried_areas:
-            extra.append(
-                f"filling {len(gaps or carried_areas)} area(s) from prior week"
-            )
-        coverage_note = f" Reloading: {'; '.join(extra)}." + coverage_note
+        coverage_note = " Reloading: stored prices differ from the current source." + coverage_note
 
     pdf_path_display = "; ".join(str(p) for p in pdf_paths)
 
@@ -627,7 +562,7 @@ def sync_all_regions(
         # or in which any *available* region was stale or broken, records nothing.
         available = [r for r in results if not r.upstream_unavailable]
         all_available_current = bool(available) and all(
-            not r.stale and r.week_start and "Failed" not in r.message for r in available
+            r.status == "CURRENT" and r.week_start for r in available
         )
         failed_step = "latest DOE fetch state"
         if not dry_run and all_available_current:

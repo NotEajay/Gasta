@@ -241,13 +241,13 @@ def fetch_region_page_links(region_code: str) -> list[tuple[str, str | None]]:
 # ("September 22 to 28"). The heading is the only date; filenames may be just
 # "Region IV-A CALABARZON.pdf".
 _WEEK_HEADING_BLOCK_RE = re.compile(
-    rf"<li>\s*"
+    rf"<li\b[^>]*>\s*"
     rf"((?:{MONTH_ALTERNATION})\s+\d{{1,2}}\s+to\s+"
     rf"(?:(?:{MONTH_ALTERNATION})\s+)?\d{{1,2}})\s*"
-    rf"</li>\s*<li>\s*<ul>(.*?)</ul>",
+    rf"</li>\s*<li\b[^>]*>\s*<ul\b[^>]*>(.*?)</ul>",
     re.I | re.S,
 )
-_YEAR_LI_RE = re.compile(r"<li>\s*(20\d{2})\s*</li>", re.I)
+_YEAR_LI_RE = re.compile(r"<li\b[^>]*>\s*(20\d{2})\s*</li>", re.I)
 _WEEK_LABEL_START_RE = re.compile(
     rf"^({MONTH_ALTERNATION})\s+(\d{{1,2}})\s+to\s+",
     re.I,
@@ -270,14 +270,16 @@ def parse_week_label(label: str, year: int) -> date | None:
 
 
 def _year_before(html_text: str, position: int) -> int:
-    chunk = html_text[max(0, position - 4000) : position]
-    years = [int(y) for y in _YEAR_LI_RE.findall(chunk)]
-    if years:
-        return years[-1]
-    # Also accept a bold year used in some DOE tables.
-    bold = re.findall(r"<strong>\s*(20\d{2})\s*</strong>", chunk, flags=re.I)
-    if bold:
-        return int(bold[-1])
+    # A year's archive can span much more than 4 KB. Looking only immediately
+    # before a heading relabels older November/December entries as this year.
+    chunk = html_text[:position]
+    markers = [(match.start(), int(match.group(1))) for match in _YEAR_LI_RE.finditer(chunk)]
+    markers.extend(
+        (match.start(), int(match.group(1)))
+        for match in re.finditer(r"<strong\b[^>]*>\s*(20\d{2})\s*</strong>", chunk, flags=re.I)
+    )
+    if markers:
+        return max(markers)[1]
     return date.today().year
 
 
