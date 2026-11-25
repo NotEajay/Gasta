@@ -4,6 +4,7 @@ import { ActivityIndicator, FlatList, Modal, Pressable, SafeAreaView, StyleSheet
 import { Text } from '@/components/Themed';
 import { GasTaColors as C, palette } from '@/constants/Theme';
 import CompanyEstimateCard from '@/components/ui/CompanyEstimateCard';
+import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import { DOE_REGIONS } from '@/constants/regions';
 import BrandMark from '@/components/ui/BrandMark';
 import { fetchOfficialStationDirectory, filterStationGeography, isSupportedStationRegion, isSupportedStationArea, stationSearchText, type OfficialStation } from '@/lib/services/stationDirectory';
@@ -20,18 +21,18 @@ const StationCard = memo(function StationCard({ station }: { station: OfficialSt
       <Text style={styles.secondary}>{station.operating_hours}</Text>
     </View> : null}
     {station.fuel_types.length ? <View style={styles.chips}>
-      {station.fuel_types.map((fuel, index) => <Text key={`${fuel}-${index}`} style={styles.fuel}>{fuel}</Text>)}
+      {station.fuel_types.map((fuel, index) => <FuelTypeBadge key={`${fuel}-${index}`} fuelCode={fuel} label={fuel} />)}
     </View> : null}
     <View style={styles.chips}><Text style={styles.badge}>{station.source_url?.startsWith('https://doe.gov.ph/') ? 'DOE station register' : 'Official directory'}</Text></View>
   </View>;
 });
 
 export default function OfficialStationDirectory({
-  slug = 'seaoil', company = 'SEAOIL', fuelType, selectedArea = '', selectedRegion = '', doeSummary, unavailableLabel, onReport, expanded, onToggle,
+  slug = 'seaoil', company = 'SEAOIL', fuelCode, selectedArea = '', selectedRegion = '', doeSummary, unavailableLabel, onReport, expanded, onToggle,
 }: {
   slug?: string;
   company?: string;
-  fuelType?: string;
+  fuelCode?: string;
   selectedArea?: string;
   selectedRegion?: string;
   unavailableLabel?: string;
@@ -73,7 +74,7 @@ export default function OfficialStationDirectory({
       : "Station filtering isn't available for this area yet."
     : status === 'error' ? 'Directory unavailable · Tap View stations to retry' : 'Loading official locations…';
   return <>
-    <CompanyEstimateCard company={company} slug={slug} fuelType={fuelType}
+    <CompanyEstimateCard company={company} slug={slug} fuelCode={fuelCode}
       price={doeSummary?.price} unavailableLabel={unavailableLabel} sourceLabel={doeSummary?.sourceLabel ?? 'Official station directory'}
       subtitle={countLabel} expanded={expanded} onToggle={onToggle} onReport={onReport}
       onViewStations={() => { setVisible(true); if (status === 'error') setAttempt((value) => value + 1); }}>

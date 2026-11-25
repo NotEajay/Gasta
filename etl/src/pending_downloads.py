@@ -36,11 +36,11 @@ def upsert_pending_download(
     slug: str,
     source_url: str,
     last_error: str | None = None,
-) -> None:
-    """Remember a skipped PDF so the daily retry workflow can probe it."""
+) -> dict[str, Any] | None:
+    """Remember a skipped PDF and return the persisted queue row when available."""
     client = _client()
     now = datetime.now(timezone.utc).isoformat()
-    client.table("doe_pending_downloads").upsert(
+    response = client.table("doe_pending_downloads").upsert(
         {
             "region_code": region_code,
             "bulletin_date": bulletin_date.isoformat(),
@@ -51,6 +51,8 @@ def upsert_pending_download(
         },
         on_conflict="region_code,bulletin_date,slug",
     ).execute()
+    rows = response.data if response else None
+    return rows[0] if isinstance(rows, list) and rows else None
 
 
 def clear_pending_download(
@@ -92,15 +94,17 @@ def list_pending_downloads() -> list[PendingDownload]:
     return items
 
 
-def touch_pending_error(pending_id: int, last_error: str) -> None:
+def touch_pending_error(pending_id: int, last_error: str) -> dict[str, Any] | None:
     """Update last_error / updated_at when a daily probe still fails."""
     client = _client()
-    client.table("doe_pending_downloads").update(
+    response = client.table("doe_pending_downloads").update(
         {
             "last_error": last_error[:500],
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     ).eq("id", pending_id).execute()
+    rows = response.data if response else None
+    return rows[0] if isinstance(rows, list) and rows else None
 
 
 def update_pending_source_url(pending_id: int, source_url: str) -> None:

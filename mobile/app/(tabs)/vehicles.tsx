@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
@@ -49,7 +49,7 @@ export default function VehiclesScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   // The add/edit form is collapsed by default so saved vehicles lead the page.
   const [formOpen, setFormOpen] = useState(false);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -105,7 +105,7 @@ export default function VehiclesScreen() {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number } | null>(
     null,
   );
-  const triggerNodes = useRef<Record<string, View | null>>({});
+  const triggerNodes = useRef<Record<string, ComponentRef<typeof View> | null>>({});
   // Guards the async probe against a closed menu / a second menu opening:
   // only the latest probe for the currently open vehicle may write state.
   const menuProbeSeq = useRef(0);

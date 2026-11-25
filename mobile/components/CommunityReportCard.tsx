@@ -30,7 +30,7 @@ export default function CommunityReportCard({ report, own = false, awaiting = fa
     </View>
     <View style={styles.tags}>
       {own ? <Text style={styles.yours}>Your report</Text> : null}
-      {report.fuel_type?.name ? <FuelTypeBadge code={report.fuel_type.code} label={report.fuel_type.name} /> : null}
+      {report.fuel_type?.name ? <FuelTypeBadge fuelCode={report.fuel_type.code} label={report.fuel_type.name} /> : null}
       <View style={[styles.status, { backgroundColor: tint }]}><Ionicons name={report.status === 'verified' ? 'shield-checkmark-outline' : 'time-outline'} size={12} color={ink} /><Text style={[styles.statusText, { color: ink }]}>{label}</Text></View>
     </View>
     <Text style={styles.meta}>{report.confirmation_count} {report.status === 'pending' ? `/ ${VERIFY_CONFIRMATIONS_REQUIRED} confirmations` : `confirmation${report.confirmation_count === 1 ? '' : 's'}`} · {formatRelativeReportAge(report.created_at)}{historical ? ` · ${formatDate(report.created_at)}` : ''}</Text>

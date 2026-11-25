@@ -115,7 +115,7 @@ export default function StationPriceTable({
       region: region ?? '', fuelType: fuelType ?? '',
       doeContext: row.status ?? 'DOE Area/Brand Estimate',
     });
-    return <OfficialStationDirectory key={row.id} company={row.brand} slug={row.slug} fuelType={fuelType}
+    return <OfficialStationDirectory key={row.id} company={row.brand} slug={row.slug} fuelCode={fuelType}
         selectedRegion={region}
         selectedArea={selectedArea ?? (row.areaName === region ? '' : row.areaName)}
         doeSummary={{ price: hasPrice(row) ? row.price : null, sourceLabel: row.status ?? 'DOE Area/Brand Estimate' }}

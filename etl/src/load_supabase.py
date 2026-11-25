@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -300,28 +302,85 @@ def record_etl_run(
     *,
     workflow: str,
     status: str,
+    started_at: datetime,
+    ended_at: datetime,
     regions_ok: int = 0,
     regions_failed: int = 0,
     regions_skipped: int = 0,
     duration_s: float | None = None,
-    error_summary: str | None = None,
+    failure_reason: str | None = None,
+    failed_step: str | None = None,
+    region_results: dict[str, Any] | None = None,
 ) -> None:
-    """Insert one row into doe_etl_runs (history log visible in admin panel)."""
+    """Save one bounded workflow-history row through the database transaction."""
     client = _client()
     trigger = (os.environ.get("ETL_TRIGGER") or "cli").strip() or "cli"
     github_run_id = (os.environ.get("GITHUB_RUN_ID") or "").strip() or None
-    payload: dict[str, Any] = {
-        "workflow": workflow,
-        "status": status,
-        "trigger_source": trigger,
-        "github_run_id": github_run_id,
-        "regions_ok": regions_ok,
-        "regions_failed": regions_failed,
-        "regions_skipped": regions_skipped,
-        "duration_s": round(duration_s, 1) if duration_s is not None else None,
-        "error_summary": error_summary,
+    github_run_attempt = max(1, int(os.environ.get("GITHUB_RUN_ATTEMPT") or "1"))
+    elapsed = duration_s
+    if elapsed is None:
+        elapsed = max(0.0, (ended_at - started_at).total_seconds())
+    payload = {
+        "p_workflow": workflow,
+        "p_status": status,
+        "p_started_at": started_at.isoformat(),
+        "p_ended_at": ended_at.isoformat(),
+        "p_trigger_source": trigger,
+        "p_github_run_id": github_run_id,
+        "p_github_run_attempt": github_run_attempt,
+        "p_regions_ok": regions_ok,
+        "p_regions_failed": regions_failed,
+        "p_regions_skipped": regions_skipped,
+        "p_duration_s": round(elapsed, 1),
+        "p_failure_reason": failure_reason,
+        "p_failed_step": failed_step,
     }
-    client.table("doe_etl_runs").insert(payload).execute()
+    if region_results is not None:
+        payload["p_region_results"] = region_results
+    client.rpc("save_doe_etl_run", payload).execute()
+
+
+def _publish_etl_history_output(kwargs: dict[str, Any]) -> None:
+    payload = {
+        key: value.isoformat() if isinstance(value, datetime) else value
+        for key, value in kwargs.items()
+    }
+    serialized = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    # Log first so a missing/unwritable GitHub output file cannot lose the snapshot.
+    try:
+        print(f"DOE_ETL_HISTORY_PAYLOAD={serialized}", file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001 — a broken log stream must not block the handoff
+        pass
+    output_path = (os.environ.get("GITHUB_OUTPUT") or "").strip()
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as output:
+            output.write(f"history_payload={serialized}\n")
+
+
+def try_record_etl_run(**kwargs: Any) -> bool:
+    """Best-effort telemetry must never change the ETL command's outcome."""
+    try:
+        _publish_etl_history_output(kwargs)
+    except Exception as exc:  # noqa: BLE001 — output handoff is also telemetry
+        try:
+            print(
+                f"WARNING: failed to publish DOE ETL history output: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+        except Exception:  # noqa: BLE001 — logging must not affect the ETL outcome
+            pass
+    try:
+        record_etl_run(**kwargs)
+    except Exception as exc:  # noqa: BLE001 — history is secondary to ETL behavior
+        try:
+            print(
+                f"WARNING: failed to save DOE ETL run history: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+        except Exception:  # noqa: BLE001 — logging must not affect the ETL outcome
+            pass
+        return False
+    return True
 
 
 def fetch_loaded_weeks(region_code: str) -> set[str]:

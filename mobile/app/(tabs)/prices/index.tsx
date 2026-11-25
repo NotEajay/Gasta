@@ -30,8 +30,11 @@ import StationPriceTable, {
   type StationPriceRow,
 } from '@/components/ui/StationPriceTable';
 import { useResponsive } from '@/hooks/useResponsive';
+import { useFuelPriceDefault } from '@/hooks/useFuelPriceDefault';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import FuelTypeFilter from '@/components/prices/FuelTypeFilter';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
-import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
+import { DOE_FUEL_TYPES } from '@/constants/fuelTypes';
 import {
   DOE_REGIONS,
   type DoeRegionCode,
@@ -223,8 +226,6 @@ const HISTORY_WEEKS = 52;
 const PRICE_GREEN = GasTaColors.forest;
 const PRICE_GREEN_SOFT = GasTaColors.forestGlow;
 
-const QUICK_FUELS: readonly DoeFuelTypeCode[] = ['RON_91', 'RON_95', 'DIESEL'];
-
 type PriceFilterOption<T extends string = string> = {
   value: T;
   label: string;
@@ -257,8 +258,10 @@ function PriceFilterField<T extends string>({
   style,
 }: PriceFilterFieldProps<T>) {
   const theme = useTheme();
+  const reduced = useReducedMotion();
   const { isCompact } = useResponsive();
   const [open, setOpen] = useState(false);
+  useFocusEffect(useCallback(() => () => setOpen(false), []));
   const selected = options.find((option) => option.value === value)?.label ?? placeholder;
   const selectedFuelTone = more && options.some((option) => option.value === value) ? getFuelTypeColor(value) : null;
   // Location controls keep the neutral surface; fuel labels use their own tone.
@@ -294,7 +297,7 @@ function PriceFilterField<T extends string>({
         <MaterialCommunityIcons name="chevron-down" size={14} color={selectedFuelTone?.onStrong ?? GasTaColors.textSoft} />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal visible={open} transparent animationType={reduced ? 'none' : 'fade'} onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.filterBackdrop} onPress={() => setOpen(false)}>
           <Pressable
             style={[styles.filterSheet, { backgroundColor: GasTaColors.creamLight }]}
@@ -378,7 +381,7 @@ export default function FuelPricesScreen() {
   const insets = useSafeAreaInsets();
   const [view, setView] = useState<PricesView>('now');
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
-  const [fuelType, setFuelType] = useState<DoeFuelTypeCode>('RON_91');
+  const { fuelType, selectFuelType, vehicleLabel } = useFuelPriceDefault(user?.id ?? null);
   const fuelTone = getFuelTypeColor(fuelType);
   const fuelCardSurface = { backgroundColor: fuelTone.soft, borderColor: fuelTone.border };
   const [areaName, setAreaName] = useState('');
@@ -564,10 +567,6 @@ export default function FuelPricesScreen() {
     () => DOE_REGIONS.map((r) => ({ value: r.code, label: r.name })),
     []
   );
-  const fuelOptions = useMemo(
-    () => DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name })),
-    []
-  );
   const areaOptions = useMemo(
     () => [
       { value: '', label: 'Region-wide DOE price' },
@@ -715,6 +714,7 @@ export default function FuelPricesScreen() {
     let cancelled = false;
     setPricesLoading(true);
     setPrices([]);
+    setVerifiedCommunity([]);
 
     const run = async () => {
       try {
@@ -934,10 +934,13 @@ export default function FuelPricesScreen() {
     }
     const selected = pastBulletins.find((b) => b.bulletin_date === selectedPastDate);
     if (!selected) return;
+    let cancelled = false;
+    setPastWeekPrices([]);
     const areaForDoe = areaName;
     void fetchFuelPricesForBulletin(selected.id, region, fuelType, areaForDoe)
-      .then(setPastWeekPrices)
-      .catch(() => setPastWeekPrices([]));
+      .then((rows) => { if (!cancelled) setPastWeekPrices(rows); })
+      .catch(() => { if (!cancelled) setPastWeekPrices([]); });
+    return () => { cancelled = true; };
   }, [selectedPastDate, pastBulletins, region, fuelType, areaName]);
 
   const historySummary = useMemo(() => {
@@ -1048,12 +1051,13 @@ export default function FuelPricesScreen() {
 
   const trendSection = (
     <View testID="prices-trend" style={styles.trendSection}>
-      <View style={styles.sectionTitleRow}><Text style={styles.sectionTitle}>Price trend</Text><FuelTypeBadge code={fuelType} /></View>
+      <View style={styles.sectionTitleRow}><Text style={styles.sectionTitle}>Price trend</Text><FuelTypeBadge fuelCode={fuelType} /></View>
 
       <View testID="price-trend-card" style={[styles.trendPanel, fuelCardSurface]}>
         {view === 'history' && companyOptions.length > 0 ? (
           <View style={styles.trendBrandRow}>
             <SelectField
+              appearance="standard"
               label="Brand"
               value={trendCompanySlug}
               options={companyOptions}
@@ -1101,6 +1105,7 @@ export default function FuelPricesScreen() {
         ) : (
           <PriceTrendChart
             points={trend}
+            fuelCode={fuelType}
             caption={
               view === 'history'
                 ? `${fuelLabel} · ${companyName}`
@@ -1159,6 +1164,7 @@ export default function FuelPricesScreen() {
 
   return (
     <ScrollView
+      testID="fuel-prices-screen"
       onScroll={tabBarScrollHandler}
       scrollEventThrottle={16}
       style={styles.flex}
@@ -1200,7 +1206,7 @@ export default function FuelPricesScreen() {
 
       {/* One mode control and one filter panel share the same selected scope. */}
       <View testID="prices-controls" style={styles.controlsPanel}>
-        <View style={styles.viewToggle} accessibilityRole="tablist">
+        <View style={styles.viewToggle} accessibilityRole="tablist" accessibilityLabel="Price period">
           {(
             [
               { value: 'now', label: 'This week' },
@@ -1231,25 +1237,14 @@ export default function FuelPricesScreen() {
           })}
         </View>
 
-        <View testID="prices-fuel-shortcuts" style={styles.fuelShortcuts}>
-          {fuelOptions.filter((option) => QUICK_FUELS.includes(option.value)).map((option) => {
-            const tone = getFuelTypeColor(option.value);
-            const selected = fuelType === option.value;
-            return <Pressable key={option.value} accessibilityRole="button"
-              accessibilityLabel={`Select fuel ${option.label}`}
-              accessibilityState={{ selected }}
-              onPress={() => setFuelType(option.value)}
-              style={({ pressed }) => [styles.fuelChip, {
-                backgroundColor: selected ? tone.strong : tone.soft,
-                borderColor: selected ? tone.strong : tone.border,
-              }, pressed && styles.pressed]}>
-              <Text style={[styles.fuelChipText, { color: selected ? tone.onStrong : tone.text }]}>{option.label}</Text>
-            </Pressable>;
-          })}
-          <PriceFilterField label="More fuel types" value={fuelType}
-            options={fuelOptions.filter((option) => !QUICK_FUELS.includes(option.value))}
-            onChange={setFuelType} icon="gas-station" placeholder="More" more />
-        </View>
+        <FuelTypeFilter label="Fuel" value={fuelType} onChange={selectFuelType} context={
+          vehicleLabel ? <View testID="prices-default-context" accessible
+            accessibilityLabel={`Using ${vehicleLabel} · ${fuelLabel}`} style={styles.fuelContext}>
+            <Text style={styles.contextText}>Using {vehicleLabel} ·</Text>
+            <View style={[styles.contextDot, { backgroundColor: fuelTone.strong }]} />
+            <Text style={styles.contextText}>{fuelLabel}</Text>
+          </View> : null
+        } />
         <View style={styles.filterRow}>
           <PriceFilterField label="Region" value={region} options={regionOptions}
             onChange={handleManualRegion} icon="map-marker-outline" />
@@ -1377,7 +1372,7 @@ export default function FuelPricesScreen() {
             rows in memory, no extra fetch, precedence untouched.
           */}
           {cheapest ? (
-            <View testID="prices-lowest" style={[styles.heroCard, { backgroundColor: fuelTone.strong }, isDesktop && styles.overviewCard]}>
+            <View testID="prices-lowest" accessibilityLabel={`${fuelLabel} lowest listed price`} style={[styles.heroCard, { backgroundColor: fuelTone.strong, borderColor: fuelTone.border }, isDesktop && styles.overviewCard]}>
               <View style={styles.heroTopRow}>
                 <Text style={styles.heroLabel}>Lowest listed price</Text>
                 {/*
@@ -1408,7 +1403,7 @@ export default function FuelPricesScreen() {
                 </View>
               </View>
 
-              <View style={styles.heroScopeRow}><FuelTypeBadge code={fuelType} /><Text style={styles.heroScope}>{regionLabel}</Text></View>
+              <View style={styles.heroScopeRow}><FuelTypeBadge fuelCode={fuelType} /><Text style={styles.heroScope}>{regionLabel}</Text></View>
               <View style={styles.heroPriceRow}>
                 <Text style={styles.heroPrice} numberOfLines={1} adjustsFontSizeToFit>
                   {formatCurrency(cheapest.price)}
@@ -1416,10 +1411,8 @@ export default function FuelPricesScreen() {
                 <Text style={styles.heroUnit}>/L</Text>
               </View>
 
-              <Text style={styles.heroStation}>
-                {cheapest.brand} ·{' '}
-                {'station' in cheapest ? cheapest.station || areaLabel : cheapest.areaName}
-              </Text>
+              <Text style={styles.heroStation}>{cheapest.brand}</Text>
+              <Text style={styles.heroStation}>{'station' in cheapest ? cheapest.station || areaLabel : areaName || 'Region-wide DOE price'}</Text>
 
               {/*
                 Real movement only. On a first visit the screen holds exactly one
@@ -1592,7 +1585,7 @@ export default function FuelPricesScreen() {
                           <Text numberOfLines={1} style={styles.communityStation}>
                             {report.station?.name ?? 'Station'}
                           </Text>
-                          <View style={styles.communityFuelMeta}><FuelTypeBadge code={report.fuel_type?.code} label={report.fuel_type?.name} />
+                          <View style={styles.communityFuelMeta}><FuelTypeBadge fuelCode={report.fuel_type?.code} label={report.fuel_type?.name} />
                           <Text style={styles.communityMeta}>
                             {formatRelativeReportAge(report.created_at)}
                             {isHistorical ? ` · ${formatDate(report.created_at)}` : ''}
@@ -1675,6 +1668,9 @@ function HeroDelta({ delta }: { delta: number }) {
 }
 
 const styles = StyleSheet.create({
+  fuelContext: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1 },
+  contextDot: { width: 6, height: 6, borderRadius: 3 },
+  contextText: { color: GasTaColors.textMuted, fontSize: 12, lineHeight: 18, flexShrink: 1 },
   flex: { flex: 1, backgroundColor: GasTaColors.cream },
   pressed: { opacity: 0.7 },
   padding: {
@@ -1924,6 +1920,8 @@ const styles = StyleSheet.create({
   },
   overviewCard: { flex: 1, minWidth: 0 },
   heroCard: {
+    borderWidth: 1,
+    shadowColor: '#000000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8,
     marginTop: spacing.md,
     padding: 20,
     borderRadius: 26,

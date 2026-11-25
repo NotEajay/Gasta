@@ -2,9 +2,11 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { GasTaColors, radii, spacing } from '@/constants/Theme';
+import { designSystem as D, GasTaColors, radii, spacing } from '@/constants/Theme';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import { formatDoeTimelineDate } from '@/lib/doeCoverage';
 import { formatCurrency } from '@/lib/format';
+import { placePriceTrendLabels } from '@/components/prices/priceTrendLabels';
 
 export type TrendPoint = {
   bulletin_date: string;
@@ -16,6 +18,7 @@ type Props = {
   points: TrendPoint[];
   /** Shown above the chart, e.g. "RON 91 · South Luzon". */
   caption?: string;
+  fuelCode?: string | null;
   /** Chart body height in pixels (excluding label headroom). */
   height?: number;
   downColor?: string;
@@ -25,15 +28,11 @@ type Props = {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 /** Number of interior horizontal grid lines (top + bottom edge always drawn). */
-const GRID_INTERIOR = 3;
-/** Dot radius for every data-point marker. */
-const DOT_R = 3.5;
+const GRID_INTERIOR = 2;
 /** Line stroke thickness. */
 const LINE_H = 2;
 /** Pixel space above the plot to prevent value labels being clipped. */
 const LABEL_HEADROOM = 18;
-/** Minimum horizontal gap (px) between two value labels before one is hidden. */
-const LABEL_MIN_GAP = 34;
 /** Width of the y-axis column. */
 const Y_AXIS_W = 52;
 
@@ -43,8 +42,8 @@ const Y_AXIS_W = 52;
  * DOE price-trend line chart built entirely from React Native Views.
  *
  * Features: connected polyline, filled dots at every data point, price
- * callouts at key moments (first, last, all-time high, all-time low), full
- * horizontal grid, y-axis ticks, and x-axis date labels.
+ * collision-safe callouts prioritizing the latest value and key extremes,
+ * restrained horizontal grid, y-axis ticks, and x-axis date labels.
  *
  * GEOMETRY NOTE
  * Every segment is drawn as a rotated rectangle. The correct way to do this
@@ -63,6 +62,7 @@ const Y_AXIS_W = 52;
 export default function PriceTrendChart({
   points: allPoints,
   caption,
+  fuelCode,
   height = 150,
   downColor = GasTaColors.forest,
   upColor = '#E0533D',
@@ -95,8 +95,8 @@ export default function PriceTrendChart({
   const last = values[values.length - 1];
   const delta = last - first;
   const direction = delta < 0 ? 'down' : delta > 0 ? 'up' : 'flat';
-  const lineColor =
-    direction === 'down' ? downColor : direction === 'up' ? upColor : GasTaColors.forestMuted;
+  const lineColor = fuelCode != null ? getFuelTypePresentation(fuelCode).accent
+    : direction === 'down' ? downColor : direction === 'up' ? upColor : GasTaColors.forestMuted;
 
   // Subsample long series so segments stay readable at phone widths.
   const MAX_POINTS = 40;
@@ -128,7 +128,8 @@ export default function PriceTrendChart({
       max={max}
       yTicks={yTicks}
     />
-    {unresolvedCount ? <Text style={styles.emptyBody}>{unresolvedCount} bulletin{unresolvedCount === 1 ? '' : 's'} not plotted: coverage end date unavailable.</Text> : null}
+    {unresolvedCount ? <Text accessibilityLabel={`${unresolvedCount} coverage gap${unresolvedCount === 1 ? '' : 's'}: coverage end date unavailable.`}
+      style={styles.coverageMetadata}>{unresolvedCount} coverage gap{unresolvedCount === 1 ? '' : 's'} · coverage end date unavailable</Text> : null}
     </View>
   );
 }
@@ -213,40 +214,23 @@ function PlotCanvas({
     }).filter(Boolean) as { key: string; left: number; top: number; width: number; angle: number }[];
   }, [dots]);
 
-  // ── Value labels ─────────────────────────────────────────────────────────
-  // Show at: first point, last point, all-time high, all-time low.
-  // Then suppress any label that would overlap with a previously placed one
-  // (sorted left → right, minimum gap of LABEL_MIN_GAP pixels).
-  const visibleLabelIndices = React.useMemo(() => {
-    if (dots.length === 0) return [];
-    const vals = dots.map((d) => d.value);
-    const minIdx = vals.indexOf(Math.min(...vals));
-    const maxIdx = vals.indexOf(Math.max(...vals));
-    const candidates = [...new Set([0, dots.length - 1, minIdx, maxIdx])].sort(
-      (a, b) => dots[a].x - dots[b].x,
-    );
-    const result: number[] = [];
-    let lastX = -Infinity;
-    for (const idx of candidates) {
-      if (dots[idx].x - lastX >= LABEL_MIN_GAP) {
-        result.push(idx);
-        lastX = dots[idx].x;
-      }
-    }
-    return result;
-  }, [dots]);
+  // Reserve the latest annotation first. Remaining callouts must fit around
+  // it in both axes; horizontal distance alone misses early clamped collisions.
+  const valueLabels = React.useMemo(() => placePriceTrendLabels(dots, plotWidth, height + 12,
+    Math.max(52, ...dots.map(dot => formatCurrency(dot.value).length * 7)), 16, LABEL_HEADROOM),
+  [dots, plotWidth, height]);
 
   // ── X-axis labels ────────────────────────────────────────────────────────
-  // Show first, last, and up to 3 evenly spaced in between.
+  // Show first, latest, and one or two evenly spaced dates in between.
   const xLabelIndices = React.useMemo(() => {
     const n = sampled.length;
     if (n <= 2) return [0, n - 1];
-    const steps = Math.min(3, n - 2);
+    const steps = Math.min(plotWidth < 320 ? 1 : 2, n - 2);
     const mids = Array.from({ length: steps }, (_, i) =>
       Math.round(((i + 1) / (steps + 1)) * (n - 1)),
     );
     return [0, ...mids, n - 1];
-  }, [sampled.length]);
+  }, [sampled.length, plotWidth]);
 
   // ── Grid ─────────────────────────────────────────────────────────────────
   const gridCount = GRID_INTERIOR + 2; // top edge + interior + bottom edge
@@ -256,20 +240,23 @@ function PlotCanvas({
 
   return (
     <View>
-      {caption ? <Text style={styles.caption}>{caption}</Text> : null}
+      {caption ? <View style={styles.legend}>
+        <View style={[styles.legendDot, { backgroundColor: lineColor }]} />
+        <Text style={styles.caption}>{caption}</Text>
+      </View> : null}
 
       <View style={styles.plotRow}>
         {/* Y-axis --------------------------------------------------------- */}
         <View style={[styles.yAxis, { height: height + LABEL_HEADROOM }]}>
           {yTicks.map((tick, i) => (
-            <Text key={`y${i}`} style={styles.yTickText}>
+            <Text key={`y${i}`} style={[styles.yTickText, { top: LABEL_HEADROOM + gridTops[i] - 8 }]}>
               {formatCurrency(tick)}
             </Text>
           ))}
         </View>
 
         {/* Plot column ---------------------------------------------------- */}
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, paddingRight: 18 }}>
           {/* Headroom above the chart so value labels don't clip */}
           <View style={{ height: LABEL_HEADROOM }} />
 
@@ -307,43 +294,25 @@ function PlotCanvas({
             ))}
 
             {/* Data-point dots */}
-            {dots.map((dot, i) => (
-              <View
-                key={`d${i}`}
-                style={[
-                  styles.dot,
-                  {
-                    left: dot.x - DOT_R,
-                    top: dot.y - DOT_R,
-                    width: DOT_R * 2,
-                    height: DOT_R * 2,
-                    borderRadius: DOT_R,
-                    backgroundColor: lineColor,
-                  },
-                ]}
-              />
-            ))}
-
-            {/* Value labels at key dots */}
-            {visibleLabelIndices.map((idx) => {
-              const dot = dots[idx];
-              // Place label above the dot; flip below when near the top edge.
-              const above = dot.y >= LABEL_HEADROOM;
-              return (
-                <Text
-                  key={`lbl${idx}`}
-                  style={[
-                    styles.valueLabel,
-                    { color: lineColor },
-                    above
-                      ? { left: dot.x - 18, top: dot.y - LABEL_HEADROOM + 1 }
-                      : { left: dot.x - 18, top: dot.y + DOT_R + 3 },
-                  ]}
-                >
-                  {formatCurrency(dot.value)}
-                </Text>
-              );
+            {dots.map((dot, i) => {
+              const latest = i === dots.length - 1;
+              const radius = latest ? 4 : 2.5;
+              return <View key={`d${i}`} accessible
+                accessibilityLabel={`${formatCurrency(dot.value)} · ${formatDoeTimelineDate(dot.date)}`}
+                testID={latest ? 'price-trend-latest-point' : undefined} style={[styles.dot, {
+                left: dot.x - radius, top: dot.y - radius,
+                width: radius * 2, height: radius * 2, borderRadius: radius,
+                backgroundColor: lineColor, opacity: latest ? 1 : 0.45,
+              }]} />;
             })}
+
+            {/* Annotations use exact values; no changes to dots or segments. */}
+            {valueLabels.map(label => <Text key={`lbl${label.index}`} testID="price-trend-value-label"
+              accessibilityLabel={`${formatCurrency(dots[label.index].value)} · ${formatDoeTimelineDate(dots[label.index].date)}`}
+              numberOfLines={1} style={[styles.valueLabel, {
+                left: label.left, top: label.top, width: label.width, height: label.height,
+                fontWeight: label.index === dots.length - 1 ? '600' : '500',
+              }]}>{formatCurrency(dots[label.index].value)}</Text>)}
           </View>
 
           {/* X-axis date labels ------------------------------------------ */}
@@ -355,7 +324,8 @@ function PlotCanvas({
                 return (
                   <Text
                     key={`xl${idx}`}
-                    style={[styles.xTickText, { left: dot.x - 16 }]}
+                    numberOfLines={1}
+                    style={[styles.xTickText, { left: Math.max(0, Math.min(plotWidth - 44, dot.x - 22)) }]}
                   >
                     {formatDoeTimelineDate(sampled[idx].coverage_end!)}
                   </Text>
@@ -370,7 +340,6 @@ function PlotCanvas({
       <View style={styles.footer}>
         <Text style={styles.footerLabel}>
           {points.length} {points.length === 1 ? 'bulletin' : 'bulletins'}
-          {caption ? ` · ${caption}` : ''}
         </Text>
         <MovementTag delta={delta} />
       </View>
@@ -383,8 +352,8 @@ function PlotCanvas({
 function MovementTag({ delta }: { delta: number }) {
   if (Math.abs(delta) < 0.005) {
     return (
-      <View style={[styles.moveTag, { backgroundColor: GasTaColors.creamLight }]}>
-        <Text style={[styles.moveText, { color: GasTaColors.textMuted }]}>No change</Text>
+      <View style={[styles.moveTag, { backgroundColor: D.color.surface }]}>
+        <Text style={[styles.moveText, { color: D.color.textSecondary }]}>No change</Text>
       </View>
     );
   }
@@ -393,10 +362,10 @@ function MovementTag({ delta }: { delta: number }) {
     <View
       style={[
         styles.moveTag,
-        { backgroundColor: down ? GasTaColors.forestGlow : 'rgba(224, 83, 61, 0.12)' },
+        { backgroundColor: down ? D.status.success.background : D.status.error.background },
       ]}
     >
-      <Text style={[styles.moveText, { color: down ? GasTaColors.forestDark : '#B03A24' }]}>
+      <Text style={[styles.moveText, { color: down ? D.status.success.foreground : D.status.error.foreground }]}>
         {down ? '↓' : '↑'} {formatCurrency(Math.abs(delta))}
       </Text>
     </View>
@@ -406,11 +375,13 @@ function MovementTag({ delta }: { delta: number }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: spacing.sm },
+  legendDot: { width: 7, height: 7, borderRadius: 4 },
   caption: {
     fontSize: 13,
-    fontWeight: '800',
-    color: GasTaColors.forestDark,
-    marginBottom: spacing.sm,
+    fontWeight: '500',
+    color: D.color.textSecondary,
+    flex: 1,
   },
   plotRow: {
     flexDirection: 'row',
@@ -418,12 +389,14 @@ const styles = StyleSheet.create({
   },
   yAxis: {
     width: Y_AXIS_W,
-    justifyContent: 'space-between',
+    position: 'relative',
   },
   yTickText: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: GasTaColors.textSoft,
+    position: 'absolute', left: 0, right: 0,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '400',
+    color: D.color.textSecondary,
     textAlign: 'right',
     paddingRight: 4,
   },
@@ -439,11 +412,11 @@ const styles = StyleSheet.create({
   },
   gridEdge: {
     height: 1,
-    backgroundColor: GasTaColors.forestBorder,
+    backgroundColor: D.color.borderSubtle, opacity: 0.65,
   },
   gridMid: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: D.color.neutralSoft,
   },
   segment: {
     position: 'absolute',
@@ -460,22 +433,25 @@ const styles = StyleSheet.create({
   },
   valueLabel: {
     position: 'absolute',
-    width: 36,
-    fontSize: 9,
-    fontWeight: '800',
+    color: D.color.textPrimary, fontVariant: ['tabular-nums'],
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
     textAlign: 'center',
   },
   xAxisRow: {
     position: 'relative',
     height: 18,
-    marginTop: 4,
+    // White space for low-point callouts, without moving any plotted point.
+    marginTop: 16,
   },
   xTickText: {
     position: 'absolute',
-    width: 32,
-    fontSize: 9,
-    fontWeight: '600',
-    color: GasTaColors.textSoft,
+    width: 44,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '400',
+    color: D.color.textTertiary,
     textAlign: 'center',
   },
   footer: {
@@ -483,37 +459,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    marginTop: spacing.md,
+    marginTop: 12,
   },
   footerLabel: {
     flex: 1,
-    fontSize: 10,
-    fontWeight: '700',
-    color: GasTaColors.textSoft,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '400',
+    color: D.color.textTertiary,
   },
+  coverageMetadata: { fontSize: 11, lineHeight: 16, fontWeight: '400', color: D.color.textTertiary, marginTop: 2 },
   moveTag: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: radii.pill,
   },
-  moveText: { fontSize: 11, fontWeight: '800' },
+  moveText: { fontSize: 11, lineHeight: 14, fontWeight: '500' },
   empty: {
     paddingVertical: spacing.lg,
     paddingHorizontal: spacing.md,
-    borderRadius: radii.md,
-    backgroundColor: GasTaColors.creamLight,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestGlow,
+    backgroundColor: D.color.surface,
   },
   emptyTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: GasTaColors.textPrimary,
+    color: D.color.textPrimary,
     marginBottom: 2,
   },
   emptyBody: {
     fontSize: 12,
     lineHeight: 17,
-    color: GasTaColors.textSoft,
+    color: D.color.textTertiary,
   },
 });

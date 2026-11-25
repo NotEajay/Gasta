@@ -1,15 +1,16 @@
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
-import { DOE_FUEL_TYPES } from '@/constants/fuelTypes';
 import { getFuelTypeColor } from '@/constants/fuelTypeColors';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
+import { designSystem as D, type DesignAppearance } from '@/constants/Theme';
 
-export default function FuelTypeBadge({ code, label }: { code?: string | null; label?: string | null }) {
-  const tone = getFuelTypeColor(code);
-  const name = DOE_FUEL_TYPES.find((fuel) => fuel.code === code)?.name ?? label ?? 'Fuel';
+export default function FuelTypeBadge({ fuelCode, label, appearance = 'legacy' }: { fuelCode?: string | null; label?: string | null; appearance?: DesignAppearance }) {
+  const tone = getFuelTypeColor(fuelCode);
+  const name = getFuelTypePresentation(fuelCode, label).label;
   return <View accessible accessibilityLabel={`Fuel type: ${name}`}
-    style={[styles.badge, { backgroundColor: tone.soft, borderColor: tone.border }]}>
+    style={[styles.badge, { backgroundColor: tone.soft, borderColor: tone.border }, appearance === 'standard' && { borderRadius: D.radius.small }]}>
     <View accessible={false} style={[styles.dot, { backgroundColor: tone.strong }]} />
-    <Text style={[styles.label, { color: tone.text }]}>{name}</Text>
+    <Text style={[styles.label, appearance === 'standard' && D.type.metadata, { color: tone.text }]}>{name}</Text>
   </View>;
 }
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .constants import ALL_REGION_KEYS, CORE_FUEL_CODES, REGION_KEY_BY_CODE
@@ -13,7 +13,7 @@ from .carry_forward import carry_forward_missing_areas, db_missing_areas_vs_prio
 from .discover import DiscoveredBulletin, UpstreamUnavailableError, discover_latest_weeks
 from .download import download_region_bulletins, normalize_region
 from .freshness import describe_freshness, is_bulletin_stale
-from .load_supabase import _client, load_bulletin, record_doe_website_fetch, record_etl_run, touch_bulletin_fetched_at
+from .load_supabase import _client, load_bulletin, record_doe_website_fetch, touch_bulletin_fetched_at, try_record_etl_run
 from .parse_bulletin import (
     BulletinDateUnknown,
     BulletinNotMachineReadable,
@@ -21,6 +21,12 @@ from .parse_bulletin import (
     parse_region_pdfs,
 )
 from .pending_downloads import clear_pending_download, upsert_pending_download
+from .region_results import (
+    RegionRunResult,
+    confirm_pending,
+    new_region_results,
+    region_results_payload,
+)
 
 
 @dataclass
@@ -205,6 +211,36 @@ def _sync_discovered(
     dry_run: bool = False,
     force: bool = False,
     today: date | None = None,
+    region_result: RegionRunResult | None = None,
+) -> SyncResult:
+    observation = region_result or RegionRunResult(discovered.region_code)
+    observation.start("read stored bulletin")
+    observation.week_start = discovered.week_start.isoformat()
+    observation.slug = None
+    observation.retry_queued = None
+    observation.retry_checked_at = None
+    try:
+        result = _sync_discovered_bulletin(
+            discovered, dest_dir=dest_dir, dry_run=dry_run, force=force,
+            today=today, region_result=observation,
+        )
+    except Exception as exc:
+        observation.failed(exc)
+        raise
+    observation.week_start = result.week_start or observation.week_start
+    observation.price_rows = result.price_rows
+    observation.companies = result.companies
+    return result
+
+
+def _sync_discovered_bulletin(
+    discovered: DiscoveredBulletin,
+    *,
+    dest_dir: str | Path,
+    dry_run: bool,
+    force: bool,
+    today: date | None,
+    region_result: RegionRunResult,
 ) -> SyncResult:
     region_code = discovered.region_code
     region_key = REGION_KEY_BY_CODE[region_code]
@@ -219,10 +255,20 @@ def _sync_discovered(
         default=discovered.week_start,
     )
     stale = is_bulletin_stale(judged_week, today)
+    if stale:
+        region_result.step = "freshness check"
+        region_result.issue("outdated", describe_freshness(judged_week, today))
 
+    region_result.step = "PDF download"
     downloaded = download_region_bulletins(
         region_key, discovered.slugs, dest_dir, discovered.urls
     )
+    for _ in downloaded.paths:
+        region_result.downloaded(True)
+    skipped_issues = {}
+    for skip in downloaded.skipped:
+        region_result.downloaded(False)
+        skipped_issues[skip.slug] = region_result.issue("not_fetched", skip.error, slug=skip.slug)
     pending_queue_errors: list[str] = []
     # Queue inaccessible PDFs for the daily pending-retry workflow; clear any
     # that succeeded this run so daily automation stops for those gaps. Queue
@@ -230,28 +276,42 @@ def _sync_discovered(
     # parse/load, while the run is explicitly marked unsuccessful.
     if not dry_run:
         for skip in downloaded.skipped:
+            region_result.step = "pending-download queue"
             try:
-                upsert_pending_download(
+                pending_row = upsert_pending_download(
                     region_code=region_code,
                     bulletin_date=discovered.week_start,
                     slug=skip.slug,
                     source_url=skip.url,
                     last_error=skip.error,
                 )
+                queued, checked_at = confirm_pending(
+                    pending_row, region_code=region_code,
+                    week_start=discovered.week_start.isoformat(), slug=skip.slug,
+                )
+                skipped_issues[skip.slug].update(
+                    retry_queued=queued, retry_checked_at=checked_at
+                )
             except Exception as exc:  # noqa: BLE001 — surface queue loss in result
                 pending_queue_errors.append(
                     f"{skip.slug}: {type(exc).__name__}: {exc}"
                 )
+                region_result.issue("error", str(exc), slug=skip.slug)
         skipped_slugs = {item.slug for item in downloaded.skipped}
         for slug in discovered.slugs:
             if slug not in skipped_slugs:
+                region_result.step = "pending queue cleanup"
+                region_result.slug = slug
                 clear_pending_download(
                     region_code=region_code,
                     bulletin_date=discovered.week_start,
                     slug=slug,
                 )
+        region_result.slug = None
 
     pdf_paths = downloaded.paths
+    region_result.step = "PDF parse"
+    region_result.parse_input_available = bool(pdf_paths)
     parsed = parse_region_pdfs(
         pdf_paths,
         region_code,
@@ -260,10 +320,14 @@ def _sync_discovered(
     )
     # When a sub-region PDF is 403/missing, keep showing those cities using the
     # previous week's rows for any area_name the new parse does not cover.
+    region_result.step = "carry forward prices"
     carried_areas = carry_forward_missing_areas(parsed)
 
     freshness_note = describe_freshness(judged_week, today)
+    region_result.step = "validation"
     parsed_missing = tuple(missing_core_fuels(parsed.prices))
+    if parsed_missing:
+        region_result.issue("missing_prices", ", ".join(parsed_missing))
     coverage_note = ""
     if downloaded.skipped:
         coverage_note += (
@@ -291,6 +355,7 @@ def _sync_discovered(
     # Check for validation errors
     if parsed.validation_errors:
         if not force:
+            region_result.issue("error", "; ".join(parsed.validation_errors))
             return SyncResult(
                 region_code=region_code,
                 week_start=parsed.bulletin_date.isoformat(),
@@ -304,6 +369,7 @@ def _sync_discovered(
                 pending_queue_error=bool(pending_queue_errors),
             )
 
+    region_result.step = "read existing prices"
     already = (
         not force
         and not dry_run
@@ -313,6 +379,7 @@ def _sync_discovered(
         db_missing = _missing_core_fuels_in_db(parsed.bulletin_date, region_code)
         gaps = db_missing_areas_vs_prior(parsed) if not dry_run else []
         if not db_missing and not gaps and not carried_areas:
+            region_result.step = "bulletin fetch state"
             touch_bulletin_fetched_at(parsed.bulletin_date)
             return SyncResult(
                 region_code=region_code,
@@ -355,7 +422,10 @@ def _sync_discovered(
             pending_queue_error=bool(pending_queue_errors),
         )
 
+    region_result.step = "price load"
     load_stats = load_bulletin(parsed)
+    region_result.price_rows = load_stats["price_rows"]
+    region_result.companies = load_stats["companies"]
     message = "Loaded successfully." + coverage_note
     if load_stats.get("duplicates_skipped", 0) > 0:
         message += f" Skipped {load_stats['duplicates_skipped']} duplicate price entries."
@@ -380,6 +450,7 @@ def sync_latest_region(
     dry_run: bool = False,
     force: bool = False,
     fallback_weeks: int = 3,
+    region_result: RegionRunResult | None = None,
 ) -> SyncResult:
     """Discover, download, parse, and load the latest usable bulletin for one region.
 
@@ -387,15 +458,22 @@ def sync_latest_region(
     that the app still shows this region's most recent prices rather than an error, the
     next-newest weeks are tried in turn.
     """
-    candidates = discover_latest_weeks(
-        region_key, limit=1 + max(fallback_weeks, 0), probe_dir=dest_dir
-    )
+    observation = region_result or RegionRunResult(normalize_region(region_key))
+    observation.start("discovery")
+    try:
+        candidates = discover_latest_weeks(
+            region_key, limit=1 + max(fallback_weeks, 0), probe_dir=dest_dir
+        )
+    except Exception as exc:
+        observation.failed(exc)
+        raise
 
     skipped: list[str] = []
     for discovered in candidates:
         try:
             result = _sync_discovered(
-                discovered, dest_dir=dest_dir, dry_run=dry_run, force=force
+                discovered, dest_dir=dest_dir, dry_run=dry_run, force=force,
+                region_result=observation,
             )
         except (BulletinNotMachineReadable, BulletinDateUnknown) as exc:
             skipped.append(f"{discovered.week_start}: {exc}")
@@ -407,6 +485,7 @@ def sync_latest_region(
             )
         return result
 
+    observation.step = None if skipped else "discovery"
     raise RuntimeError(
         f"No usable bulletin for {normalize_region(region_key)} in the last "
         f"{len(candidates)} published weeks: {'; '.join(skipped)}"
@@ -423,6 +502,56 @@ def sync_latest_ncr(
     return sync_latest_region("ncr", dest_dir=dest_dir, dry_run=dry_run, force=force)
 
 
+def _weekly_failure_details(results: list[SyncResult]) -> tuple[str | None, str | None]:
+    """Summarise the existing per-region outcome without changing sync semantics."""
+    issues: list[str] = []
+    failed_steps: list[str] = []
+    for result in results:
+        if result.upstream_unavailable:
+            issues.append(f"{result.region_code}: {result.message}")
+            failed_steps.append("discovery")
+        elif result.pending_queue_error:
+            issues.append(f"{result.region_code}: {result.message}")
+            failed_steps.append("pending-download queue")
+        elif "Failed" in result.message:
+            issues.append(f"{result.region_code}: {result.message}")
+            failed_steps.append("region sync")
+        elif result.stale:
+            issues.append(
+                f"{result.region_code}: stale bulletin {result.week_start or 'not resolved'}"
+            )
+            failed_steps.append("freshness check")
+        elif result.status == "ERROR":
+            issues.append(f"{result.region_code}: {result.message}")
+        elif result.missing_fuels:
+            issues.append(
+                f"{result.region_code}: missing core fuels {', '.join(result.missing_fuels)}"
+            )
+            failed_steps.append("validation")
+        elif not result.week_start:
+            issues.append(f"{result.region_code}: no bulletin data resolved")
+            failed_steps.append("discovery")
+
+    if not issues:
+        return None, None
+    failed_step = "; ".join(dict.fromkeys(failed_steps)) or None
+    return "; ".join(issues), failed_step
+
+
+def _weekly_history_counts(
+    results: list[SyncResult],
+) -> tuple[list[SyncResult], list[SyncResult], list[SyncResult]]:
+    skipped = [r for r in results if r.upstream_unavailable]
+    failed = [
+        r
+        for r in results
+        if not r.upstream_unavailable
+        and (r.stale or r.status == "ERROR" or bool(r.missing_fuels) or not r.week_start)
+    ]
+    ok = [r for r in results if r not in failed and r not in skipped]
+    return ok, failed, skipped
+
+
 def sync_all_regions(
     *,
     dest_dir: str | Path = "data/bulletins",
@@ -430,81 +559,122 @@ def sync_all_regions(
     force: bool = False,
 ) -> list[SyncResult]:
     """Sync all five macro-regions. Failures for one region do not stop the others."""
+    started_at = datetime.now(timezone.utc)
     t_start = time.monotonic()
     results: list[SyncResult] = []
-    for region_key in ALL_REGION_KEYS:
-        try:
-            results.append(
-                sync_latest_region(
+    region_results = new_region_results()
+    failed_step = "region sync"
+
+    try:
+        for region_key in ALL_REGION_KEYS:
+            observation = region_results[normalize_region(region_key)]
+            try:
+                result = sync_latest_region(
                     region_key,
                     dest_dir=dest_dir,
                     dry_run=dry_run,
                     force=force,
+                    region_result=observation,
                 )
-            )
-        except UpstreamUnavailableError as exc:
-            # DOE is not serving this region right now. Reported, but non-fatal: the
-            # other regions are still ingested normally, and nothing is loaded or
-            # faked for this one.
-            results.append(
-                SyncResult(
-                    region_code=normalize_region(region_key),
-                    week_start="",
-                    pdf_path="",
-                    price_rows=0,
-                    companies=0,
-                    message=f"Upstream unavailable: {exc}",
-                    upstream_unavailable=True,
+                observation.status = "processed"
+                observation.week_start = result.week_start or observation.week_start
+                observation.price_rows = result.price_rows
+                observation.companies = result.companies
+                results.append(result)
+            except UpstreamUnavailableError as exc:
+                observation.status = "processed"
+                if not observation.issues:
+                    observation.step = "discovery"
+                    observation.failed(exc)
+                # DOE is not serving this region right now. Reported, but non-fatal: the
+                # other regions are still ingested normally, and nothing is loaded or
+                # faked for this one.
+                results.append(
+                    SyncResult(
+                        region_code=normalize_region(region_key),
+                        week_start="",
+                        pdf_path="",
+                        price_rows=0,
+                        companies=0,
+                        message=f"Upstream unavailable: {exc}",
+                        upstream_unavailable=True,
+                    )
                 )
-            )
-        except Exception as exc:  # noqa: BLE001 — one region must not stop the rest
-            results.append(
-                SyncResult(
-                    region_code=normalize_region(region_key),
-                    week_start="",
-                    pdf_path="",
-                    price_rows=0,
-                    companies=0,
-                    message=f"Failed: {type(exc).__name__}: {exc}",
-                    # A region that could not be resolved at all is by definition not current.
-                    stale=True,
+            except Exception as exc:  # noqa: BLE001 — one region must not stop the rest
+                observation.status = "processed"
+                if observation.step is not None or not observation.issues:
+                    observation.failed(exc)
+                results.append(
+                    SyncResult(
+                        region_code=normalize_region(region_key),
+                        week_start="",
+                        pdf_path="",
+                        price_rows=0,
+                        companies=0,
+                        message=f"Failed: {type(exc).__name__}: {exc}",
+                        # A region that could not be resolved at all is by definition not current.
+                        stale=True,
+                    )
                 )
-            )
-    # The UI-facing "latest DOE fetch" timestamp means "we hold current data", not
-    # "we reached the website". Bumping it after a run whose newest week is stale is
-    # exactly what let the app show a fresh timestamp beside a month-old bulletin.
-    #
-    # Regions DOE is not serving are excluded from the judgement: they contribute no
-    # data, so they cannot make the stored dataset stale, and they must not stop the
-    # remaining regions from being recorded as refreshed. A run that retrieved nothing,
-    # or in which any *available* region was stale or broken, records nothing.
-    available = [r for r in results if not r.upstream_unavailable]
-    all_available_current = bool(available) and all(
-        not r.stale and r.week_start and "Failed" not in r.message for r in available
-    )
-    if not dry_run and all_available_current:
-        record_doe_website_fetch()
 
-    # ── Record this run in the history table ────────────────────────────────
+        # The UI-facing "latest DOE fetch" timestamp means "we hold current data", not
+        # "we reached the website". Bumping it after a run whose newest week is stale is
+        # exactly what let the app show a fresh timestamp beside a month-old bulletin.
+        #
+        # Regions DOE is not serving are excluded from the judgement: they contribute no
+        # data, so they cannot make the stored dataset stale, and they must not stop the
+        # remaining regions from being recorded as refreshed. A run that retrieved nothing,
+        # or in which any *available* region was stale or broken, records nothing.
+        available = [r for r in results if not r.upstream_unavailable]
+        all_available_current = bool(available) and all(
+            not r.stale and r.week_start and "Failed" not in r.message for r in available
+        )
+        failed_step = "latest DOE fetch state"
+        if not dry_run and all_available_current:
+            record_doe_website_fetch()
+    except Exception as exc:
+        if not dry_run:
+            ended_at = datetime.now(timezone.utc)
+            ok, failed, skipped = _weekly_history_counts(results)
+            try_record_etl_run(
+                workflow="weekly",
+                status="failed",
+                started_at=started_at,
+                ended_at=ended_at,
+                regions_ok=len(ok),
+                regions_failed=len(failed),
+                regions_skipped=len(skipped),
+                duration_s=time.monotonic() - t_start,
+                failure_reason=f"{type(exc).__name__}: {exc}",
+                failed_step=failed_step,
+                region_results=region_results_payload(region_results),
+            )
+        raise
+
     if not dry_run:
-        duration = time.monotonic() - t_start
-        ok      = [r for r in results if not r.stale and "Failed" not in r.message and not r.upstream_unavailable]
-        failed  = [r for r in results if "Failed" in r.message]
-        skipped = [r for r in results if r.upstream_unavailable]
-        if failed:
+        ended_at = datetime.now(timezone.utc)
+        ok, failed, skipped = _weekly_history_counts(results)
+        verdict = summarise_results(results)
+        failure_reason, result_failed_step = _weekly_failure_details(results)
+        if verdict.startswith("FAILED"):
             status = "partial" if ok else "failed"
-            error_summary = "; ".join(r.message for r in failed[:3])
+            failure_reason = failure_reason or verdict
         else:
             status = "success"
-            error_summary = None
-        record_etl_run(
+            failure_reason = None
+            result_failed_step = None
+        try_record_etl_run(
             workflow="weekly",
             status=status,
+            started_at=started_at,
+            ended_at=ended_at,
             regions_ok=len(ok),
             regions_failed=len(failed),
             regions_skipped=len(skipped),
-            duration_s=duration,
-            error_summary=error_summary,
+            duration_s=time.monotonic() - t_start,
+            failure_reason=failure_reason,
+            failed_step=result_failed_step,
+            region_results=region_results_payload(region_results),
         )
 
     return results
