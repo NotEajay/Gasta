@@ -16,7 +16,7 @@ from .seaoil import identity, sync_time
 from .completion import DOE_SOURCE
 
 HOSTS = {'caltex': 'www.caltex.com', 'ptt': 'www.pttphilippines.com', 'shell': 'find.shell.com',
-         'petron': 'www.petron.com', 'phoenix': 'sites.google.com', 'clean-fuel': 'www.cleanfuel.ph', 'jetti': 'prod-cms.doe.gov.ph',
+         'petron': 'www.petron.com', 'phoenix': ('sites.google.com', 'www.phoenixfuels.ph'), 'clean-fuel': 'www.cleanfuel.ph', 'jetti': 'prod-cms.doe.gov.ph',
          'my-gas': 'www.mygaspetroleum.com', 'unioil': ('doe.gov.ph', 'www.unioil.com'), 'flying-v': 'doe.gov.ph', 'total': 'doe.gov.ph'}
 FIELDS = ['name', 'address', 'source_url', 'source_station_id', 'directory_key', 'city', 'province',
           'directory_region', 'operating_hours', 'fuel_types']
@@ -45,8 +45,12 @@ def payload(row, companies, regions, mapping, timestamp):
     hosts = (hosts,) if isinstance(hosts, str) else hosts
     if brand not in companies or url.scheme != 'https' or url.netloc not in hosts:
         raise ValueError('Unexpected station brand/source')
-    if brand == 'phoenix' and not url.path.startswith('/phoenixfuels.ph/'):
-        raise ValueError('Unexpected Phoenix source publisher')
+    if brand == 'phoenix':
+        from .phoenix import PHOENIX_PAGES
+        if url.netloc == 'sites.google.com' and not url.path.startswith('/phoenixfuels.ph/'):
+            raise ValueError('Unexpected Phoenix source publisher')
+        if url.netloc == 'www.phoenixfuels.ph' and row['source_url'] not in PHOENIX_PAGES.values():
+            raise ValueError('Unexpected Phoenix source page')
     if url.netloc == 'doe.gov.ph' and row['source_url'] != DOE_SOURCE:
         raise ValueError('Unexpected DOE station register')
     if brand == 'unioil' and url.netloc == 'www.unioil.com' and row['source_url'] != 'https://www.unioil.com/stations':

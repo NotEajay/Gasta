@@ -8,6 +8,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -137,16 +138,16 @@ def parse_phoenix(content):
     title = ' '.join(root.xpath('//title/text()'))
     if 'OPERATIONAL PHOENIX STATIONS' not in title.upper():
         raise ValueError('Phoenix operational-list identity changed')
-    paragraphs = [clean(node.text_content()) for node in root.xpath('//p')]
+    paragraphs = [clean(node.text_content().replace('\u200b', '')) for node in root.xpath('//p')]
     paragraphs = [value for value in paragraphs if value]
     rows, region, index = [], None, 0
     while index < len(paragraphs):
         value = paragraphs[index]
         if value.lower() in {'visayas', 'mindanao'}:
             region = value
-        if value.lower().startswith('phoenix '):
+        if re.match(r'^phoenix[. ]', value, re.IGNORECASE):
             address = paragraphs[index+1] if index+1 < len(paragraphs) else None
-            next_is_name = address and address.lower().startswith('phoenix ') and not address.lower().startswith('phoenix station,')
+            next_is_name = address and re.match(r'^phoenix[. ]', address, re.IGNORECASE) and not address.lower().startswith('phoenix station,')
             if not region or not address or next_is_name:
                 raise ValueError('Phoenix station is missing its address or source section')
             rows.append(record('phoenix', value, address, PHOENIX_SOURCE, directory_region=region))
