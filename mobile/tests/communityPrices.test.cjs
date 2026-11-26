@@ -2,7 +2,8 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const path=require('node:path');
 const {harness,find}=require('./componentHarness.cjs');
-const theme={'@/constants/Theme':{GasTaColors:{},palette:{},radii:{},spacing:{}}};
+const fuelColors={};require('node:vm').runInNewContext(require('../node_modules/typescript').transpileModule(require('node:fs').readFileSync(path.resolve(__dirname,'../constants/fuelTypeColors.ts'),'utf8'),{compilerOptions:{module:require('../node_modules/typescript').ModuleKind.CommonJS}}).outputText,{exports:fuelColors});
+const theme={'@/constants/fuelTypeColors':fuelColors,'@/constants/Theme':{GasTaColors:{},palette:{},radii:{},spacing:{}}};
 const text=n=>Array.isArray(n)?n.map(text).join(' '):typeof n==='string'?n:n&&typeof n==='object'?text(n.props?.children):'';
 const button=(h,label)=>find(h.tree,n=>n.type==='Pressable'&&text(n).trim()===label);
 function screen({failConfirm=false,failDelete=false,status='pending'}={}){
@@ -73,5 +74,5 @@ for(const [status,historical,label] of [['verified',false,'Verified'],['verified
  '@/lib/services/communityReports':{isHistoricalCommunityReport:()=>historical},
  });
  await h.flush({report:{status,confirmation_count:2,reported_price:70,station:{name:'Real station'},fuel_type:{name:'RON 91'}},awaiting:true});
- assert(text(h.tree).includes(label));assert(text(h.tree).includes('₱70.00'));assert(text(h.tree).includes('RON 91'));assert(!text(h.tree).includes('Unknown address'));
+ assert(text(h.tree).includes(label));assert(text(h.tree).includes('₱70.00'));assert(find(h.tree,n=>n.props?.label==='RON 91')); assert(!text(h.tree).includes('Unknown address'));
 });

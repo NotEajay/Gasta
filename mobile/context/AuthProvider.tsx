@@ -83,9 +83,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth state changes
     const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (isMounted) {
-        // TOKEN_REFRESH_FAILED means the server rejected the session.
+        // Supabase emits SIGNED_OUT when a refresh failure invalidates a session.
         // Clear it immediately so AuthGate redirects to (auth) without waiting.
-        if (event === 'TOKEN_REFRESH_FAILED' || event === 'SIGNED_OUT') {
+        if (event === 'SIGNED_OUT') {
           setSession(null);
           setIsLoading(false);
           return;

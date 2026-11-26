@@ -11,20 +11,29 @@ export interface OfficialStation {
   last_synced_at: string | null;
 }
 
-/** Directory metadata only: never join DOE estimates or infer branch prices. */
-let directoryRequest: Promise<OfficialStation[]> | null = null;
+/** Directory metadata only. Cache each brand separately and expire successful reads. */
+const directoryRequests = new Map<string, { promise: Promise<OfficialStation[]>; expires: number }>();
+const DIRECTORY_CACHE_MS = 5 * 60 * 1000;
 
-export function fetchSeaoilDirectory(): Promise<OfficialStation[]> {
-  if (!directoryRequest) directoryRequest = loadSeaoilDirectory().catch((error) => {
-    directoryRequest = null;
+export function fetchOfficialStationDirectory(slug: string): Promise<OfficialStation[]> {
+  const cached = directoryRequests.get(slug);
+  if (cached && cached.expires > Date.now()) return cached.promise;
+  const promise = loadOfficialStationDirectory(slug).catch((error) => {
+    if (directoryRequests.get(slug)?.promise === promise) directoryRequests.delete(slug);
     throw error;
   });
-  return directoryRequest;
+  directoryRequests.set(slug, { promise, expires: Date.now() + DIRECTORY_CACHE_MS });
+  return promise;
 }
 
-async function loadSeaoilDirectory(): Promise<OfficialStation[]> {
+/** Retain the existing helper for callers that explicitly need SEAOIL. */
+export function fetchSeaoilDirectory(): Promise<OfficialStation[]> {
+  return fetchOfficialStationDirectory('seaoil');
+}
+
+async function loadOfficialStationDirectory(slug: string): Promise<OfficialStation[]> {
   const { data: company, error: companyError } = await supabase
-    .from('oil_companies').select('id').eq('slug', 'seaoil').single();
+    .from('oil_companies').select('id').eq('slug', slug).single();
   if (companyError) throw companyError;
 
   const stations: OfficialStation[] = [];
@@ -55,7 +64,7 @@ const AREA_ALIASES: Record<string, readonly string[]> = {
   rizal: ['rizal'], laguna: ['laguna'], cavite: ['cavite'], batangas: ['batangas'],
   calabarzon: ['cavite', 'laguna', 'batangas', 'rizal', 'quezon'],
   'region iv a': ['cavite', 'laguna', 'batangas', 'rizal', 'quezon'],
-  'quezon city': ['quezon city'], 'manila city': ['manila', 'city of manila'],
+  'quezon city': ['quezon city'], 'manila city': ['manila', 'manila city', 'city of manila'],
   'caloocan city': ['caloocan', 'caloocan city'], 'makati city': ['makati', 'makati city'],
   'mandaluyong city': ['mandaluyong', 'mandaluyong city'],
   'marikina city': ['marikina', 'marikina city'], 'pasay city': ['pasay', 'pasay city'],
@@ -64,6 +73,7 @@ const AREA_ALIASES: Record<string, readonly string[]> = {
   'valenzuela city': ['valenzuela', 'valenzuela city'],
 };
 const NCR_ALIASES = [
+  'ncr', 'metro manila', 'national capital region',
   ...['quezon city', 'manila city', 'caloocan city', 'makati city', 'mandaluyong city',
     'marikina city', 'pasay city', 'pasig city', 'taguig city', 'paranaque city',
     'navotas city', 'valenzuela city'].flatMap((city) => AREA_ALIASES[city]),
@@ -168,9 +178,9 @@ function normalizeArea(value: string): string {
 // Accept a terminal locality, optionally followed by postcode / Philippines /
 // Metro Manila. This excludes street and barangay references earlier in addresses.
 function localityEndsWith(address: string, alias: string): boolean {
-  const text = normalizeArea(address).replace(/[,]+/g, ' ')
+  const text = normalizeArea(address).replace(/\s*\((?:first|second|third|fourth) district\)\s*$/, '').replace(/[,]+/g, ' ')
     .replace(/\s+(?:philippines|ph)\s*$/, '').replace(/\s+\d{4}\s*$/, '')
-    .replace(/\s+metro manila\s*$/, '').replace(/\s+/g, ' ').trim();
+    .replace(alias === 'metro manila' ? /$^/ : /\s+metro manila\s*$/, '').replace(/\s+/g, ' ').trim();
   const lastSegment = normalizeArea(address.split(',').pop() ?? '');
   const excludedPrefixes = alias.endsWith(' city') ? ['brgy', 'barangay']
     : ['brgy', 'barangay', 'street', 'st', 'road', 'rd', 'avenue', 'ave'];

@@ -17,12 +17,13 @@ import {
 
 import { Text } from '@/components/Themed';
 import ScreenHeader from '@/components/ui/ScreenHeader';
+import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
+import { getFuelTypeColor } from '@/constants/fuelTypeColors';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
 import PriceTrendChart from '@/components/ui/PriceTrendChart';
-import FuelTypeFilter from '@/components/prices/FuelTypeFilter';
-import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import SelectField from '@/components/ui/SelectField';
 import BrandMark from '@/components/ui/BrandMark';
 import StationPriceTable, {
@@ -31,15 +32,20 @@ import StationPriceTable, {
 } from '@/components/ui/StationPriceTable';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useFuelPriceDefault } from '@/hooks/useFuelPriceDefault';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import FuelTypeFilter from '@/components/prices/FuelTypeFilter';
+import NearbyStationPicker from '@/components/prices/NearbyStationPicker';
+import { isStationBrand, type StationBrand } from '@/lib/services/googlePlacesAutocomplete';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
-import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
-import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
+import { DOE_FUEL_TYPES } from '@/constants/fuelTypes';
 import {
   DOE_REGIONS,
   type DoeRegionCode,
 } from '@/constants/regions';
-import { designSystem as D, palette } from '@/constants/Theme';
+import { colors, GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { floatingNavContentInset } from '@/app/(tabs)/_layout';
 import { useTabBarScrollHandler } from '@/context/TabBarVisibility';
 import {
   formatBulletinRange,
@@ -66,7 +72,6 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
-  getBulletinFreshness,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
@@ -77,9 +82,9 @@ import {
   type PriceTrendPoint,
 } from '@/lib/services/fuelPrices';
 import { matchBulletinArea, resolveCurrentPlace } from '@/lib/services/location';
-import { buildOfficialDoeRows, type SupportedFuelCompany } from '@/lib/officialCompanyRows';
+import { buildOfficialDoeRows, trustedPriceComparisons, type SupportedFuelCompany } from '@/lib/officialCompanyRows';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useTheme } from '@/lib/useTheme';
 
 function matchesCityFilter(station: FuelStationOption, city: string): boolean {
   if (!city) return true;
@@ -207,8 +212,8 @@ type PricesView = 'now' | 'history';
 
 const COMMUNITY_RECENCY_OPTIONS: { value: CommunityRecency; label: string }[] = [
   { value: 'recent', label: 'Recent' },
-  { value: '7days', label: '7 days' },
-  { value: '30days', label: '30 days' },
+  { value: '7days', label: 'Last 7 Days' },
+  { value: '30days', label: 'Last 30 Days' },
   { value: 'past', label: 'Past' },
 ];
 
@@ -220,8 +225,8 @@ const HISTORY_WEEKS = 52;
  * rows stretch across a 1366px browser.
  */
 
-const PRICE_ACTION = D.color.action;
-const PRICE_ACTION_SOFT = D.color.actionSoft;
+const PRICE_GREEN = GasTaColors.forest;
+const PRICE_GREEN_SOFT = GasTaColors.forestGlow;
 
 type PriceFilterOption<T extends string = string> = {
   value: T;
@@ -236,6 +241,7 @@ type PriceFilterFieldProps<T extends string> = {
   icon: 'map-marker-outline' | 'office-building-outline' | 'gas-station';
   placeholder?: string;
   loading?: boolean;
+  more?: boolean;
   error?: string | null;
   /** Optional override for the field container, used by the narrow-phone wrap. */
   style?: StyleProp<ViewStyle>;
@@ -249,46 +255,63 @@ function PriceFilterField<T extends string>({
   icon,
   placeholder = 'Choose…',
   loading = false,
+  more = false,
   error = null,
   style,
 }: PriceFilterFieldProps<T>) {
+  const theme = useTheme();
   const reduced = useReducedMotion();
+  const { isCompact } = useResponsive();
   const [open, setOpen] = useState(false);
+  useFocusEffect(useCallback(() => () => setOpen(false), []));
   const selected = options.find((option) => option.value === value)?.label ?? placeholder;
+  const selectedFuelTone = more && options.some((option) => option.value === value) ? getFuelTypeColor(value) : null;
+  // Location controls keep the neutral surface; fuel labels use their own tone.
+  const tint =
+    icon === 'map-marker-outline'
+      ? styles.filterIconRegion
+      : icon === 'office-building-outline'
+        ? styles.filterIconCity
+        : styles.filterIconFuel;
 
   return (
-    <View style={[styles.filterField, style]}>
-      <View style={styles.filterLabelRow}>
+    <View style={[styles.filterField, selectedFuelTone && (isCompact ? styles.moreFuelFieldCompact : styles.moreFuelField), style]}>
+      {!more ? <View style={styles.filterLabelRow}>
+        <View style={[styles.filterIcon, tint]}>
+          <MaterialCommunityIcons name={icon} size={12} color={GasTaColors.forestDark} />
+        </View>
         <Text style={styles.filterLabel}>{label}</Text>
-      </View>
+      </View> : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${label}: ${selected}`}
+        accessibilityState={{ expanded: open, selected: more ? options.some((option) => option.value === value) : undefined }}
         onPress={() => setOpen(true)}
         style={({ pressed }) => [
           styles.filterControl,
-          pressed && { backgroundColor: D.color.canvas },
+          more && styles.moreFuelControl,
+          selectedFuelTone && { backgroundColor: selectedFuelTone.strong, borderColor: selectedFuelTone.strong },
+          pressed && (selectedFuelTone ? styles.pressed : { backgroundColor: GasTaColors.cream }),
         ]}>
-        <MaterialCommunityIcons name={icon} size={14} color={D.color.textSecondary} accessible={false} />
-        <Text style={styles.filterValue} numberOfLines={1} accessibilityLabel={selected}>
+        <Text style={[styles.filterValue, more && styles.fuelChipText, more && isCompact && styles.moreFuelLabelCompact, selectedFuelTone && { color: selectedFuelTone.onStrong }]} numberOfLines={1} adjustsFontSizeToFit={more} minimumFontScale={0.9}>
           {selected}
         </Text>
-        <MaterialCommunityIcons name="chevron-down" size={14} color={D.color.textTertiary} />
+        <MaterialCommunityIcons name="chevron-down" size={14} color={selectedFuelTone?.onStrong ?? GasTaColors.textSoft} />
       </Pressable>
 
       <Modal visible={open} transparent animationType={reduced ? 'none' : 'fade'} onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.filterBackdrop} onPress={() => setOpen(false)}>
           <Pressable
-            style={[styles.filterSheet, { backgroundColor: D.color.surface }]}
+            style={[styles.filterSheet, { backgroundColor: GasTaColors.creamLight }]}
             onPress={(event) => event.stopPropagation()}>
             <View style={styles.filterSheetHeader}>
-              <Text style={[styles.filterSheetTitle, { color: D.color.textPrimary }]}>{label}</Text>
+              <Text style={[styles.filterSheetTitle, { color: theme.text }]}>{label}</Text>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Close ${label} options`}
-                style={styles.filterClose}
+                hitSlop={8}
                 onPress={() => setOpen(false)}>
-                <MaterialCommunityIcons name="close" size={20} color={D.color.textSecondary} />
+                <MaterialCommunityIcons name="close" size={20} color={theme.textSecondary} />
               </Pressable>
             </View>
             <FlatList
@@ -297,24 +320,25 @@ function PriceFilterField<T extends string>({
               style={styles.filterOptionList}
               ListEmptyComponent={
                 loading ? (
-                  <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
+                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
                     Loading available areas…
                   </Text>
                 ) : error ? (
-                  <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
+                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
                     {error}
                   </Text>
                 ) : undefined
               }
               ListFooterComponent={
                 options.length > 0 && (loading || error) ? (
-                  <Text style={[styles.filterLoadingText, { color: D.color.textSecondary }]}>
+                  <Text style={[styles.filterLoadingText, { color: theme.textSecondary }]}>
                     {loading ? 'Refreshing available areas…' : error}
                   </Text>
                 ) : undefined
               }
               renderItem={({ item }) => {
                 const isSelected = item.value === value;
+                const fuelTone = more ? getFuelTypeColor(item.value) : null;
                 return (
                   <Pressable
                     accessibilityRole="button"
@@ -325,17 +349,18 @@ function PriceFilterField<T extends string>({
                     }}
                     style={({ pressed }) => [
                       styles.filterOption,
-                      (isSelected || pressed) && { backgroundColor: PRICE_ACTION_SOFT },
+                      (isSelected || pressed) && { backgroundColor: fuelTone?.soft ?? PRICE_GREEN_SOFT },
                     ]}>
+                    {fuelTone ? <View accessible={false} style={[styles.fuelOptionDot, { backgroundColor: fuelTone.strong }]} /> : null}
                     <Text
                       style={[
                         styles.filterOptionText,
-                        { color: D.color.textPrimary, fontWeight: isSelected ? '800' : '500' },
+                        { color: fuelTone?.text ?? theme.text, fontWeight: isSelected ? '800' : '500' },
                       ]}>
                       {item.label}
                     </Text>
                     {isSelected ? (
-                      <MaterialCommunityIcons name="check-circle" size={19} color={PRICE_ACTION} />
+                      <MaterialCommunityIcons name="check-circle" size={19} color={fuelTone?.strong ?? PRICE_GREEN} />
                     ) : null}
                   </Pressable>
                 );
@@ -350,15 +375,21 @@ function PriceFilterField<T extends string>({
 
 export default function FuelPricesScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const { user } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
-  // Below ~360px three filter columns are too tight to read, so the row wraps
-  // to 2+1 there. `isCompact` is width-only, so it is safe to read before any
-  // conditional return.
-  const { contentMaxWidth, isCompact, isDesktop } = useResponsive();
+  // Show the selected scope first; reveal editing controls on demand.
+  const { width, contentMaxWidth, isCompact, isDesktop } = useResponsive();
+  const insets = useSafeAreaInsets();
   const [view, setView] = useState<PricesView>('now');
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [rangeExpanded, setRangeExpanded] = useState(false);
+  const [coverageInfoOpen, setCoverageInfoOpen] = useState(false);
+  const [nearbySearch, setNearbySearch] = useState<{ brand: StationBrand; brandName: string; priceContext: string } | null>(null);
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const { fuelType, selectFuelType, vehicleLabel } = useFuelPriceDefault(user?.id ?? null);
+  const fuelTone = getFuelTypeColor(fuelType);
+  const fuelCardSurface = { backgroundColor: GasTaColors.white, borderColor: GasTaColors.glassBorderSubtle };
   const [areaName, setAreaName] = useState('');
   const [doeAreas, setDoeAreas] = useState<string[]>([]);
   const [areasFromDoe, setAreasFromDoe] = useState(false);
@@ -531,7 +562,7 @@ export default function FuelPricesScreen() {
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
   const regionDisplay = DOE_REGIONS.find((r) => r.code === region)?.code ?? regionLabel;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
-  const fuelPresentation = getFuelTypePresentation(fuelType);
+  const fuelDisplay = getFuelTypePresentation(fuelType);
   const areaLabel = areaName || 'Region-wide DOE price';
   const selectedBulletinForAreas = selectedPastDate
     ? pastBulletins.find((week) => week.bulletin_date === selectedPastDate) ?? bulletin
@@ -930,103 +961,15 @@ export default function FuelPricesScreen() {
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
 
-  /*
-   * How old the prices on screen actually are.
-   *
-   * Derived entirely from the latest bulletin actually stored for this region,
-   * so it is honest by construction: nothing is hardcoded per region, and if
-   * the ETL later loads a newer week the label updates on the next fetch with
-   * no code change.
-   *
-   * Age is days since the bulletin period ended, using local calendar dates.
-   */
-  const priceFreshness = useMemo(() => {
-    if (!bulletin) return null;
-    const freshness = getBulletinFreshness(bulletin.bulletin_date);
-    return {
-      ageDays: freshness.daysOld,
-      tone: freshness.status === 'stale' ? ('stale' as const) : ('fresh' as const),
-      label: freshness.label,
-    };
-  }, [bulletin]);
+  // Compare authoritative source facts. A company-level DOE reference counts
+  // once, regardless of how many physical branches the directory contains.
+  type CheapestRow = ReturnType<typeof trustedPriceComparisons>[number];
 
-  /*
-   * Lowest available price, for the summary card.
-   *
-   * Derived only from rows already loaded and in memory -- no extra fetch, and
-   * no change to the precedence that produced those rows (verified > pending >
-   * DOE). Station rows win over area rows, matching what the list already
-   * treats as the best entry.
-   *
-   * `status` is carried through because `source` alone is not enough to describe
-   * a community row: `buildStationPriceRows` emits `source: 'community'` for
-   * both verified and pending reports, and only `status` tells them apart. The
-   * summary must not label a pending price as verified.
-   */
-  type CheapestRow =
-    | {
-        price: number;
-        brand: string;
-        station: string;
-        source: 'community' | 'doe' | 'none';
-        status?: string;
-      }
-    | { price: number; brand: string; areaName: string; source: 'doe_area'; status?: string };
-
+  const comparisonRows = useMemo(() => trustedPriceComparisons(stationRows, officialRows.areaRows), [stationRows, officialRows]);
   const cheapest = useMemo<CheapestRow | null>(() => {
-    /*
-     * The hero must consider BOTH pools, not prefer one.
-     *
-     * `stationRows` only covers brands that appear in the station directory;
-     * `areaRows` covers DOE brands that have no station. The previous version
-     * returned as soon as any station row had a price, so a region with a
-     * station directory silently ignored its area-level rows: Visayas showed
-     * 84.10 (Shell, a station) instead of 80.60 (Total, area-level), and North
-     * Luzon showed 57.90 (Seaoil, a station) instead of 57.80 (Jetti, area-level).
-     * South Luzon looked correct only because it has no stations at all, so the
-     * areaRows fallback happened to run.
-     *
-     * The two pools cannot overlap: `buildStationPriceRows` only emits an
-     * areaRow for a DOE brand that has no station in the filtered directory, so
-     * taking the minimum across both never double-counts a brand.
-     *
-     * Source precedence is untouched -- it is already resolved per row inside
-     * `buildStationPriceRows` (verified > pending > DOE), and an area-level row
-     * carries its own honest label rather than an invented station name.
-     *
-     * TRUSTED LOWEST: a pending, unconfirmed community report stays visible in
-     * the station list, correctly labelled "Unverified", but it must not become
-     * the headline. "Current lowest" is the number people act on, so it is held
-     * to DOE and verified community data only. This is a hero-selection rule
-     * only: it does not reorder, relabel, or remove anything in the list, and it
-     * does not touch `buildStationPriceRows` or the precedence the list uses.
-     */
-    const candidates: CheapestRow[] = [];
-    for (const row of stationRows) {
-      if (typeof row.price !== 'number' || row.price <= 0) continue;
-      if (row.status === 'Unverified') continue;
-      candidates.push({
-        price: row.price,
-        brand: row.brand,
-        station: row.station,
-        source: row.source,
-        status: row.status,
-      });
-    }
-    for (const row of areaRows) {
-      if (typeof row.price !== 'number' || row.price <= 0) continue;
-      if (row.status === 'Unverified') continue;
-      candidates.push({
-        price: row.price,
-        brand: row.brand,
-        areaName: row.areaName,
-        source: 'doe_area',
-        status: row.status,
-      });
-    }
-    if (candidates.length === 0) return null;
-    return candidates.reduce((best, row) => (row.price < best.price ? row : best));
-  }, [stationRows, areaRows]);
+    if (!comparisonRows.length) return null;
+    return comparisonRows.reduce((best, row) => row.price < best.price ? row : best);
+  }, [comparisonRows]);
 
   /*
    * Does the selected fuel actually have any usable price right now?
@@ -1053,26 +996,15 @@ export default function FuelPricesScreen() {
     return pricedStations.length > 0 || pricedAreas.length > 0;
   }, [stationRows, areaRows]);
 
-  /*
-   * Price range across every price already in memory.
-   *
-   * Built purely from `stationRows` / `areaRows` -- the rows the list is already
-   * rendering -- so it costs no query and cannot disagree with the list. Only
-   * surfaced with at least two valid prices; a single price has no spread.
-   */
+  // Range uses the same trusted facts as the headline, not branch-count copies
+  // of a regional estimate or unverified community reports.
   const priceRange = useMemo(() => {
-    const all: number[] = [];
-    for (const row of stationRows) {
-      if (typeof row.price === 'number' && row.price > 0) all.push(row.price);
-    }
-    for (const row of areaRows) {
-      if (typeof row.price === 'number' && row.price > 0) all.push(row.price);
-    }
+    const all = comparisonRows.map((row) => row.price);
     if (all.length < 2) return null;
     const low = Math.min(...all);
     const high = Math.max(...all);
     return { low, high, spread: high - low, count: all.length };
-  }, [stationRows, areaRows]);
+  }, [comparisonRows]);
 
   /*
    * Change vs the previous DOE bulletin for the same brand/fuel/region.
@@ -1096,6 +1028,111 @@ export default function FuelPricesScreen() {
     return { delta: last - prev, prevDate: trend[trend.length - 2].bulletin_date };
   }, [trend, historyStatus]);
 
+  const trendSection = (
+    <View testID="prices-trend" style={styles.trendSection}>
+      <View style={styles.sectionTitleRow}><Text style={styles.sectionTitle}>Price trend</Text><FuelTypeBadge fuelCode={fuelType} /></View>
+
+      <View testID="price-trend-card" style={[styles.trendPanel, fuelCardSurface]}>
+        {view === 'history' && companyOptions.length > 0 ? (
+          <View style={styles.trendBrandRow}>
+            <SelectField
+              appearance="standard"
+              label="Brand"
+              value={trendCompanySlug}
+              options={companyOptions}
+              onChange={setTrendCompanySlug}
+            />
+          </View>
+        ) : null}
+
+        {view === 'history' && historySummary ? (
+          <View style={styles.summaryStrip}>
+            <Text style={styles.summaryStripText}>
+              {historySummary.delta < 0
+                ? `${formatCurrency(Math.abs(historySummary.delta))} cheaper than ${formatBulletinRange(historySummary.oldest.bulletin_date)}`
+                : historySummary.delta > 0
+                  ? `${formatCurrency(historySummary.delta)} higher than ${formatBulletinRange(historySummary.oldest.bulletin_date)}`
+                  : `Unchanged since ${formatBulletinRange(historySummary.oldest.bulletin_date)}`}
+            </Text>
+            <Text style={styles.summaryStripMeta}>
+              {formatCurrency(historySummary.oldest.price_per_liter)} →{' '}
+              {formatCurrency(historySummary.newest.price_per_liter)}/L
+            </Text>
+          </View>
+        ) : null}
+
+        {/*
+          The chart is only asked to draw once history has actually
+          resolved. Before this, `trend` was `[]` and PriceTrendChart
+          rendered its own "Not enough history yet" -- which claimed the
+          region had no history when in fact the request simply had not run.
+          Loading and failure are now stated here instead, and the
+          insufficient-history message is reachable only from a successful
+          load that really did return fewer than two usable weeks.
+        */}
+        {historyStatus === 'error' ? (
+          <View style={styles.historyNote}>
+            <Text style={styles.historyNoteTitle}>Price history unavailable</Text>
+            <Text style={styles.historyNoteBody}>
+              Could not load past bulletins for this region. Pull to refresh to try again.
+            </Text>
+          </View>
+        ) : historyStatus === 'loading' || historyStatus === 'idle' ? (
+          <View style={styles.historyNote}>
+            <Text style={styles.historyNoteTitle}>Loading price history…</Text>
+          </View>
+        ) : (
+          <PriceTrendChart
+            points={trend}
+            fuelCode={fuelType}
+            caption={
+              view === 'history'
+                ? `${fuelLabel} · ${companyName}`
+                : `${fuelLabel} · ${regionLabel}`
+            }
+            height={isCompact ? 104 : view === 'history' ? 148 : 126}
+          />
+        )}
+
+        {view === 'history' && historyStatus === 'ready' && trend.length > 0 ? (
+          <View style={styles.weekList}>
+            <PriceHistoryList
+              points={trend}
+              selectedDate={selectedPastDate ?? undefined}
+              onSelectDate={(date) => {
+                setSelectedPastDate((current) => (current === date ? null : date));
+                setAreaName('');
+              }}
+            />
+          </View>
+        ) : null}
+      </View>
+
+      {selectedPastDate && pastWeekPrices.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitleTop}>
+            All brands · {formatDate(selectedPastDate)}
+          </Text>
+          <View style={styles.plainListTight}>
+            {pastWeekPrices.map((row, index) => (
+              <PriceCompareRow
+                key={row.id}
+                rank={index + 1}
+                company={row.oil_company.name}
+                price={row.price_per_liter}
+                maxPrice={Math.max(...pastWeekPrices.map((p) => p.price_per_liter))}
+                minPrice={Math.min(...pastWeekPrices.map((p) => p.price_per_liter))}
+                isLowest={index === 0}
+                isLast={index === pastWeekPrices.length - 1}
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
+
+    </View>
+  );
+
   if (!isSupabaseConfigured) {
     return (
       <View style={styles.flex}>
@@ -1115,7 +1152,9 @@ export default function FuelPricesScreen() {
         // Centred responsive shell. On phones this is transparent and the
         // column simply fills the width; on tablet/web it stops the content
         // from stretching edge to edge.
-        { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%', paddingHorizontal: isCompact ? 16 : 20 },
+        { maxWidth: isDesktop ? contentMaxWidth : Math.min(width, 760), alignSelf: 'center', width: '100%',
+          paddingHorizontal: isDesktop ? spacing.lg : 20,
+          paddingBottom: isDesktop ? spacing.xxl : floatingNavContentInset(insets.bottom) },
       ]}
       refreshControl={
         <RefreshControl
@@ -1125,24 +1164,15 @@ export default function FuelPricesScreen() {
             void loadRegion();
             void communityLoaderRef.current();
           }}
-          tintColor={D.color.action}
+          tintColor={GasTaColors.forest}
         />
       }>
-      {/*
-        Compact header. The old PageHero restated "region · fuel · area", which
-        the filters directly below already show. Under the title: estimated DOE
-        post day (week start + 7) and the bulletin week start — not the ETL
-        run timestamp, which confused "when we synced" with "when DOE posted".
-      */}
-      <View testID="prices-header" style={styles.headerRow}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Fuel Prices</Text>
-          {bulletin ? (
-            <Text numberOfLines={1} style={styles.headerMeta}>
-              {formatBulletinRange(bulletin.bulletin_date)}
-            </Text>
-          ) : null}
-        </View>
+      <ScreenHeader
+        compact={!isDesktop}
+        eyebrow={isDesktop ? 'At the pump' : undefined}
+        title="Fuel prices"
+        subtitle={isDesktop ? 'Find your next fill-up.' : undefined}
+        action={
         <Pressable
           accessibilityRole="link"
           accessibilityLabel="Community prices"
@@ -1151,180 +1181,170 @@ export default function FuelPricesScreen() {
           style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}>
           <Text style={styles.headerActionText}>Community</Text>
         </Pressable>
-      </View>
+        }
+      />
 
-      {/*
-        Location status. A quiet line, not a banner: it only appears while the
-        CURRENT filters came from the device. Coordinates are never shown -- the
-        user gets a place name, or just the region when that is all that could
-        be resolved. Choosing a Region or City by hand clears it, because at
-        that point the location is no longer what is driving the screen.
-      */}
-      {nearMePlace || nearMeDenied ? (
-        <View style={styles.nearMeRow}>
-          {nearMePlace ? (
-            <>
-              <MaterialCommunityIcons
-                name="crosshairs-gps"
-                size={13}
-                color={D.color.action}
-              />
-              <Text style={styles.nearMeText} numberOfLines={1}>
-                Near you · {nearMePlace.city ?? nearMePlace.regionCode}
-              </Text>
-            </>
-          ) : (
-            <>
-              <MaterialCommunityIcons
-                name="map-marker-off-outline"
-                size={13}
-                color={D.color.textTertiary}
-              />
-              <Text style={styles.nearMeText} numberOfLines={2}>
-                Location access is off. Choose your area manually.
-              </Text>
-            </>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Use my current location"
-            disabled={nearMeBusy}
-            hitSlop={8}
-            onPress={() => void handleNearMe()}
-            style={({ pressed }) => [pressed && styles.pressed]}>
-            <Text style={styles.nearMeAction}>
-              {nearMeBusy ? 'Locating…' : 'Near me'}
-            </Text>
-          </Pressable>
-        </View>
-      ) : (
-        <View style={styles.nearMeRow}>
-          <Text style={styles.nearMeText} numberOfLines={1}>
-            Showing {areaLabel}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Use my current location"
-            disabled={nearMeBusy}
-            hitSlop={8}
-            onPress={() => void handleNearMe()}
-            style={({ pressed }) => [pressed && styles.pressed]}>
-            <Text style={styles.nearMeAction}>
-              {nearMeBusy ? 'Locating…' : 'Near me'}
-            </Text>
-          </Pressable>
-        </View>
-      )}
+      {nearbySearch ? <NearbyStationPicker {...nearbySearch} priceContexts={Object.fromEntries(officialRows.areaRows.map((row) => [row.slug, row.price != null && row.price > 0 ? `${row.brand} DOE estimate: ${formatCurrency(row.price)}/L for ${fuelLabel} in ${areaName || regionLabel}. Branch prices may differ.` : `Price unavailable for ${row.brand} in this selection. You can still plan your drive.`]))} onClose={() => setNearbySearch(null)} /> : null}
 
-      {/*
-        Freshness of the numbers below. It names the source ("DOE bulletin"),
-        the week they describe, and how many days ago that week started, so a
-        user can judge a price before trusting it. Deliberately a quiet metadata
-        row rather than a warning card -- being a week behind is normal for a
-        weekly government bulletin, and only past the app's own stale threshold
-        does it change tone.
-      */}
-      {priceFreshness && bulletin ? (
-        <View style={styles.freshnessRow}>
-          <View
-            style={[
-              styles.freshnessPill,
-              priceFreshness.tone === 'stale' && styles.freshnessPillStale,
-            ]}>
-            <Text
-              style={[
-                styles.freshnessPillText,
-                priceFreshness.tone === 'stale' && styles.freshnessPillTextStale,
-              ]}>
-              {priceFreshness.label}
-            </Text>
+      {/* The summary always reflects the same scope used by prices and history. */}
+      <View testID="prices-controls" style={styles.controlsPanel}>
+        <View style={styles.filterSummary}>
+          <View style={styles.filterSummaryCopy}>
+            <View style={styles.filterSummaryScope}>
+              <MaterialCommunityIcons name="gas-station-outline" size={18} color={colors.primary} />
+              <Text style={styles.filterSummaryFuel}>{fuelDisplay.primaryLabel}</Text>
+              <Text style={styles.filterSummaryRegion} numberOfLines={1}>· {region === 'NCR' ? 'NCR' : regionLabel}</Text>
+            </View>
+            <View style={styles.filterSummaryMeta}>
+              <Text style={styles.filterSummaryArea} numberOfLines={1}>
+                {fuelDisplay.subtitle ? `${fuelDisplay.subtitle} · ` : ''}{areaName || 'Region-wide DOE'} · {view === 'now' ? 'This week' : 'Past prices'}
+              </Text>
+              {!areaName ? <Pressable testID="prices-coverage-info" accessibilityRole="button"
+                accessibilityLabel="About region-wide DOE prices" hitSlop={8}
+                onPress={() => setCoverageInfoOpen(true)} style={styles.coverageInfoButton}>
+                <MaterialCommunityIcons name="information-outline" size={15} color={GasTaColors.textMuted} />
+              </Pressable> : null}
+            </View>
           </View>
-          <Text style={styles.freshnessMeta} numberOfLines={1}>
-            DOE bulletin
-          </Text>
+          <Pressable
+            testID="prices-filter-toggle" accessibilityRole="button"
+            accessibilityLabel={`${filtersExpanded ? 'Hide' : 'Show'} filters. Fuel: ${fuelLabel}. Region: ${regionLabel}. Area: ${areaLabel}. ${view === 'now' ? 'This week' : 'Past prices'}.`}
+            accessibilityState={{ expanded: filtersExpanded }} aria-expanded={filtersExpanded}
+            aria-controls="prices-filter-options" onPress={() => setFiltersExpanded((expanded) => !expanded)}
+            style={({ pressed }) => [styles.filterSummaryAction, filtersExpanded && styles.filterSummaryActionActive, pressed && styles.pressed]}>
+            <MaterialCommunityIcons name={filtersExpanded ? 'close' : 'tune-variant'} size={21}
+              color={colors.onPrimary} />
+          </Pressable>
         </View>
-      ) : null}
-
-      {/*
-        View toggle kept inline rather than via SegmentedToggle: the shared
-        control is a full-width block, and Prices wants a short pill on the
-        right of the header row. Same two options, same `view` state.
-      */}
-      <View testID="prices-period" style={styles.viewToggle} accessibilityRole="tablist" accessibilityLabel="Price period">
-        {(
-          [
-            { value: 'now', label: 'This week' },
-            { value: 'history', label: 'Past prices' },
-          ] as const
-        ).map((option) => {
-          const active = view === option.value;
-          return (
-            <Pressable
-              key={option.value}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: active }}
-              onPress={() => setView(option.value)}
-              style={({ pressed }) => [
-                styles.viewToggleItem,
-                active && styles.viewToggleItemActive,
-                pressed && !active && styles.pressed,
-              ]}>
-              <Text
-                style={[
-                  styles.viewToggleText,
-                  active && styles.viewToggleTextActive,
+        {coverageInfoOpen ? <Modal testID="prices-coverage-dialog" transparent visible animationType="fade" onRequestClose={() => setCoverageInfoOpen(false)}>
+          <Pressable style={styles.filterBackdrop} onPress={() => setCoverageInfoOpen(false)} accessibilityLabel="Close DOE coverage information">
+            <Pressable accessibilityViewIsModal onPress={(event) => event.stopPropagation()} style={styles.coverageSheet}>
+              <Text accessibilityRole="header" style={styles.coverageTitle}>Region-wide DOE prices</Text>
+              <Text style={styles.coverageBody}>These prices cover {regionLabel}. {areasFromDoe ? 'Choose an area in Filters to narrow the DOE prices.' : 'DOE area-level prices are unavailable for this selection, so we show the region-wide bulletin instead.'} Exact station prices may differ.</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close DOE coverage details" onPress={() => setCoverageInfoOpen(false)} style={styles.filterDone}>
+                <Text style={styles.filterSummaryActionText}>Got it</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal> : null}
+        <View
+          nativeID="prices-filter-options"
+          testID="prices-filter-options"
+          accessibilityElementsHidden={!filtersExpanded}
+          aria-hidden={!filtersExpanded}
+          importantForAccessibility={filtersExpanded ? 'auto' : 'no-hide-descendants'}
+          style={[styles.filterDetails, !filtersExpanded && styles.filtersHidden]}>
+        <View style={styles.viewToggle} accessibilityRole="tablist" accessibilityLabel="Price period">
+          {(
+            [
+              { value: 'now', label: 'This week' },
+              { value: 'history', label: 'Past prices' },
+            ] as const
+          ).map((option) => {
+            const active = view === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                onPress={() => setView(option.value)}
+                style={({ pressed }) => [
+                  styles.viewToggleItem,
+                  active && styles.viewToggleItemActive,
+                  pressed && !active && styles.pressed,
                 ]}>
-                {option.label}
+                <Text
+                  style={[
+                    styles.viewToggleText,
+                    active && styles.viewToggleTextActive,
+                  ]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <FuelTypeFilter compact={!isDesktop} label="Fuel" value={fuelType} onChange={selectFuelType} context={
+          vehicleLabel ? <View testID="prices-default-context" accessible
+            accessibilityLabel={`Using ${vehicleLabel} · ${fuelLabel}`} style={styles.fuelContext}>
+            <Text style={styles.contextText} numberOfLines={1}>Using {vehicleLabel} ·</Text>
+            <View style={[styles.contextDot, { backgroundColor: fuelTone.strong }]} />
+            <Text style={styles.contextText}>{fuelLabel}</Text>
+          </View> : null
+        } />
+        <View style={styles.filterRow}>
+          <PriceFilterField label="Region" value={region} options={regionOptions}
+            onChange={handleManualRegion} icon="map-marker-outline" />
+          <PriceFilterField label="Area" value={areaName} options={areaOptions}
+            onChange={handleManualArea} icon="office-building-outline"
+            placeholder="Region-wide DOE price" loading={doeAreasLoading} error={doeAreasError} />
+        </View>
+
+        {nearMePlace || nearMeDenied ? (
+          <View style={styles.nearMeRow}>
+            {nearMePlace ? (
+              <>
+                <MaterialCommunityIcons
+                  name="crosshairs-gps"
+                  size={13}
+                  color={GasTaColors.forest}
+                />
+                <Text style={styles.nearMeText} numberOfLines={1}>
+                  Near you · {nearMePlace.city ?? nearMePlace.regionCode}
+                </Text>
+              </>
+            ) : (
+              <>
+                <MaterialCommunityIcons
+                  name="map-marker-off-outline"
+                  size={13}
+                  color={GasTaColors.textSoft}
+                />
+                <Text style={styles.nearMeText} numberOfLines={2}>
+                  Location access is off. Choose your area manually.
+                </Text>
+              </>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Use my current location"
+              disabled={nearMeBusy}
+              hitSlop={8}
+              onPress={() => void handleNearMe()}
+              style={({ pressed }) => [pressed && styles.pressed]}>
+              <Text style={styles.nearMeAction}>
+                {nearMeBusy ? 'Locating…' : 'Near me'}
               </Text>
             </Pressable>
-          );
-        })}
+          </View>
+        ) : (
+          <View style={styles.nearMeRow}>
+            <Text style={styles.nearMeText} numberOfLines={1}>
+              Showing {areaLabel}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Use my current location"
+              disabled={nearMeBusy}
+              hitSlop={8}
+              onPress={() => void handleNearMe()}
+              style={({ pressed }) => [pressed && styles.pressed]}>
+              <Text style={styles.nearMeAction}>
+                {nearMeBusy ? 'Locating…' : 'Near me'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Done editing filters"
+          onPress={() => setFiltersExpanded(false)}
+          style={({ pressed }) => [styles.filterDone, pressed && styles.pressed]}>
+          <Text style={styles.filterSummaryActionText}>Done</Text>
+        </Pressable>
+        </View>
       </View>
-
-      {/* Location filters retain their existing controls; fuel gets a compact
-          row of common choices with the remaining supported types under More. */}
-      <View testID="prices-location-filters" style={[styles.filterRow, isCompact && styles.filterRowWrap]}>
-        <PriceFilterField
-          label="Region"
-          value={region}
-          options={regionOptions}
-          onChange={handleManualRegion}
-          icon="map-marker-outline"
-          style={isCompact ? styles.filterFieldWrap : undefined}
-        />
-        <PriceFilterField
-          label="Area"
-          value={areaName}
-          options={areaOptions}
-          onChange={handleManualArea}
-          icon="office-building-outline"
-          placeholder="Region-wide DOE price"
-          loading={doeAreasLoading}
-          error={doeAreasError}
-          style={isCompact ? styles.filterFieldWrap : undefined}
-        />
-      </View>
-      <FuelTypeFilter label="Fuel" value={fuelType} onChange={selectFuelType} context={
-        vehicleLabel ? <View testID="prices-default-context" accessible accessibilityLabel={`Using ${vehicleLabel} · ${fuelLabel}`} style={styles.fuelContext}>
-        <MaterialCommunityIcons name="car-outline" size={12} color={D.color.textSecondary} accessible={false} />
-        <Text style={styles.contextText}>Using {vehicleLabel} ·</Text>
-        <View style={[styles.contextDot, { backgroundColor: fuelPresentation.accent }]} />
-        <Text style={styles.contextText}>{fuelLabel}</Text>
-      </View> : null
-      } />
-
-      {nearMePlace?.city && !areaName ? (
-        <Text style={styles.hintText}>
-          No DOE area-level prices are available for this selection. Showing region-wide DOE data.
-        </Text>
-      ) : null}
-
-      {!areasFromDoe && !nearMePlace?.city ? (
-        <Text style={styles.hintText}>
-          No DOE area-level prices are available for this selection. Showing region-wide DOE data.
-        </Text>
-      ) : null}
-
       {/* Bulletin error is preserved and surfaced as before, just flattened so
           it reads as an inline notice instead of another boxed card. */}
       {error ? (
@@ -1336,23 +1356,27 @@ export default function FuelPricesScreen() {
 
       {loading ? (
         <View style={styles.inlineLoading}>
-          <ActivityIndicator size="large" color={D.color.action} />
+          <ActivityIndicator size="large" color={GasTaColors.forest} />
           <Text style={styles.hintText}>Loading fuel prices…</Text>
         </View>
       ) : (
         <>
           {/*
-            Selected fuel identity comes from the shared presentation helper.
-            The displayed minimum and provenance remain derived from the same
-            rows in memory, with no extra fetch or precedence changes.
+            On web the hero and the range summary sit side by side, so the top
+            of the page uses the available width instead of stacking two
+            half-empty cards. Phones still get the original vertical order.
+          */}
+          <View style={[styles.overviewRow, isDesktop && styles.overviewRowDesktop]}>
+          {/*
+            THE HERO. The single strongest element on the screen, on a forest
+            surface, so the page reads as a fuel dashboard rather than a stack of
+            white cards. Same minimum the list already highlights -- derived from
+            rows in memory, no extra fetch, precedence untouched.
           */}
           {cheapest ? (
-            <View testID="current-lowest-card" accessibilityLabel={`${fuelLabel} current lowest`} style={[styles.heroCard, {
-              backgroundColor: fuelPresentation.cardBackground,
-              borderColor: `${fuelPresentation.accent}66`,
-            }]}>
+            <View testID="prices-lowest" accessibilityLabel={`${fuelLabel} lowest listed price`} style={[styles.heroCard, { backgroundColor: fuelTone.strong, borderColor: fuelTone.border }, isDesktop && styles.overviewCard]}>
               <View style={styles.heroTopRow}>
-                <Text style={styles.heroLabel}>Current lowest</Text>
+                <Text style={[styles.heroLabel, { color: fuelTone.onStrong }]}>Lowest listed price</Text>
                 {/*
                   Source labelling is driven by the row's `status`, not just its
                   `source`, because a pending community report also carries
@@ -1369,31 +1393,28 @@ export default function FuelPricesScreen() {
                           : 'file-document-outline'
                     }
                     size={11}
-                    color="#0E2A52"
+                    color={GasTaColors.forestDark}
                   />
                   <Text style={styles.heroPillText}>
                     {cheapest.status === 'Unverified'
                       ? 'Unverified'
                       : cheapest.source === 'community'
                         ? 'Community verified'
-                        : 'DOE bulletin'}
+                        : 'DOE estimate'}
                   </Text>
                 </View>
               </View>
 
+              <View style={styles.heroScopeRow}><FuelTypeBadge fuelCode={fuelType} /><Text style={[styles.heroScope, { color: fuelTone.onStrong }]}>{regionLabel}</Text></View>
               <View style={styles.heroPriceRow}>
-                <Text style={styles.heroPrice} numberOfLines={1} adjustsFontSizeToFit>
+                <Text style={[styles.heroPrice, { color: fuelTone.onStrong }]} numberOfLines={1} adjustsFontSizeToFit>
                   {formatCurrency(cheapest.price)}
                 </Text>
-                <Text style={styles.heroUnit}>/L</Text>
+                <Text style={[styles.heroUnit, { color: fuelTone.onStrong }]}>/L</Text>
               </View>
 
-              <View style={styles.heroIdentity}>
-                <View style={styles.heroIdentityCopy}>
-                  <Text style={styles.heroStation}>{cheapest.brand}</Text>
-                  <Text style={styles.heroArea}>{'station' in cheapest ? cheapest.station || areaLabel : cheapest.areaName}</Text>
-                </View>
-              </View>
+              <Text style={[styles.heroStation, { color: fuelTone.onStrong }]}>{cheapest.brand}</Text>
+              <Text style={[styles.heroStation, { color: fuelTone.onStrong }]}>{'station' in cheapest ? cheapest.station || areaLabel : areaName || 'Region-wide DOE price'}</Text>
 
               {/*
                 Real movement only. On a first visit the screen holds exactly one
@@ -1403,13 +1424,39 @@ export default function FuelPricesScreen() {
               {heroMovement ? (
                 <View style={styles.heroMovement}>
                   <HeroDelta delta={heroMovement.delta} />
-                  <Text numberOfLines={1} style={styles.heroMovementNote}>
-                    vs {formatShortDate(heroMovement.prevDate)}
+                  <Text numberOfLines={1} style={[styles.heroMovementNote, { color: fuelTone.onStrong }]}>
+                    vs {formatShortDate(heroMovement.prevDate)} · {fuelLabel}
                   </Text>
                 </View>
               ) : null}
+              {isStationBrand(cheapest.slug) ? <Pressable testID="price-find-station"
+                accessibilityRole="button" accessibilityLabel={`Find nearby ${cheapest.brand} stations`}
+                onPress={() => {
+                  if (!isStationBrand(cheapest.slug)) return;
+                  setNearbySearch({ brand: cheapest.slug, brandName: cheapest.brand,
+                    priceContext: cheapest.source === 'community'
+                      ? `The verified price is reported at ${cheapest.station}. Other branch prices may differ.`
+                      : `${fuelLabel} DOE estimate for ${areaName || regionLabel}. Branch prices may differ.` });
+                }}
+                style={({ pressed }) => [styles.findStation, pressed && styles.pressed]}>
+                <MaterialCommunityIcons name="map-marker-radius-outline" size={18} color={colors.navy} />
+                <Text style={styles.findStationText}>Find nearby stations</Text>
+                <MaterialCommunityIcons name="arrow-right" size={17} color={colors.navy} />
+              </Pressable> : null}
             </View>
-          ) : null}
+          ) : <View testID="prices-empty" style={[styles.priceEmpty, fuelCardSurface, isDesktop && styles.overviewCard]}>
+            <MaterialCommunityIcons name="gas-station-outline" size={28} color={GasTaColors.forest} />
+            <Text style={styles.priceEmptyTitle}>No trusted price available</Text>
+            <Text style={styles.priceEmptyBody}>You can still find nearby stations and plan your drive.</Text>
+            <Pressable testID="price-find-station" accessibilityRole="button" accessibilityLabel="Find nearby stations without price data"
+              onPress={() => setNearbySearch({ brand: 'all', brandName: 'All companies',
+                priceContext: `No DOE price is available for ${fuelLabel} in ${areaName || regionLabel}. You can still choose a station and plan your drive.` })}
+              style={({ pressed }) => [styles.findStation, styles.findStationEmpty, pressed && styles.pressed]}>
+              <MaterialCommunityIcons name="map-marker-radius-outline" size={18} color={colors.navy} />
+              <Text style={styles.findStationText}>Find nearby stations</Text>
+              <MaterialCommunityIcons name="arrow-right" size={17} color={colors.navy} />
+            </Pressable>
+          </View>}
 
           {/*
             Price range, computed from the very same rows the list renders below.
@@ -1417,150 +1464,55 @@ export default function FuelPricesScreen() {
             describe.
           */}
           {priceRange ? (
-            <View testID="prices-range" style={styles.rangeCard}>
-              <View style={styles.rangeHead}>
+            <View testID="price-range-card" style={[styles.rangeCard, isDesktop && styles.overviewCard]}>
+              <View style={styles.rangeToolbar}>
+              <Pressable testID="price-range-toggle" accessibilityRole="button"
+                accessibilityLabel={rangeExpanded ? 'Hide price range' : 'Show price range'}
+                accessibilityState={{ expanded: rangeExpanded }} aria-expanded={rangeExpanded}
+                aria-controls="price-range-details" onPress={() => setRangeExpanded((expanded) => !expanded)}
+                hitSlop={4} style={({ pressed }) => [styles.rangeHead, pressed && styles.pressed]}>
                 <Text style={styles.rangeTitle}>Price range</Text>
-                <Text style={styles.rangeCount}>{priceRange.count} listed</Text>
+                <View style={styles.rangeAction}>
+                  <MaterialCommunityIcons name={rangeExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={GasTaColors.forest} />
+                </View>
+              </Pressable>
+              <Text style={styles.doeInfoBody}>DOE prices are area or regional estimates. Station prices may differ.</Text>
               </View>
+              {rangeExpanded ? <View nativeID="price-range-details" testID="price-range-details" style={styles.rangeDetails}>
+              <Text style={styles.rangeCount}>{priceRange.count} listed</Text>
               <View style={styles.rangeEnds}>
                 <View>
-                  <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.low)}</Text>
                   <Text style={styles.rangeEndLabel}>Lowest</Text>
+                  <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.low)}</Text>
                 </View>
                 <View style={styles.rangeMid}>
-                  <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.spread)}<Text style={styles.rangeUnit}>/L</Text></Text>
                   <Text style={styles.rangeEndLabel}>Spread</Text>
+                  <Text style={styles.rangeEndValue}>
+                    {formatCurrency(priceRange.spread)}/L
+                  </Text>
                 </View>
                 <View style={styles.rangeEndRight}>
-                  <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.high)}</Text>
                   <Text style={styles.rangeEndLabel}>Highest</Text>
+                  <Text style={styles.rangeEndValue}>{formatCurrency(priceRange.high)}</Text>
                 </View>
               </View>
               <View style={styles.rangeBar}>
-                <View style={styles.rangeTrack} />
-                <View style={[styles.rangeDot, { left: 0, backgroundColor: fuelPresentation.accent }]} />
-                <View style={[styles.rangeDot, { right: 0, backgroundColor: fuelPresentation.accent }]} />
+                <View style={[styles.rangeTrack, { backgroundColor: GasTaColors.glassBorderSubtle }]} />
+                <View style={[styles.rangeDot, { left: 0, backgroundColor: GasTaColors.textMuted }]} />
+                <View style={[styles.rangeDot, { right: 0, backgroundColor: GasTaColors.textMuted }]} />
               </View>
+              </View> : null}
             </View>
           ) : null}
-
-          {/*
-            TREND. There is deliberately no second This week / Past prices
-            control here. An earlier revision rendered an identical pair of
-            buttons in this section head as well as in the page header, so
-            both toggles drove the same `view` state and the page appeared to
-            have two competing mode switches. The page header above is the one
-            canonical control; this section only renders what it selects.
-          */}
-          <View testID="prices-trend" style={styles.trendPanel}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>Price trend</Text>
-            {view === 'history' && companyOptions.length > 0 ? (
-              <View style={styles.trendBrandRow}>
-                <SelectField
-                  appearance="standard"
-                  label="Brand"
-                  value={trendCompanySlug}
-                  options={companyOptions}
-                  onChange={setTrendCompanySlug}
-                />
-              </View>
-            ) : null}
-
-            {view === 'history' && historySummary ? (
-              <View style={styles.summaryStrip}>
-                <Text style={styles.summaryStripText}>
-                  {historySummary.delta < 0
-                    ? `${formatCurrency(Math.abs(historySummary.delta))} cheaper than ${formatBulletinRange(historySummary.oldest.bulletin_date)}`
-                    : historySummary.delta > 0
-                      ? `${formatCurrency(historySummary.delta)} higher than ${formatBulletinRange(historySummary.oldest.bulletin_date)}`
-                      : `Unchanged since ${formatBulletinRange(historySummary.oldest.bulletin_date)}`}
-                </Text>
-                <Text style={styles.summaryStripMeta}>
-                  {formatCurrency(historySummary.oldest.price_per_liter)} →{' '}
-                  {formatCurrency(historySummary.newest.price_per_liter)}/L
-                </Text>
-              </View>
-            ) : null}
-
-            {/*
-              The chart is only asked to draw once history has actually
-              resolved. Before this, `trend` was `[]` and PriceTrendChart
-              rendered its own "Not enough history yet" -- which claimed the
-              region had no history when in fact the request simply had not run.
-              Loading and failure are now stated here instead, and the
-              insufficient-history message is reachable only from a successful
-              load that really did return fewer than two usable weeks.
-            */}
-            {historyStatus === 'error' ? (
-              <View style={styles.historyNote}>
-                <Text style={styles.historyNoteTitle}>Price history unavailable</Text>
-                <Text style={styles.historyNoteBody}>
-                  Could not load past bulletins for this region. Pull to refresh to try again.
-                </Text>
-              </View>
-            ) : historyStatus === 'loading' || historyStatus === 'idle' ? (
-              <View style={styles.historyNote}>
-                <Text style={styles.historyNoteTitle}>Loading price history…</Text>
-              </View>
-            ) : (
-              <PriceTrendChart
-                points={trend}
-                fuelCode={fuelType}
-                caption={
-                  view === 'history'
-                    ? `${fuelLabel} · ${companyName}`
-                    : `${fuelLabel} · ${regionLabel}`
-                }
-                height={isCompact ? 124 : view === 'history' ? 156 : 144}
-              />
-            )}
-
-            {view === 'history' && historyStatus === 'ready' && trend.length > 0 ? (
-              <View style={styles.weekList}>
-                <PriceHistoryList
-                  points={trend}
-                  selectedDate={selectedPastDate ?? undefined}
-                  onSelectDate={(date) => {
-                    setSelectedPastDate((current) => (current === date ? null : date));
-                    setAreaName('');
-                  }}
-                />
-              </View>
-            ) : null}
           </View>
 
-          {selectedPastDate && pastWeekPrices.length > 0 ? (
-            <>
-              <Text style={styles.sectionTitleTop}>
-                All brands · {formatDate(selectedPastDate)}
-              </Text>
-              <View style={styles.plainListTight}>
-                {pastWeekPrices.map((row, index) => (
-                  <PriceCompareRow
-                    key={row.id}
-                    rank={index + 1}
-                    company={row.oil_company.name}
-                    price={row.price_per_liter}
-                    maxPrice={Math.max(...pastWeekPrices.map((p) => p.price_per_liter))}
-                    minPrice={Math.min(...pastWeekPrices.map((p) => p.price_per_liter))}
-                    isLowest={index === 0}
-                    isLast={index === pastWeekPrices.length - 1}
-                  />
-                ))}
-              </View>
-            </>
-          ) : null}
+          {view === 'history' ? trendSection : null}
 
-          {/* DOE estimates stay separate from branch observations. */}
-          <View style={styles.doeInfoStrip}>
-            <MaterialCommunityIcons name="information-outline" size={15} color={D.color.textSecondary} />
-            <Text style={styles.doeInfoBody}>
-              <Text style={styles.doeInfoLead}>DOE prices are area or regional estimates.</Text>{' '}
-              Exact branch prices may differ.
-            </Text>
-          </View>
+          {!priceRange ? <View style={styles.doeInfoStrip}>
+            <Text style={styles.doeInfoBody}>DOE prices are area or regional estimates. Station prices may differ.</Text>
+          </View> : null}
           <View style={styles.listHead}>
-            <Text style={styles.sectionTitle}>Official DOE prices</Text>
+            <Text style={styles.sectionTitle}>Official DOE Prices</Text>
           </View>
 
           {officialRows.areaRows.length === 0 ? (
@@ -1580,9 +1532,9 @@ export default function FuelPricesScreen() {
           <View style={styles.communitySection}>
             <View style={styles.listHead}>
               <View style={styles.communityHeading}>
-                <Text style={styles.sectionTitle}>Community reports</Text>
+                <Text style={styles.sectionTitle}>Community Station Reports</Text>
                 <Text style={styles.sourceDescription}>
-                  User-observed station prices
+                  User-observed station prices, separate from the official DOE baseline.
                 </Text>
               </View>
               <Pressable
@@ -1595,7 +1547,10 @@ export default function FuelPricesScreen() {
                 </Text>
               </Pressable>
             </View>
-            <View style={styles.communityFilters} accessibilityRole="tablist" accessibilityLabel="Community report period">
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.communityFilters}>
               {COMMUNITY_RECENCY_OPTIONS.map((option) => {
                 const active = communityRecency === option.value;
                 return (
@@ -1611,21 +1566,23 @@ export default function FuelPricesScreen() {
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
             {communityForFuel.length === 0 ? (
               <View style={styles.communityEmpty}>
                 <MaterialCommunityIcons
                   name="map-marker-off-outline"
-                  size={20}
-                  color={D.color.textTertiary}
+                  size={24}
+                  color={GasTaColors.textSoft}
                 />
                 <View style={styles.communityEmptyCopy}>
-                  <Text style={styles.emptyTitle}>No recent reports</Text>
-                  <Text style={styles.communityEmptyHint}>Try another period or report a station price.</Text>
+                  <Text style={styles.emptyTitle}>No reports in this period</Text>
+                  <Text style={styles.emptyLine}>
+                    Try another recency filter or report a price you saw at a station.
+                  </Text>
                 </View>
               </View>
             ) : (
-              <View style={styles.communityCards}>
+              <View style={[styles.communityCards, { borderColor: GasTaColors.glassBorderSubtle }]}>
                 {communityForFuel.slice(0, 4).map((report, index) => {
                   const isVerified = report.status === 'verified';
                   // Historical = older than the 7-day recommendation freshness
@@ -1641,27 +1598,27 @@ export default function FuelPricesScreen() {
                   return (
                     <View
                       key={report.id}
+                      testID="fuel-price-report-card"
                       style={[
                         styles.communityCard,
                         index > 0 && styles.communityCardDivider,
-                        isVerified ? styles.communityCardVerified : styles.communityCardPending,
                       ]}>
                       <View style={styles.communityCardTop}>
                         <BrandMark
                           brand={report.station?.brand_label ?? report.station?.oil_company?.name}
                           slug={report.station?.oil_company?.slug}
                           stationName={report.station?.name}
-                          size="sm"
+                          size="md"
                         />
                         <View style={styles.communityCardMain}>
                           <Text numberOfLines={1} style={styles.communityStation}>
                             {report.station?.name ?? 'Station'}
                           </Text>
+                          <View style={styles.communityFuelMeta}><FuelTypeBadge fuelCode={report.fuel_type?.code} label={report.fuel_type?.name} />
                           <Text style={styles.communityMeta}>
                             {formatRelativeReportAge(report.created_at)}
                             {isHistorical ? ` · ${formatDate(report.created_at)}` : ''}
-                          </Text>
-                          <FuelTypeBadge appearance="standard" fuelCode={report.fuel_type?.code} label={report.fuel_type?.name} />
+                          </Text></View>
                         </View>
                         <Text style={styles.communityPrice}>
                           {formatCurrency(report.reported_price)}
@@ -1673,7 +1630,7 @@ export default function FuelPricesScreen() {
                           <MaterialCommunityIcons
                             name={isVerified ? 'shield-check' : 'clock-outline'}
                             size={11}
-                            color={isVerified ? D.status.success.foreground : D.status.warning.foreground}
+                            color={isVerified ? GasTaColors.forest : '#9A6700'}
                           />
                           <Text style={[styles.communityBadgeText, isVerified && styles.communityBadgeTextVerified]}>
                             {statusLabel}
@@ -1707,6 +1664,7 @@ export default function FuelPricesScreen() {
               </View>
             )}
           </View>
+          {view === 'now' ? trendSection : null}
         </>
       )}
     </ScrollView>
@@ -1714,7 +1672,7 @@ export default function FuelPricesScreen() {
 }
 
 /**
- * Movement indicator, independent of the selected fuel's card color.
+ * Movement indicator for the forest hero.
  *
  * Colour follows the consumer's interest: a falling price is good news and
  * reads green, a rising price reads warm red. The arrow and the peso value are
@@ -1731,7 +1689,7 @@ function HeroDelta({ delta }: { delta: number }) {
   const down = delta < 0;
   return (
     <View style={[styles.heroDeltaTag, down ? styles.heroDeltaDown : styles.heroDeltaUp]}>
-      <Text style={[styles.heroDeltaText, { color: down ? D.status.success.foreground : D.status.error.foreground }]}>
+      <Text style={[styles.heroDeltaText, { color: down ? palette.success : '#B42318' }]}>
         {down ? '↓' : '↑'} {formatCurrency(Math.abs(delta))}
       </Text>
     </View>
@@ -1739,133 +1697,764 @@ function HeroDelta({ delta }: { delta: number }) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: D.color.canvas },
-  padding: { paddingTop: 8, paddingBottom: 48 },
-  pressed: { opacity: 0.88 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  fuelContext: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1 },
+  contextDot: { width: 6, height: 6, borderRadius: 3 },
+  contextText: { color: GasTaColors.textMuted, fontSize: 12, lineHeight: 18, flexShrink: 1 },
+  flex: { flex: 1, backgroundColor: GasTaColors.cream },
+  pressed: { opacity: 0.7 },
+  padding: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
+
+  controlsPanel: { backgroundColor: colors.primarySoft, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: colors.primaryBorder },
+  filterSummary: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  filterSummaryCopy: { flex: 1, minWidth: 0, gap: 3 },
+  filterSummaryScope: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  filterSummaryFuel: { fontSize: 15, lineHeight: 21, fontWeight: '700', color: GasTaColors.textPrimary },
+  filterSummaryRegion: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 18, color: GasTaColors.textMuted },
+  filterSummaryMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  filterSummaryArea: { flexShrink: 1, fontSize: 11, lineHeight: 16, color: GasTaColors.textMuted },
+  coverageInfoButton: { minWidth: 28, minHeight: 28, alignItems: 'center', justifyContent: 'center' },
+  coverageSheet: { padding: 24, paddingBottom: 32, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: GasTaColors.white, gap: 12 },
+  coverageTitle: { fontSize: 18, fontWeight: '700', color: GasTaColors.textPrimary },
+  coverageBody: { fontSize: 14, lineHeight: 22, color: GasTaColors.textMuted },
+  filterSummaryAction: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  filterSummaryActionActive: { backgroundColor: colors.primaryDark },
+  filterSummaryActionText: { fontSize: 12, fontWeight: '700', color: colors.navy },
+  filterDetails: { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: GasTaColors.glassBorderSubtle },
+  filtersHidden: { display: 'none' },
+  filterDone: { alignSelf: 'flex-end', minWidth: 72, minHeight: 44, paddingHorizontal: 16, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  fuelShortcuts: { flexDirection: 'row', gap: 6, marginBottom: 12, alignItems: 'center' },
+  fuelChip: { flex: 1, minWidth: 0, minHeight: 36, paddingHorizontal: 6, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, backgroundColor: GasTaColors.white },
+  fuelChipText: { fontSize: 11, fontWeight: '600', color: GasTaColors.textMuted },
+  moreFuelField: { flex: 1.5 },
+  moreFuelLabelCompact: { fontSize: 10 },
+  moreFuelFieldCompact: { flexGrow: 0, flexShrink: 0, flexBasis: 88, width: 88 },
+  moreFuelControl: { minHeight: 36, borderRadius: 10, paddingHorizontal: 6, gap: 2 },
+  fuelOptionDot: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  communityFuelMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 5 },
+  heroScopeRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 18 },
+  heroScope: { color: GasTaColors.white, fontSize: 12, lineHeight: 18 },
+  trendSection: { marginTop: 24, gap: 12 },
+  priceEmpty: { marginTop: 16, padding: 20, borderRadius: 22, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, gap: 10 },
+  priceEmptyTitle: { color: GasTaColors.textPrimary, fontSize: 18, fontWeight: '700' },
+  priceEmptyBody: { color: GasTaColors.textMuted, fontSize: 13, lineHeight: 20 },
+  /* ---- header ---- */
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
   headerCopy: { flex: 1, minWidth: 0 },
-  headerTitle: { ...D.type.pageTitle, color: D.color.structure },
-  headerMeta: { ...D.type.supporting, color: D.color.textSecondary, marginTop: 2 },
-  headerAction: { minHeight: 44, paddingLeft: 8, justifyContent: 'center' },
-  headerActionText: { ...D.type.supporting, fontWeight: '600', color: D.color.action },
-  nearMeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  nearMeText: { flex: 1, minWidth: 0, ...D.type.metadata, color: D.color.textSecondary },
-  nearMeAction: { ...D.type.metadata, fontWeight: '600', color: D.color.action, paddingVertical: 6 },
-  freshnessRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
-  freshnessPill: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: D.color.neutralSoft },
-  freshnessPillStale: { backgroundColor: D.status.error.background },
-  freshnessPillText: { ...D.type.metadata, color: D.color.textSecondary },
-  freshnessPillTextStale: { color: D.status.error.foreground },
-  freshnessMeta: { flex: 1, minWidth: 0, ...D.type.metadata, color: D.color.textTertiary },
-  viewToggle: { flexDirection: 'row', alignSelf: 'flex-start', backgroundColor: D.color.neutralSoft, padding: 2, borderRadius: 10, marginVertical: 8 },
-  viewToggleItem: { minHeight: 40, paddingHorizontal: 16, justifyContent: 'center', borderRadius: 8 },
-  viewToggleItemActive: { backgroundColor: D.color.surface },
-  viewToggleText: { ...D.type.supporting, fontWeight: '500', color: D.color.textSecondary },
-  viewToggleTextActive: { color: D.color.structure, fontWeight: '600' },
-  filterRow: { flexDirection: 'row', gap: 8 },
-  filterRowWrap: { flexWrap: 'wrap' },
-  filterFieldWrap: { flexBasis: '46%' },
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    color: GasTaColors.textPrimary,
+  },
+  headerMeta: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  /* ---- location status ---- */
+  nearMeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  nearMeText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+  },
+  nearMeAction: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: GasTaColors.forest,
+  },
+  /* ---- history placeholder ---- */
+  historyNote: {
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+  },
+  historyNoteTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: GasTaColors.textSoft,
+  },
+  historyNoteBody: {
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    color: GasTaColors.textMuted,
+    marginTop: 2,
+  },
+  headerAction: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    justifyContent: 'center',
+    backgroundColor: GasTaColors.white,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  headerActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+
+  /* ---- view toggle ---- */
+  viewToggle: { flexDirection: 'row', gap: 4, padding: 4, borderRadius: 12, backgroundColor: GasTaColors.cream, marginBottom: 12 },
+  viewToggleItem: { flex: 1, minHeight: 32, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, borderRadius: 9 },
+  viewToggleItemActive: { backgroundColor: GasTaColors.forestDark },
+  viewToggleText: { fontSize: 12, fontWeight: '600', color: GasTaColors.textMuted },
+  viewToggleTextActive: { color: GasTaColors.white },
+
+  /* ---- compact filters ---- */
+  filterRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: 8,
+  },
   filterField: { flex: 1, minWidth: 0 },
-  filterLabelRow: { marginBottom: 4 },
-  filterLabel: { ...D.type.metadata, color: D.color.textSecondary, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5 },
-  filterControl: { minHeight: 46, borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: D.color.surface, borderColor: D.color.borderSubtle },
-  filterValue: { flex: 1, minWidth: 0, ...D.type.supporting, fontWeight: '500', color: D.color.textPrimary },
-  filterBackdrop: { flex: 1, backgroundColor: D.color.scrim, justifyContent: 'flex-end' },
-  filterSheet: { maxHeight: '72%', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingBottom: 32 },
-  filterSheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 8 },
-  filterClose: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
-  filterSheetTitle: { ...D.type.sectionTitle, color: D.color.textPrimary },
-  filterOptionList: { paddingHorizontal: 16 },
-  filterLoadingText: { paddingHorizontal: 16, paddingVertical: 24, ...D.type.bodyDense, textAlign: 'center' },
-  filterOption: { minHeight: 48, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  filterOptionText: { flex: 1, ...D.type.bodyDense, paddingRight: 8, color: D.color.textPrimary },
-  fuelContext: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1, maxWidth: '100%' },
-  contextText: { maxWidth: '100%', flexShrink: 1, ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400' },
-  contextDot: { width: 5, height: 5, borderRadius: 3, marginLeft: 2 },
-  heroCard: { marginTop: 8, padding: 16, borderRadius: 20, borderWidth: 1, shadowColor: D.color.structure, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
-  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  heroLabel: { ...D.type.metadata, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', color: D.color.onDark },
-  heroPill: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: '#FFF5E7' },
-  heroPillText: { ...D.type.metadata, fontWeight: '600', color: '#0E2A52', flexShrink: 1 },
-  heroPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 3, marginTop: 8 },
-  heroPrice: { fontSize: 40, lineHeight: 48, fontWeight: '700', letterSpacing: -1, color: D.color.onDark, fontVariant: ['tabular-nums'], flexShrink: 1 },
-  heroUnit: { ...D.type.supporting, fontWeight: '400', color: 'rgba(255,255,255,0.86)' },
-  heroIdentity: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  heroIdentityCopy: { flex: 1, minWidth: 0 },
-  heroStation: { ...D.type.cardTitle, color: D.color.onDark },
-  heroArea: { ...D.type.supporting, color: 'rgba(255,255,255,0.86)' },
-  heroMovement: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
-  heroDeltaTag: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
-  heroDeltaDown: { backgroundColor: D.status.success.background },
-  heroDeltaUp: { backgroundColor: D.status.error.background },
-  heroDeltaText: { ...D.type.supporting, fontWeight: '600' },
-  heroDeltaFlat: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: '#FFF5E7' },
-  heroDeltaFlatText: { ...D.type.metadata, color: '#0E2A52' },
-  heroMovementNote: { flex: 1, ...D.type.metadata, color: 'rgba(255,255,255,0.86)', fontWeight: '400' },
-  rangeCard: { marginTop: 12, padding: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: D.color.surface },
-  rangeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  rangeTitle: { ...D.type.supporting, fontWeight: '600', color: D.color.textPrimary },
-  rangeCount: { ...D.type.metadata, color: D.color.textTertiary },
-  rangeEnds: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 },
-  rangeEndValue: { fontSize: 17, lineHeight: 22, fontWeight: '600', letterSpacing: -0.3, color: D.color.textPrimary, fontVariant: ['tabular-nums'] },
-  rangeUnit: { ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400', letterSpacing: 0 },
-  rangeEndLabel: { ...D.type.metadata, color: D.color.textTertiary, fontWeight: '400' },
-  rangeMid: { alignItems: 'center' }, rangeEndRight: { alignItems: 'flex-end' },
-  rangeBar: { height: 4, marginTop: 8, justifyContent: 'center' },
-  rangeTrack: { height: 2, borderRadius: 1, backgroundColor: D.color.borderControl },
-  rangeDot: { position: 'absolute', width: 4, height: 4, borderRadius: 2 },
-  trendPanel: { marginTop: 20, padding: 16, borderRadius: 16, backgroundColor: D.color.surface, gap: 12 },
-  trendBrandRow: {},
-  summaryStrip: { gap: 4 },
-  summaryStripText: { ...D.type.bodyDense, fontWeight: '500', color: D.color.textPrimary },
-  summaryStripMeta: { ...D.type.metadata, color: D.color.textTertiary },
-  weekList: { marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
-  listHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 20, marginBottom: 12 },
-  sectionTitle: { ...D.type.sectionTitle, color: D.color.structure },
-  sectionTitleTop: { ...D.type.sectionTitle, color: D.color.structure, marginTop: 20 },
-  reportCta: { flexShrink: 0, minHeight: 44, justifyContent: 'center', paddingLeft: 4 },
-  reportCtaText: { ...D.type.supporting, color: D.color.action, fontWeight: '600' },
-  communitySection: { marginTop: 24, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
+  filterLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 3,
+  },
+  filterIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /* Consistent neutral icon fills keep the controls visually quiet. */
+  filterIconRegion: { backgroundColor: GasTaColors.forestGlow },
+  filterIconCity: { backgroundColor: GasTaColors.forestGlow },
+  filterIconFuel: { backgroundColor: GasTaColors.forestGlow },
+  filterLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: GasTaColors.textSoft,
+  },
+  filterControl: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+    backgroundColor: GasTaColors.white,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  filterValue: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: GasTaColors.textPrimary,
+  },
+  filterBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(25, 45, 66, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  filterSheet: {
+    maxHeight: '72%',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  filterSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  filterSheetTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: GasTaColors.textPrimary,
+  },
+  filterOptionList: {
+    paddingHorizontal: spacing.md,
+  },
+  filterLoadingText: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  filterOption: {
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterOptionText: {
+    flex: 1,
+    fontSize: 15,
+    paddingRight: spacing.sm,
+    color: GasTaColors.textPrimary,
+  },
+
+  /* ---- hero: the primary data surface ---- */
+  overviewRow: {},
+  overviewRowDesktop: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: spacing.md,
+  },
+  overviewCard: { flex: 1, minWidth: 0 },
+  findStation: { marginTop: 18, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  findStationEmpty: { marginTop: 4, backgroundColor: colors.primarySoft },
+  findStationText: { flex: 1, fontSize: 12, fontWeight: '600', color: colors.navy },
+  heroCard: {
+    borderWidth: 1,
+    shadowColor: '#000000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8,
+    marginTop: spacing.md,
+    padding: 20,
+    borderRadius: 26,
+    backgroundColor: GasTaColors.forestDark,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  heroLabel: {
+    flexShrink: 1,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: GasTaColors.white,
+  },
+  heroPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 0,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+    backgroundColor: GasTaColors.cream,
+  },
+  heroPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  heroPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 3,
+    marginTop: spacing.sm,
+  },
+  heroPrice: {
+    fontSize: 48,
+    fontWeight: '800',
+    letterSpacing: -1.6,
+    color: GasTaColors.white,
+    flexShrink: 1,
+  },
+  heroUnit: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: GasTaColors.white,
+  },
+  heroStation: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: GasTaColors.white,
+    marginTop: 2,
+  },
+  heroMovement: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(248, 240, 229, 0.2)',
+  },
+  heroDeltaTag: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+  },
+  heroDeltaDown: { backgroundColor: palette.successSoft },
+  heroDeltaUp: { backgroundColor: '#FFF1F0' },
+  heroDeltaText: { fontSize: 13, fontWeight: '800' },
+  heroDeltaFlat: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    backgroundColor: GasTaColors.white,
+  },
+  heroDeltaFlatText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  heroMovementNote: {
+    flex: 1,
+    fontSize: 11,
+    color: GasTaColors.white,
+  },
+
+  /* ---- price range ---- */
+  rangeCard: { marginTop: 12, backgroundColor: GasTaColors.cream },
+  rangeToolbar: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  rangeHead: { minHeight: 36, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, backgroundColor: GasTaColors.white, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rangeAction: { flexDirection: 'row', alignItems: 'center' },
+  rangeDetails: { marginTop: 8, padding: 12, borderRadius: 14, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, gap: 8 },
+  rangeTitle: { fontSize: 11, fontWeight: '600', color: GasTaColors.textPrimary },
+  rangeCount: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: GasTaColors.textSoft,
+  },
+  rangeEnds: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap', gap: 10,
+  },
+  rangeEndLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: GasTaColors.textSoft,
+  },
+  rangeEndValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    color: GasTaColors.forestDark,
+    marginTop: 1,
+  },
+  rangeMid: { alignItems: 'center' },
+  rangeEndRight: { alignItems: 'flex-end' },
+  rangeBar: {
+    height: 6,
+    marginTop: spacing.md,
+    justifyContent: 'center',
+  },
+  rangeTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: GasTaColors.forestGlow,
+  },
+  rangeDot: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: GasTaColors.forest,
+  },
+
+  /* ---- trend ---- */
+  trendHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+    marginBottom: spacing.sm,
+  },
+  trendPanel: {
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    backgroundColor: GasTaColors.creamLight,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+  },
+  trendBrandRow: { marginBottom: spacing.md },
+  summaryStrip: {
+    marginBottom: spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: GasTaColors.forestGlow,
+  },
+  summaryStripText: {
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    color: GasTaColors.forestDark,
+  },
+  summaryStripMeta: {
+    fontSize: 11,
+    color: GasTaColors.textSoft,
+    marginTop: 1,
+  },
+  weekList: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestGlow,
+  },
+
+  /* ---- list heading + report CTA ---- */
+  listHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+    marginBottom: spacing.sm,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
+  },
+  sectionTitleTop: {
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
+    marginTop: spacing.xl,
+  },
+  confirmHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  confirmTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    color: GasTaColors.textPrimary,
+  },
+  reportCta: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: GasTaColors.forest,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  reportCtaText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  communitySection: {
+    marginTop: spacing.md,
+    paddingTop: 0,
+    borderTopWidth: 0,
+    borderTopColor: GasTaColors.forestGlow,
+  },
   communityHeading: { flex: 1, minWidth: 0 },
-  sourceDescription: { ...D.type.metadata, color: D.color.textSecondary, marginTop: 4, fontWeight: '400' },
-  doeInfoStrip: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 16 },
-  doeInfoBody: { flex: 1, minWidth: 0, ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400' },
-  doeInfoLead: { fontWeight: '400', color: D.color.textSecondary },
-  communityFilters: { flexDirection: 'row', backgroundColor: D.color.neutralSoft, borderRadius: 10, padding: 2, marginBottom: 12 },
-  communityChip: { flex: 1, minWidth: 0, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  communityChipActive: { backgroundColor: D.color.surface },
-  communityChipText: { ...D.type.supporting, color: D.color.textSecondary, fontWeight: '500' },
-  communityChipTextActive: { color: D.color.structure, fontWeight: '600' },
-  communityCards: { overflow: 'hidden', borderRadius: 12, backgroundColor: D.color.surface },
-  communityCard: { minHeight: 96, padding: 12, gap: 8 },
-  communityCardDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
-  communityCardVerified: {}, communityCardPending: {},
-  communityCardTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sourceDescription: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginTop: 3,
+  },
+  doeInfoStrip: { marginTop: 12 },
+  doeInfoBody: { flex: 1, minWidth: 0, color: GasTaColors.textMuted, fontSize: 11, lineHeight: 16 },
+  doeInfoLead: { fontWeight: '500' },
+  communityFilters: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: spacing.sm,
+    paddingRight: spacing.sm,
+  },
+  communityChip: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  communityChipActive: {
+    borderColor: GasTaColors.forestDark,
+    backgroundColor: GasTaColors.forest,
+  },
+  communityChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+  communityChipTextActive: { color: GasTaColors.textOnForest },
+  communityCards: {
+    overflow: 'hidden',
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  communityCard: {
+    minHeight: 96,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: spacing.sm,
+  },
+  communityCardDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: GasTaColors.forestGlow,
+  },
+  communityCardVerified: {
+    backgroundColor: GasTaColors.white,
+  },
+  communityCardPending: {
+    backgroundColor: 'rgba(180, 83, 9, 0.06)',
+  },
+  communityCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   communityCardMain: { flex: 1, minWidth: 0 },
-  communityStation: { ...D.type.bodyDense, fontWeight: '600', color: D.color.textPrimary },
-  communityMeta: { ...D.type.metadata, color: D.color.textTertiary, marginTop: 2, marginBottom: 4 },
-  communityPrice: { fontSize: 18, lineHeight: 24, fontWeight: '600', color: D.color.textPrimary },
-  verifyUnit: { ...D.type.metadata, color: D.color.textSecondary, fontWeight: '400' },
-  communityBadgeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
-  communityBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: D.status.warning.background },
-  communityBadgeVerified: { backgroundColor: D.status.success.background },
-  communityBadgeText: { ...D.type.metadata, color: D.status.warning.foreground },
-  communityBadgeTextVerified: { color: D.status.success.foreground },
-  communityConfirmations: { ...D.type.metadata, color: D.color.textTertiary },
-  inlineConfirm: { marginLeft: 'auto', minHeight: 44, paddingHorizontal: 8, justifyContent: 'center' },
-  inlineConfirmText: { ...D.type.supporting, fontWeight: '600', color: D.color.action },
-  voteBtnBusy: { opacity: 0.5 },
-  communityEmpty: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 },
+  communityStation: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: GasTaColors.textPrimary,
+  },
+  communityMeta: {
+    fontSize: 11,
+    color: GasTaColors.textSoft,
+    marginTop: 2,
+  },
+  communityPrice: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  communityBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: 4,
+  },
+  communityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(180, 83, 9, 0.12)',
+  },
+  communityBadgeVerified: { backgroundColor: GasTaColors.forestGlow },
+  communityBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#9A6700',
+  },
+  communityBadgeTextVerified: { color: GasTaColors.forest },
+  communityConfirmations: {
+    fontSize: 10,
+    color: GasTaColors.textSoft,
+  },
+  inlineConfirm: {
+    marginLeft: 'auto',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  inlineConfirmText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  communityEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    backgroundColor: GasTaColors.creamLight,
+  },
   communityEmptyCopy: { flex: 1, minWidth: 0 },
-  communityEmptyHint: { ...D.type.supporting, color: D.color.textSecondary },
-  plainListTight: { backgroundColor: D.color.surface, borderRadius: 12, overflow: 'hidden', marginTop: 8 },
-  historyNote: { paddingVertical: 20, gap: 4 },
-  historyNoteTitle: { ...D.type.bodyDense, fontWeight: '500', color: D.color.textSecondary },
-  historyNoteBody: { ...D.type.supporting, color: D.color.textSecondary },
-  inlineLoading: { paddingVertical: 40, alignItems: 'center' },
-  hintText: { ...D.type.metadata, color: D.color.textTertiary, marginTop: 8, fontWeight: '400' },
-  emptyTitle: { ...D.type.bodyDense, fontWeight: '600', color: D.color.textPrimary, marginBottom: 4 },
-  emptyLine: { ...D.type.supporting, color: D.color.textSecondary, paddingVertical: 12 },
-  errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: D.status.error.background },
-  errorText: { flex: 1, ...D.type.supporting, color: D.status.error.foreground },
+
+  /* ---- flat row lists ---- */
+  plainListTight: {
+    backgroundColor: GasTaColors.creamLight,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: GasTaColors.glassBorderSubtle,
+    overflow: 'hidden',
+    marginTop: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  /* Needs-confirmation is pending community data, so it carries a pale amber
+     cast rather than reading as another authoritative white block. */
+  confirmList: {
+    backgroundColor: 'rgba(180, 83, 9, 0.06)',
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(180, 83, 9, 0.22)',
+    overflow: 'hidden',
+    marginTop: spacing.sm,
+  },
+  rowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: GasTaColors.forestGlow,
+  },
+
+  /* ---- needs-confirmation rows ---- */
+  verifyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    minHeight: 76,
+    paddingVertical: spacing.sm,
+  },
+  verifyInfo: { flex: 1, minWidth: 0 },
+  verifyTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.textPrimary,
+  },
+  verifyMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: GasTaColors.textSoft,
+    marginTop: 1,
+  },
+  verifyPrice: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  verifyUnit: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: GasTaColors.textSoft,
+  },
+  voteBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: GasTaColors.forest,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  voteBtnBusy: { opacity: 0.5 },
+  voteBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: GasTaColors.forestDark,
+  },
+
+  /* ---- history summary ---- */
+
+  /* ---- quiet text states ---- */
+  inlineLoading: {
+    paddingVertical: spacing.xxl,
+    alignItems: 'center',
+  },
+  hintText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: GasTaColors.textSoft,
+    marginTop: spacing.sm,
+  },
+  emptyTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: GasTaColors.textPrimary,
+    marginBottom: 2,
+  },
+  emptyLine: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: GasTaColors.textSoft,
+    paddingVertical: spacing.lg,
+  },
+  /* Quiet, informative panel -- not an error and not a warning banner. */
+  emptyCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: GasTaColors.forestBorder,
+    backgroundColor: GasTaColors.creamLight,
+  },
+  emptyCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: GasTaColors.forestDark,
+  },
+  emptyCardBody: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: GasTaColors.textPrimary,
+    marginTop: 4,
+  },
+  emptyCardHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: GasTaColors.textSoft,
+    marginTop: 6,
+  },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: GasTaColors.error,
+    backgroundColor: palette.dangerSoft,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: palette.danger,
+  },
 });

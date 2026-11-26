@@ -22,6 +22,7 @@ type AutocompleteErrorBody = {
 type AutocompleteRequestBody = {
   query?: unknown;
   placeId?: unknown;
+  stationBrand?: unknown;
   latitude?: unknown;
   longitude?: unknown;
 };
@@ -33,7 +34,8 @@ type ParsedRequest =
       latitude?: number;
       longitude?: number;
     }
-  | { mode: "details"; placeId: string };
+  | { mode: "details"; placeId: string }
+  | { mode: "stations"; stationBrand: string; latitude: number; longitude: number };
 
 type GooglePlacePrediction = {
   place?: unknown;
@@ -75,6 +77,43 @@ const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_QUERY_LENGTH = 200;
 const MAX_SUGGESTIONS = 5;
 const LOCATION_BIAS_RADIUS_METERS = 50_000;
+const STATION_BRANDS: Record<string, string> = {
+  all: "All companies", petron: "Petron", shell: "Shell", caltex: "Caltex", phoenix: "Phoenix",
+  total: "Total", "flying-v": "Flying V", unioil: "Unioil", seaoil: "SEAOIL",
+  ptt: "PTT", jetti: "Jetti", "clean-fuel": "Cleanfuel", "my-gas": "My Gas",
+};
+const STATION_RADIUS_KM = 30;
+
+type NearbyStation = {
+  placeId: string; name: string; address: string; latitude: number; longitude: number;
+  distanceKm: number; attributions: { name: string; uri: string | null }[];
+};
+
+function kilometers(a: number, b: number, c: number, d: number): number {
+  const rad = Math.PI / 180;
+  const h = Math.sin((c-a)*rad/2)**2 + Math.cos(a*rad)*Math.cos(c*rad)*Math.sin((d-b)*rad/2)**2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1-h)));
+}
+
+function normalizeStation(value: unknown, latitude: number, longitude: number, stationBrand: string): NearbyStation | null {
+  if (!isRecord(value) || !isRecord(value.location) || !isRecord(value.displayName)) return null;
+  const placeId = normalizePlaceId(value.id), name = optionalString(value.displayName.text), address = optionalString(value.formattedAddress);
+  const lat = optionalNumber(value.location.latitude), lng = optionalNumber(value.location.longitude);
+  if (!placeId || !name || !address || lat === undefined || lng === undefined || lat < 4 || lat > 22.5 || lng < 116 || lng > 127) return null;
+  if (!Array.isArray(value.types) || !value.types.includes("gas_station") || value.businessStatus === "CLOSED_PERMANENTLY" || value.businessStatus === "CLOSED_TEMPORARILY") return null;
+  const normalizedName = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const normalizedBrand = STATION_BRANDS[stationBrand].toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (stationBrand !== "all" && !normalizedName.includes(normalizedBrand)) return null;
+  const distanceKm = kilometers(latitude, longitude, lat, lng);
+  if (distanceKm > STATION_RADIUS_KM) return null;
+  const attributions = Array.isArray(value.attributions) ? value.attributions.flatMap((a) => {
+    if (!isRecord(a)) return [];
+    const provider = optionalString(a.provider), uri = optionalString(a.providerUri);
+    return provider ? [{ name: provider, uri: uri?.startsWith("https://") ? uri : null }] : [];
+  }) : [];
+  return { placeId, name, address, latitude: lat, longitude: lng, distanceKm, attributions };
+}
+
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -141,6 +180,12 @@ function normalizePlaceId(value: unknown): string | null {
 
 function parseRequest(value: AutocompleteRequestBody): ParsedRequest | null {
   if (!isRecord(value)) return null;
+
+  if (value.stationBrand !== undefined) {
+    const brand = optionalString(value.stationBrand), latitude = optionalNumber(value.latitude), longitude = optionalNumber(value.longitude);
+    if (!brand || !Object.prototype.hasOwnProperty.call(STATION_BRANDS, brand) || value.query !== undefined || value.placeId !== undefined || latitude === undefined || longitude === undefined || latitude < 4 || latitude > 22.5 || longitude < 116 || longitude > 127) return null;
+    return { mode: "stations", stationBrand: brand, latitude, longitude };
+  }
 
   const placeId = normalizePlaceId(value.placeId);
   if (placeId) {
@@ -335,7 +380,7 @@ function normalizeDetails(
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+  return isRecord(error) && error.name === "AbortError";
 }
 
 Deno.serve(async (request) => {
@@ -395,7 +440,7 @@ Deno.serve(async (request) => {
         body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
-    } else {
+    } else if (parsed.mode === "details") {
       const placeId = parsed.placeId.replace(/^places\//, "");
       response = await fetch(`${PLACES_ENDPOINT}/places/${placeId}`, {
         method: "GET",
@@ -406,7 +451,18 @@ Deno.serve(async (request) => {
         },
         signal: controller.signal,
       });
+    } else {
+      response = await fetch(`${PLACES_ENDPOINT}/places:searchText`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json", "X-Goog-Api-Key": key,
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.types,places.businessStatus,places.attributions" },
+        body: JSON.stringify({ textQuery: parsed.stationBrand === "all" ? "gas stations" : `${STATION_BRANDS[parsed.stationBrand]} gas station`, includedType: "gas_station", strictTypeFiltering: true,
+          regionCode: "PH", languageCode: "en", pageSize: 20, rankPreference: "DISTANCE",
+          locationBias: { circle: { center: { latitude: parsed.latitude, longitude: parsed.longitude }, radius: STATION_RADIUS_KM * 1000 } } }),
+        signal: controller.signal,
+      });
     }
+
 
     let payload: unknown;
     try {
@@ -423,6 +479,17 @@ Deno.serve(async (request) => {
         ? errorCodeForGoogleStatus(googleStatus)
         : errorCodeForHttpStatus(response.status);
       return errorResponse(code, statusForErrorCode(code));
+    }
+
+    if (parsed.mode === "stations") {
+      if (payload.places !== undefined && !Array.isArray(payload.places)) return errorResponse("invalid_response", 502);
+      const seen = new Set<string>();
+      const stations = ((payload.places ?? []) as unknown[]).map((v) => normalizeStation(v, parsed.latitude, parsed.longitude, parsed.stationBrand))
+        .filter((v): v is NearbyStation => {
+          if (!v || seen.has(v.placeId)) return false;
+          seen.add(v.placeId); return true;
+        }).sort((a, b) => a.distanceKm - b.distanceKm);
+      return jsonResponse({ stations });
     }
 
     if (parsed.mode === "autocomplete") {

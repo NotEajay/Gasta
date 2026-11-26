@@ -193,25 +193,27 @@ export async function fetchFuelStationsByRegion(regionCode: string): Promise<Fue
     region: { id: string; code: string; name: string } | null;
   };
 
-  let rows: StationRow[] = [];
-  const first = await supabase
-    .from('fuel_stations')
-    .select(selectWithBrand)
-    .eq('region_id', regionId)
-    .order('name');
-
-  if (!first.error) {
-    rows = (first.data ?? []) as unknown as StationRow[];
-  } else {
-    // Older deployments have no brand_label column. Retry without it; the row
-    // shape is identical, which is why both branches share one type.
-    const retry = await supabase
-      .from('fuel_stations')
-      .select(selectBasic)
-      .eq('region_id', regionId)
-      .order('name');
-    if (retry.error) throw retry.error;
-    rows = (retry.data ?? []) as unknown as StationRow[];
+  async function loadRows(fields: string): Promise<StationRow[]> {
+    const result: StationRow[] = [];
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase.from('fuel_stations').select(fields)
+        .eq('region_id', regionId).order('name').order('id').range(offset, offset + pageSize - 1);
+      if (error) throw error;
+      const page = (data ?? []) as unknown as StationRow[];
+      result.push(...page);
+      if (page.length < pageSize) return result;
+    }
+  }
+  let rows: StationRow[];
+  try {
+    rows = await loadRows(selectWithBrand);
+  } catch (error) {
+    const databaseError = error as { code?: string; message?: string };
+    if (!['42703', 'PGRST204'].includes(databaseError.code ?? '') || !databaseError.message?.includes('brand_label')) throw error;
+    // Older deployments can lack the optional brand label. Restart pagination
+    // with the legacy fields; do not turn a failed page into a partial list.
+    rows = await loadRows(selectBasic);
   }
 
   return rows.map((row) => ({

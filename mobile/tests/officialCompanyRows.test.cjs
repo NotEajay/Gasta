@@ -23,8 +23,8 @@ test('unavailable company still expands and opens selector with active context, 
  await h.flush({rows:[],areaRows:build(),fuelType:'RON_91',region:'SOUTH_LUZON',selectedArea:'Calamba'});
  find(h.tree,n=>n.props?.accessibilityLabel==='View supported companies').props.onPress();await h.flush();
  for(const slug of ['clean-fuel','jetti','my-gas','seaoil']){
- const card=find(h.tree,n=>n.props?.slug===slug||slug==='seaoil'&&n.props?.doeSummary);assert(card);assert.equal('price' in card.props?card.props.price:card.props.doeSummary?.price,null);assert.equal(card.props.unavailableLabel,'No available price in this area');card.props.onToggle();await h.flush();
- const expanded=find(h.tree,n=>(n.props?.slug===slug||slug==='seaoil'&&n.props?.doeSummary)&&n.props?.expanded);assert(expanded);expanded.props.onReport();await h.flush();
+ const card=find(h.tree,n=>n.props?.slug===slug);assert(card);assert.equal('price' in card.props?card.props.price:card.props.doeSummary?.price,null);assert.equal(card.props.unavailableLabel,'No available price in this area');card.props.onToggle();await h.flush();
+ const expanded=find(h.tree,n=>(n.props?.slug===slug)&&n.props?.expanded);assert(expanded);expanded.props.onReport();await h.flush();
  const selector=find(h.tree,n=>n.props?.context?.slug===slug);assert(selector);assert.equal(selector.props.context.region,'SOUTH_LUZON');assert.equal(selector.props.context.area,'Calamba');assert.equal(selector.props.context.fuelType,'RON_91');assert(!('price' in selector.props.context));
  }
 });
@@ -34,4 +34,17 @@ test('unavailable card avoids currency formatting, preserves logo and actions',a
  '@/lib/format':{formatCurrency:()=>{throw Error('must not format missing price')}},
  });await h.flush({company:'My Gas',slug:'my-gas',price:null,sourceLabel:'DOE Area/Brand Estimate',unavailableLabel:'No available price in this area',children:'Directory',onReport(){},expanded:true});
  assert(find(h.tree,n=>n.props?.brand==='My Gas'));assert(find(h.tree,n=>n.props?.children==='No available price in this area'));assert(find(h.tree,n=>n.props?.children==='Report station price'));assert(find(h.tree,n=>n.props?.accessibilityState?.expanded===true));
+});
+
+test('importing many branch locations does not multiply DOE references or promote pending prices',()=>{
+ const branches=Array.from({length:1000},(_,i)=>({id:String(i),slug:'petron',brand:'Petron',station:'Branch '+i,price:70,source:'doe',status:'DOE Region-Wide Estimate'}));
+ const verified={id:'actual',slug:'petron',brand:'Petron',station:'Actual branch',price:68,source:'community',status:'Verified'};
+ const pending={...verified,id:'pending',price:1,status:'Unverified'};
+ const result=service.trustedPriceComparisons([...branches,verified,pending],build([price('Petron')]));
+ assert.equal(result.length,2);assert.equal(Math.min(...result.map(row=>row.price)),68);
+ assert.equal(result.filter(row=>row.source==='doe_area').length,1);
+});
+test('invalid and unavailable source prices cannot enter comparisons',()=>{
+ const result=service.trustedPriceComparisons([], [null,NaN,Infinity,-1,0,'70'].map((price,i)=>({id:String(i),price,source:'doe_area'})));
+ assert.equal(result.length,0);
 });

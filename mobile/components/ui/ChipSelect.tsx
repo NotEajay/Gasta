@@ -8,6 +8,7 @@ import { useTheme } from '@/lib/useTheme';
 interface ChipOption<T extends string> {
   value: T;
   label: string;
+  subtitle?: string | null;
 }
 
 interface ChipSelectProps<T extends string> {
@@ -44,6 +45,7 @@ export default function ChipSelect<T extends string>({
             <Pressable
               key={option.value}
               accessibilityRole="radio"
+              accessibilityLabel={`${option.label}${option.subtitle ? `, ${option.subtitle}` : ''}`}
               accessibilityState={{ checked: selected }}
               onPress={() => onChange(option.value)}
               style={({ pressed }) => [
@@ -64,6 +66,7 @@ export default function ChipSelect<T extends string>({
                 ]}>
                 {option.label}
               </Text>
+              {option.subtitle ? <Text style={[styles.chipSubtitle, { color: theme.textSecondary }]}>{option.subtitle}</Text> : null}
             </Pressable>
           );
         })}
@@ -95,4 +98,5 @@ const styles = StyleSheet.create({
   chipText: {
     fontSize: 14,
   },
+  chipSubtitle: { fontSize: 11, lineHeight: 15, marginTop: 2 },
 });
