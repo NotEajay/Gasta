@@ -8,7 +8,6 @@ import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import { designSystem as D } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { getFuelTypeColor } from '@/constants/fuelTypeColors';
 
 type Props = {
   company: string;
@@ -30,7 +29,6 @@ export default function CompanyEstimateCard({
   company, slug, sourceLabel, fuelCode, price, unavailableLabel, subtitle, expanded: controlledExpanded,
   onToggle, onViewStations, onReport, children,
 }: Props) {
-  const fuelTone = fuelCode ? getFuelTypeColor(fuelCode) : null;
   const hasPrice = typeof price === 'number' && Number.isFinite(price);
   const [localExpanded, setLocalExpanded] = useState(false);
   const expanded = controlledExpanded ?? localExpanded;
@@ -44,7 +42,7 @@ export default function CompanyEstimateCard({
     return () => animation.stop();
   }, [expanded, reveal, reduced]);
 
-  return <View testID="doe-company-row" style={[styles.card, fuelTone && { backgroundColor: fuelTone.soft, borderColor: fuelTone.border, borderLeftColor: fuelTone.strong, borderLeftWidth: 4 }]}>
+  return <View testID="doe-company-row" style={styles.card}>
     <Pressable accessibilityRole="button"
       accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${company} actions`}
       accessibilityState={{ expanded }} accessibilityHint={subtitle}
@@ -57,7 +55,7 @@ export default function CompanyEstimateCard({
         {!hasPrice && unavailableLabel ? <Text style={styles.secondary}>{unavailableLabel}</Text> : null}
       </View>
       <View style={styles.right}>
-        {hasPrice ? <Text accessibilityLabel={`DOE estimate ${formatCurrency(price)} per liter`} style={[styles.price, fuelTone && { color: fuelTone.text }]}>{formatCurrency(price)}<Text style={styles.unit}>/L</Text></Text> : null}
+        {hasPrice ? <Text accessibilityLabel={`DOE estimate ${formatCurrency(price)} per liter`} style={styles.price}>{formatCurrency(price)}<Text style={styles.unit}>/L</Text></Text> : null}
         {fuelCode ? <FuelTypeBadge appearance="standard" fuelCode={fuelCode} /> : null}
       </View>
       <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={D.color.textSecondary} accessible={false} />

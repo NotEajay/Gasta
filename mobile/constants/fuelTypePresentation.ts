@@ -10,13 +10,21 @@ export const FUEL_TYPE_COLORS = Object.fromEntries(
 const neutral = getFuelTypeColor(null);
 const NEUTRAL = { accent: neutral.strong, softBackground: neutral.soft, cardBackground: neutral.strong };
 const safeLabel = (value: unknown) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, '').trim() : '';
+const GASOLINE_LABELS: Partial<Record<DoeFuelTypeCode, string>> = {
+  RON_91: 'Regular Unleaded',
+  RON_95: 'Premium Unleaded',
+  RON_97: 'Premium Unleaded',
+  RON_100: 'Premium Unleaded',
+};
 
 export function getFuelTypePresentation(code: string | null | undefined, label?: string | null): {
-  code: DoeFuelTypeCode | null; label: string; accent: string; softBackground: string; cardBackground: string;
+  code: DoeFuelTypeCode | null; label: string; primaryLabel: string; subtitle: string | null; accent: string; softBackground: string; cardBackground: string;
 } {
   // Exact canonical lookup, shared with the existing fuel definitions. No aliases
   // or guesses about legacy/product names are introduced by presentation.
   const fuel = DOE_FUEL_TYPES.find((entry) => entry.code === code);
-  return fuel ? { code: fuel.code, label: fuel.name, ...FUEL_TYPE_COLORS[fuel.code] }
-    : { code: null, label: safeLabel(label) || safeLabel(code) || 'Fuel', ...NEUTRAL };
+  const fallback = safeLabel(label) || safeLabel(code) || 'Fuel';
+  return fuel ? { code: fuel.code, label: fuel.name, primaryLabel: GASOLINE_LABELS[fuel.code] ?? fuel.name,
+    subtitle: GASOLINE_LABELS[fuel.code] ? fuel.name : null, ...FUEL_TYPE_COLORS[fuel.code] }
+    : { code: null, label: fallback, primaryLabel: fallback, subtitle: null, ...NEUTRAL };
 }

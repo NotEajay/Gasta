@@ -15,6 +15,7 @@ import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 // NOTE: Vehicles now uses the GasTa cream/forest palette, matching Sign In,
 // Profile and Budget. `HomeColors` is no longer imported here.
 import {
@@ -645,7 +646,7 @@ export default function VehiclesScreen() {
           )}
           <ChipSelect
             label="Fuel type"
-            options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
+            options={DOE_FUEL_TYPES.map((f) => { const fuel = getFuelTypePresentation(f.code); return { value: f.code, label: fuel.primaryLabel, subtitle: fuel.subtitle }; })}
             value={fuelType}
             onChange={(value) => {
               setFuelType(value);

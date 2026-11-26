@@ -131,7 +131,7 @@ function tripScreen(options = {}) {
     '@/lib/supabase': { isSupabaseConfigured: true },
     '@/lib/format': { formatPeso: n => `₱${n.toFixed(2)}`, transportModeLabel: code => code },
     '@/lib/services/vehicles': { fetchVehicleCatalog: async () => [], fetchTripVehicles: async () => vehicles },
-    '@/lib/services/routeSelection': { consumeRouteSelection: () => null },
+    '@/lib/services/routeSelection': { consumeRouteSelection: options.consumeRouteSelection ?? (() => null) },
     '@/lib/services/savedTrips': { createSavedTrip: async value => { saves.push(value); return options.save ? options.save(value) : {}; } },
     '@/lib/services/trips': { logTripToHistory: async value => { logs.push(value); return options.history ? options.history(value) : {}; } },
     '@/lib/services/googleGeocoding': { getReadableAddress: value => value, searchPlaces: async () => [{ formattedAddress: 'Start', latitude: 14.6, longitude: 121 }] },
@@ -153,6 +153,20 @@ function tripScreen(options = {}) {
     own: () => logs.at(-1)?.evaluations.find(row => row.modeCode === 'OWN_VEHICLE'),
   };
 }
+test('station handoff overrides old route text with exact endpoints and retains optimizer pricing', async () => {
+  let pending = { origin: { displayName: 'Current location', latitude: 15.1, longitude: 120.6, directionsValue: '15.1,120.6' },
+    destination: { displayName: 'Caltex Naga branch', latitude: 13.63, longitude: 123.19, directionsValue: '13.63,123.19' } };
+  const s = tripScreen({ consumeRouteSelection: () => { const next = pending; pending = null; return next; } });
+  await s.settle();
+  assert.equal(s.textField('Search starting point').props.value, 'Current location');
+  assert.equal(s.textField('Search destination').props.value, 'Caltex Naga branch');
+  assert.deepEqual(s.routes.at(-1), ['15.1,120.6', '13.63,123.19']);
+  await s.button('Compare trip costs').props.onPress(); await s.h.flush();
+  assert.equal(s.own().raw.fuelCost, 140);
+  s.h.focus(); await s.settle();
+  assert.equal(s.textField('Search destination').props.value, 'Caltex Naga branch');
+  s.h.unmount();
+});
 test('complete route + active vehicle + DOE comparison uses the shown metrics, not last-refill price', async () => {
   const s = tripScreen(); await s.settle(); await s.button('Compare trip costs').props.onPress(); await s.h.flush();
   assert.equal(s.own().raw.fuelCost, 140); assert.equal(s.own().raw.travelTime, 40);

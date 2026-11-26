@@ -16,6 +16,7 @@ import LabeledInput from '@/components/ui/LabeledInput';
 import LoadingState from '@/components/ui/LoadingState';
 import PrimaryButton from '@/components/ui/PrimaryButton';
 import { DOE_FUEL_TYPES, type DoeFuelTypeCode } from '@/constants/fuelTypes';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_REGIONS, REGION_CENTROIDS, type DoeRegionCode } from '@/constants/regions';
 import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
@@ -463,7 +464,7 @@ export default function ReportPriceScreen() {
       <View>
         <ChipSelect
           label="Fuel type"
-          options={DOE_FUEL_TYPES.map((f) => ({ value: f.code, label: f.name }))}
+          options={DOE_FUEL_TYPES.map((f) => { const fuel = getFuelTypePresentation(f.code); return { value: f.code, label: fuel.primaryLabel, subtitle: fuel.subtitle }; })}
           value={fuelType}
           onChange={setFuelType}
           module="community"

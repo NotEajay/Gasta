@@ -11,6 +11,7 @@ const defaultModules={
  '@/app/(tabs)/_layout':{floatingNavContentInset:bottom=>bottom+100},
  '@/constants/fuelTypeColors':fuelColors,
  '@/constants/fuelTypePresentation':fuelPresentation,
+ '@/lib/services/googlePlacesAutocomplete':constantModule('lib/services/googlePlacesAutocomplete.ts',{'@/lib/supabase':{supabase:{}}}),
 };
 function harness(file,mods,platform='ios',globals={},sourceModules={}){
  mods={...defaultModules,...mods};

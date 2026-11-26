@@ -19,6 +19,7 @@ import { Text } from '@/components/Themed';
 import ScreenHeader from '@/components/ui/ScreenHeader';
 import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import { getFuelTypeColor } from '@/constants/fuelTypeColors';
+import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import SupabaseSetupBanner from '@/components/SupabaseSetupBanner';
 import PriceCompareRow from '@/components/ui/PriceCompareRow';
 import PriceHistoryList from '@/components/ui/PriceHistoryList';
@@ -33,13 +34,15 @@ import { useResponsive } from '@/hooks/useResponsive';
 import { useFuelPriceDefault } from '@/hooks/useFuelPriceDefault';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import FuelTypeFilter from '@/components/prices/FuelTypeFilter';
+import NearbyStationPicker from '@/components/prices/NearbyStationPicker';
+import { isStationBrand, type StationBrand } from '@/lib/services/googlePlacesAutocomplete';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { DOE_FUEL_TYPES } from '@/constants/fuelTypes';
 import {
   DOE_REGIONS,
   type DoeRegionCode,
 } from '@/constants/regions';
-import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { colors, GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { useAuth } from '@/context/AuthProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { floatingNavContentInset } from '@/app/(tabs)/_layout';
@@ -69,7 +72,6 @@ import {
   type VerifiedCommunityPrice,
 } from '@/lib/services/communityReports';
 import {
-  getBulletinFreshness,
   fetchBulletinsForRegion,
   fetchBulletinAreas,
   fetchFuelPricesForBulletin,
@@ -376,14 +378,18 @@ export default function FuelPricesScreen() {
   const theme = useTheme();
   const { user } = useAuth();
   const tabBarScrollHandler = useTabBarScrollHandler();
-  // Fuel shortcuts lead; compact region and area controls share one row.
+  // Show the selected scope first; reveal editing controls on demand.
   const { width, contentMaxWidth, isCompact, isDesktop } = useResponsive();
   const insets = useSafeAreaInsets();
   const [view, setView] = useState<PricesView>('now');
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [rangeExpanded, setRangeExpanded] = useState(false);
+  const [coverageInfoOpen, setCoverageInfoOpen] = useState(false);
+  const [nearbySearch, setNearbySearch] = useState<{ brand: StationBrand; brandName: string; priceContext: string } | null>(null);
   const [region, setRegion] = useState<DoeRegionCode>('NCR');
   const { fuelType, selectFuelType, vehicleLabel } = useFuelPriceDefault(user?.id ?? null);
   const fuelTone = getFuelTypeColor(fuelType);
-  const fuelCardSurface = { backgroundColor: fuelTone.soft, borderColor: fuelTone.border };
+  const fuelCardSurface = { backgroundColor: GasTaColors.white, borderColor: GasTaColors.glassBorderSubtle };
   const [areaName, setAreaName] = useState('');
   const [doeAreas, setDoeAreas] = useState<string[]>([]);
   const [areasFromDoe, setAreasFromDoe] = useState(false);
@@ -556,6 +562,7 @@ export default function FuelPricesScreen() {
   const regionLabel = DOE_REGIONS.find((r) => r.code === region)?.name ?? region;
   const regionDisplay = DOE_REGIONS.find((r) => r.code === region)?.code ?? regionLabel;
   const fuelLabel = DOE_FUEL_TYPES.find((f) => f.code === fuelType)?.name ?? fuelType;
+  const fuelDisplay = getFuelTypePresentation(fuelType);
   const areaLabel = areaName || 'Region-wide DOE price';
   const selectedBulletinForAreas = selectedPastDate
     ? pastBulletins.find((week) => week.bulletin_date === selectedPastDate) ?? bulletin
@@ -954,37 +961,9 @@ export default function FuelPricesScreen() {
   const companyName =
     companyOptions.find((c) => c.value === trendCompanySlug)?.label ?? 'this brand';
 
-  /*
-   * How old the prices on screen actually are.
-   *
-   * Derived entirely from the latest bulletin actually stored for this region,
-   * so it is honest by construction: nothing is hardcoded per region, and if
-   * the ETL later loads a newer week the label updates on the next fetch with
-   * no code change.
-   *
-   * Age is days since the bulletin period ended, using local calendar dates.
-   */
-  const priceFreshness = useMemo(() => {
-    if (!bulletin) return null;
-    const freshness = getBulletinFreshness(bulletin.bulletin_date);
-    return {
-      ageDays: freshness.daysOld,
-      tone: freshness.status === 'stale' ? ('stale' as const) : ('fresh' as const),
-      label: freshness.label,
-    };
-  }, [bulletin]);
-
   // Compare authoritative source facts. A company-level DOE reference counts
   // once, regardless of how many physical branches the directory contains.
-  type CheapestRow =
-    | {
-        price: number;
-        brand: string;
-        station: string;
-        source: 'community' | 'doe' | 'none';
-        status?: string;
-      }
-    | { price: number; brand: string; areaName: string; source: 'doe_area'; status?: string };
+  type CheapestRow = ReturnType<typeof trustedPriceComparisons>[number];
 
   const comparisonRows = useMemo(() => trustedPriceComparisons(stationRows, officialRows.areaRows), [stationRows, officialRows]);
   const cheapest = useMemo<CheapestRow | null>(() => {
@@ -1189,9 +1168,10 @@ export default function FuelPricesScreen() {
         />
       }>
       <ScreenHeader
-        eyebrow="At the pump"
+        compact={!isDesktop}
+        eyebrow={isDesktop ? 'At the pump' : undefined}
         title="Fuel prices"
-        subtitle="Find your next fill-up."
+        subtitle={isDesktop ? 'Find your next fill-up.' : undefined}
         action={
         <Pressable
           accessibilityRole="link"
@@ -1204,8 +1184,56 @@ export default function FuelPricesScreen() {
         }
       />
 
-      {/* One mode control and one filter panel share the same selected scope. */}
+      {nearbySearch ? <NearbyStationPicker {...nearbySearch} priceContexts={Object.fromEntries(officialRows.areaRows.map((row) => [row.slug, row.price != null && row.price > 0 ? `${row.brand} DOE estimate: ${formatCurrency(row.price)}/L for ${fuelLabel} in ${areaName || regionLabel}. Branch prices may differ.` : `Price unavailable for ${row.brand} in this selection. You can still plan your drive.`]))} onClose={() => setNearbySearch(null)} /> : null}
+
+      {/* The summary always reflects the same scope used by prices and history. */}
       <View testID="prices-controls" style={styles.controlsPanel}>
+        <View style={styles.filterSummary}>
+          <View style={styles.filterSummaryCopy}>
+            <View style={styles.filterSummaryScope}>
+              <MaterialCommunityIcons name="gas-station-outline" size={18} color={colors.primary} />
+              <Text style={styles.filterSummaryFuel}>{fuelDisplay.primaryLabel}</Text>
+              <Text style={styles.filterSummaryRegion} numberOfLines={1}>· {region === 'NCR' ? 'NCR' : regionLabel}</Text>
+            </View>
+            <View style={styles.filterSummaryMeta}>
+              <Text style={styles.filterSummaryArea} numberOfLines={1}>
+                {fuelDisplay.subtitle ? `${fuelDisplay.subtitle} · ` : ''}{areaName || 'Region-wide DOE'} · {view === 'now' ? 'This week' : 'Past prices'}
+              </Text>
+              {!areaName ? <Pressable testID="prices-coverage-info" accessibilityRole="button"
+                accessibilityLabel="About region-wide DOE prices" hitSlop={8}
+                onPress={() => setCoverageInfoOpen(true)} style={styles.coverageInfoButton}>
+                <MaterialCommunityIcons name="information-outline" size={15} color={GasTaColors.textMuted} />
+              </Pressable> : null}
+            </View>
+          </View>
+          <Pressable
+            testID="prices-filter-toggle" accessibilityRole="button"
+            accessibilityLabel={`${filtersExpanded ? 'Hide' : 'Show'} filters. Fuel: ${fuelLabel}. Region: ${regionLabel}. Area: ${areaLabel}. ${view === 'now' ? 'This week' : 'Past prices'}.`}
+            accessibilityState={{ expanded: filtersExpanded }} aria-expanded={filtersExpanded}
+            aria-controls="prices-filter-options" onPress={() => setFiltersExpanded((expanded) => !expanded)}
+            style={({ pressed }) => [styles.filterSummaryAction, filtersExpanded && styles.filterSummaryActionActive, pressed && styles.pressed]}>
+            <MaterialCommunityIcons name={filtersExpanded ? 'close' : 'tune-variant'} size={21}
+              color={colors.onPrimary} />
+          </Pressable>
+        </View>
+        {coverageInfoOpen ? <Modal testID="prices-coverage-dialog" transparent visible animationType="fade" onRequestClose={() => setCoverageInfoOpen(false)}>
+          <Pressable style={styles.filterBackdrop} onPress={() => setCoverageInfoOpen(false)} accessibilityLabel="Close DOE coverage information">
+            <Pressable accessibilityViewIsModal onPress={(event) => event.stopPropagation()} style={styles.coverageSheet}>
+              <Text accessibilityRole="header" style={styles.coverageTitle}>Region-wide DOE prices</Text>
+              <Text style={styles.coverageBody}>These prices cover {regionLabel}. {areasFromDoe ? 'Choose an area in Filters to narrow the DOE prices.' : 'DOE area-level prices are unavailable for this selection, so we show the region-wide bulletin instead.'} Exact station prices may differ.</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close DOE coverage details" onPress={() => setCoverageInfoOpen(false)} style={styles.filterDone}>
+                <Text style={styles.filterSummaryActionText}>Got it</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal> : null}
+        <View
+          nativeID="prices-filter-options"
+          testID="prices-filter-options"
+          accessibilityElementsHidden={!filtersExpanded}
+          aria-hidden={!filtersExpanded}
+          importantForAccessibility={filtersExpanded ? 'auto' : 'no-hide-descendants'}
+          style={[styles.filterDetails, !filtersExpanded && styles.filtersHidden]}>
         <View style={styles.viewToggle} accessibilityRole="tablist" accessibilityLabel="Price period">
           {(
             [
@@ -1237,10 +1265,10 @@ export default function FuelPricesScreen() {
           })}
         </View>
 
-        <FuelTypeFilter label="Fuel" value={fuelType} onChange={selectFuelType} context={
+        <FuelTypeFilter compact={!isDesktop} label="Fuel" value={fuelType} onChange={selectFuelType} context={
           vehicleLabel ? <View testID="prices-default-context" accessible
             accessibilityLabel={`Using ${vehicleLabel} · ${fuelLabel}`} style={styles.fuelContext}>
-            <Text style={styles.contextText}>Using {vehicleLabel} ·</Text>
+            <Text style={styles.contextText} numberOfLines={1}>Using {vehicleLabel} ·</Text>
             <View style={[styles.contextDot, { backgroundColor: fuelTone.strong }]} />
             <Text style={styles.contextText}>{fuelLabel}</Text>
           </View> : null
@@ -1308,41 +1336,15 @@ export default function FuelPricesScreen() {
             </Pressable>
           </View>
         )}
-
-      </View>
-      {priceFreshness && bulletin ? (
-        <View style={styles.freshnessRow}>
-          <View
-            style={[
-              styles.freshnessPill,
-              priceFreshness.tone === 'stale' && styles.freshnessPillStale,
-            ]}>
-            <Text
-              style={[
-                styles.freshnessPillText,
-                priceFreshness.tone === 'stale' && styles.freshnessPillTextStale,
-              ]}>
-              {priceFreshness.label}
-            </Text>
-          </View>
-          <Text style={styles.freshnessMeta} numberOfLines={1}>
-            DOE bulletin · {formatBulletinRange(bulletin.bulletin_date)}
-          </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Done editing filters"
+          onPress={() => setFiltersExpanded(false)}
+          style={({ pressed }) => [styles.filterDone, pressed && styles.pressed]}>
+          <Text style={styles.filterSummaryActionText}>Done</Text>
+        </Pressable>
         </View>
-      ) : null}
-
-      {nearMePlace?.city && !areaName ? (
-        <Text style={styles.hintText}>
-          No DOE area-level prices are available for this selection. Showing region-wide DOE data.
-        </Text>
-      ) : null}
-
-      {!areasFromDoe && !nearMePlace?.city ? (
-        <Text style={styles.hintText}>
-          No DOE area-level prices are available for this selection. Showing region-wide DOE data.
-        </Text>
-      ) : null}
-
+      </View>
       {/* Bulletin error is preserved and surfaced as before, just flattened so
           it reads as an inline notice instead of another boxed card. */}
       {error ? (
@@ -1374,7 +1376,7 @@ export default function FuelPricesScreen() {
           {cheapest ? (
             <View testID="prices-lowest" accessibilityLabel={`${fuelLabel} lowest listed price`} style={[styles.heroCard, { backgroundColor: fuelTone.strong, borderColor: fuelTone.border }, isDesktop && styles.overviewCard]}>
               <View style={styles.heroTopRow}>
-                <Text style={styles.heroLabel}>Lowest listed price</Text>
+                <Text style={[styles.heroLabel, { color: fuelTone.onStrong }]}>Lowest listed price</Text>
                 {/*
                   Source labelling is driven by the row's `status`, not just its
                   `source`, because a pending community report also carries
@@ -1403,16 +1405,16 @@ export default function FuelPricesScreen() {
                 </View>
               </View>
 
-              <View style={styles.heroScopeRow}><FuelTypeBadge fuelCode={fuelType} /><Text style={styles.heroScope}>{regionLabel}</Text></View>
+              <View style={styles.heroScopeRow}><FuelTypeBadge fuelCode={fuelType} /><Text style={[styles.heroScope, { color: fuelTone.onStrong }]}>{regionLabel}</Text></View>
               <View style={styles.heroPriceRow}>
-                <Text style={styles.heroPrice} numberOfLines={1} adjustsFontSizeToFit>
+                <Text style={[styles.heroPrice, { color: fuelTone.onStrong }]} numberOfLines={1} adjustsFontSizeToFit>
                   {formatCurrency(cheapest.price)}
                 </Text>
-                <Text style={styles.heroUnit}>/L</Text>
+                <Text style={[styles.heroUnit, { color: fuelTone.onStrong }]}>/L</Text>
               </View>
 
-              <Text style={styles.heroStation}>{cheapest.brand}</Text>
-              <Text style={styles.heroStation}>{'station' in cheapest ? cheapest.station || areaLabel : areaName || 'Region-wide DOE price'}</Text>
+              <Text style={[styles.heroStation, { color: fuelTone.onStrong }]}>{cheapest.brand}</Text>
+              <Text style={[styles.heroStation, { color: fuelTone.onStrong }]}>{'station' in cheapest ? cheapest.station || areaLabel : areaName || 'Region-wide DOE price'}</Text>
 
               {/*
                 Real movement only. On a first visit the screen holds exactly one
@@ -1422,16 +1424,38 @@ export default function FuelPricesScreen() {
               {heroMovement ? (
                 <View style={styles.heroMovement}>
                   <HeroDelta delta={heroMovement.delta} />
-                  <Text numberOfLines={1} style={styles.heroMovementNote}>
+                  <Text numberOfLines={1} style={[styles.heroMovementNote, { color: fuelTone.onStrong }]}>
                     vs {formatShortDate(heroMovement.prevDate)} · {fuelLabel}
                   </Text>
                 </View>
               ) : null}
+              {isStationBrand(cheapest.slug) ? <Pressable testID="price-find-station"
+                accessibilityRole="button" accessibilityLabel={`Find nearby ${cheapest.brand} stations`}
+                onPress={() => {
+                  if (!isStationBrand(cheapest.slug)) return;
+                  setNearbySearch({ brand: cheapest.slug, brandName: cheapest.brand,
+                    priceContext: cheapest.source === 'community'
+                      ? `The verified price is reported at ${cheapest.station}. Other branch prices may differ.`
+                      : `${fuelLabel} DOE estimate for ${areaName || regionLabel}. Branch prices may differ.` });
+                }}
+                style={({ pressed }) => [styles.findStation, pressed && styles.pressed]}>
+                <MaterialCommunityIcons name="map-marker-radius-outline" size={18} color={colors.navy} />
+                <Text style={styles.findStationText}>Find nearby stations</Text>
+                <MaterialCommunityIcons name="arrow-right" size={17} color={colors.navy} />
+              </Pressable> : null}
             </View>
           ) : <View testID="prices-empty" style={[styles.priceEmpty, fuelCardSurface, isDesktop && styles.overviewCard]}>
             <MaterialCommunityIcons name="gas-station-outline" size={28} color={GasTaColors.forest} />
             <Text style={styles.priceEmptyTitle}>No trusted price available</Text>
-            <Text style={styles.priceEmptyBody}>Try another area or fuel type. Unverified reports stay in the community section below.</Text>
+            <Text style={styles.priceEmptyBody}>You can still find nearby stations and plan your drive.</Text>
+            <Pressable testID="price-find-station" accessibilityRole="button" accessibilityLabel="Find nearby stations without price data"
+              onPress={() => setNearbySearch({ brand: 'all', brandName: 'All companies',
+                priceContext: `No DOE price is available for ${fuelLabel} in ${areaName || regionLabel}. You can still choose a station and plan your drive.` })}
+              style={({ pressed }) => [styles.findStation, styles.findStationEmpty, pressed && styles.pressed]}>
+              <MaterialCommunityIcons name="map-marker-radius-outline" size={18} color={colors.navy} />
+              <Text style={styles.findStationText}>Find nearby stations</Text>
+              <MaterialCommunityIcons name="arrow-right" size={17} color={colors.navy} />
+            </Pressable>
           </View>}
 
           {/*
@@ -1440,11 +1464,22 @@ export default function FuelPricesScreen() {
             describe.
           */}
           {priceRange ? (
-            <View testID="price-range-card" style={[styles.rangeCard, fuelCardSurface, isDesktop && styles.overviewCard]}>
-              <View style={styles.rangeHead}>
+            <View testID="price-range-card" style={[styles.rangeCard, isDesktop && styles.overviewCard]}>
+              <View style={styles.rangeToolbar}>
+              <Pressable testID="price-range-toggle" accessibilityRole="button"
+                accessibilityLabel={rangeExpanded ? 'Hide price range' : 'Show price range'}
+                accessibilityState={{ expanded: rangeExpanded }} aria-expanded={rangeExpanded}
+                aria-controls="price-range-details" onPress={() => setRangeExpanded((expanded) => !expanded)}
+                hitSlop={4} style={({ pressed }) => [styles.rangeHead, pressed && styles.pressed]}>
                 <Text style={styles.rangeTitle}>Price range</Text>
-                <Text style={styles.rangeCount}>{priceRange.count} listed</Text>
+                <View style={styles.rangeAction}>
+                  <MaterialCommunityIcons name={rangeExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={GasTaColors.forest} />
+                </View>
+              </Pressable>
+              <Text style={styles.doeInfoBody}>DOE prices are area or regional estimates. Station prices may differ.</Text>
               </View>
+              {rangeExpanded ? <View nativeID="price-range-details" testID="price-range-details" style={styles.rangeDetails}>
+              <Text style={styles.rangeCount}>{priceRange.count} listed</Text>
               <View style={styles.rangeEnds}>
                 <View>
                   <Text style={styles.rangeEndLabel}>Lowest</Text>
@@ -1462,24 +1497,20 @@ export default function FuelPricesScreen() {
                 </View>
               </View>
               <View style={styles.rangeBar}>
-                <View style={[styles.rangeTrack, { backgroundColor: fuelTone.border }]} />
-                <View style={[styles.rangeDot, { left: 0, backgroundColor: fuelTone.strong }]} />
-                <View style={[styles.rangeDot, { right: 0, backgroundColor: fuelTone.strong }]} />
+                <View style={[styles.rangeTrack, { backgroundColor: GasTaColors.glassBorderSubtle }]} />
+                <View style={[styles.rangeDot, { left: 0, backgroundColor: GasTaColors.textMuted }]} />
+                <View style={[styles.rangeDot, { right: 0, backgroundColor: GasTaColors.textMuted }]} />
               </View>
+              </View> : null}
             </View>
           ) : null}
           </View>
 
           {view === 'history' ? trendSection : null}
 
-          {/* DOE estimates stay separate from branch observations. */}
-          <View style={styles.doeInfoStrip}>
-            <MaterialCommunityIcons name="information-outline" size={15} color={GasTaColors.forestMuted} />
-            <Text style={styles.doeInfoBody}>
-              <Text style={styles.doeInfoLead}>DOE prices are area or regional estimates.</Text>{' '}
-              Exact branch prices may differ.
-            </Text>
-          </View>
+          {!priceRange ? <View style={styles.doeInfoStrip}>
+            <Text style={styles.doeInfoBody}>DOE prices are area or regional estimates. Station prices may differ.</Text>
+          </View> : null}
           <View style={styles.listHead}>
             <Text style={styles.sectionTitle}>Official DOE Prices</Text>
           </View>
@@ -1551,14 +1582,13 @@ export default function FuelPricesScreen() {
                 </View>
               </View>
             ) : (
-              <View style={[styles.communityCards, { borderColor: fuelTone.border }]}>
+              <View style={[styles.communityCards, { borderColor: GasTaColors.glassBorderSubtle }]}>
                 {communityForFuel.slice(0, 4).map((report, index) => {
                   const isVerified = report.status === 'verified';
                   // Historical = older than the 7-day recommendation freshness
                   // window (verified_at, not created_at): readable for
                   // monitoring, but never labelled as a current price input.
                   const isHistorical = isHistoricalCommunityReport(report);
-                  const reportFuelTone = getFuelTypeColor(report.fuel_type?.code);
                   const statusLabel = communityStatusLabel(report, isHistorical);
                   const canConfirm =
                     Boolean(user) &&
@@ -1572,7 +1602,6 @@ export default function FuelPricesScreen() {
                       style={[
                         styles.communityCard,
                         index > 0 && styles.communityCardDivider,
-                        { backgroundColor: reportFuelTone.soft, borderLeftWidth: 4, borderLeftColor: reportFuelTone.strong },
                       ]}>
                       <View style={styles.communityCardTop}>
                         <BrandMark
@@ -1679,7 +1708,24 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxl,
   },
 
-  controlsPanel: { backgroundColor: GasTaColors.white, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle },
+  controlsPanel: { backgroundColor: colors.primarySoft, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: colors.primaryBorder },
+  filterSummary: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  filterSummaryCopy: { flex: 1, minWidth: 0, gap: 3 },
+  filterSummaryScope: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  filterSummaryFuel: { fontSize: 15, lineHeight: 21, fontWeight: '700', color: GasTaColors.textPrimary },
+  filterSummaryRegion: { flex: 1, minWidth: 0, fontSize: 13, lineHeight: 18, color: GasTaColors.textMuted },
+  filterSummaryMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  filterSummaryArea: { flexShrink: 1, fontSize: 11, lineHeight: 16, color: GasTaColors.textMuted },
+  coverageInfoButton: { minWidth: 28, minHeight: 28, alignItems: 'center', justifyContent: 'center' },
+  coverageSheet: { padding: 24, paddingBottom: 32, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: GasTaColors.white, gap: 12 },
+  coverageTitle: { fontSize: 18, fontWeight: '700', color: GasTaColors.textPrimary },
+  coverageBody: { fontSize: 14, lineHeight: 22, color: GasTaColors.textMuted },
+  filterSummaryAction: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  filterSummaryActionActive: { backgroundColor: colors.primaryDark },
+  filterSummaryActionText: { fontSize: 12, fontWeight: '700', color: colors.navy },
+  filterDetails: { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: GasTaColors.glassBorderSubtle },
+  filtersHidden: { display: 'none' },
+  filterDone: { alignSelf: 'flex-end', minWidth: 72, minHeight: 44, paddingHorizontal: 16, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   fuelShortcuts: { flexDirection: 'row', gap: 6, marginBottom: 12, alignItems: 'center' },
   fuelChip: { flex: 1, minWidth: 0, minHeight: 36, paddingHorizontal: 6, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, backgroundColor: GasTaColors.white },
   fuelChipText: { fontSize: 11, fontWeight: '600', color: GasTaColors.textMuted },
@@ -1736,45 +1782,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: GasTaColors.forest,
   },
-  /* ---- freshness metadata ---- */
-  freshnessRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  freshnessPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: GasTaColors.forestBorder,
-    backgroundColor: GasTaColors.forestGlow,
-  },
-  freshnessPillAging: {
-    borderColor: 'rgba(180, 83, 9, 0.24)',
-    backgroundColor: 'rgba(180, 83, 9, 0.10)',
-  },
-  freshnessPillStale: {
-    borderColor: 'rgba(220, 38, 38, 0.24)',
-    backgroundColor: 'rgba(220, 38, 38, 0.10)',
-  },
-  freshnessPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: GasTaColors.forest,
-  },
-  freshnessPillTextStale: {
-    color: GasTaColors.error,
-  },
-  freshnessMeta: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.textSoft,
-  },
   /* ---- history placeholder ---- */
   historyNote: {
     paddingVertical: spacing.lg,
@@ -1819,6 +1826,7 @@ const styles = StyleSheet.create({
   filterRow: {
     flexDirection: 'row',
     gap: spacing.sm,
+    marginTop: 8,
   },
   filterField: { flex: 1, minWidth: 0 },
   filterLabelRow: {
@@ -1919,6 +1927,9 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   overviewCard: { flex: 1, minWidth: 0 },
+  findStation: { marginTop: 18, minHeight: 44, paddingHorizontal: 12, borderRadius: 12, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  findStationEmpty: { marginTop: 4, backgroundColor: colors.primarySoft },
+  findStationText: { flex: 1, fontSize: 12, fontWeight: '600', color: colors.navy },
   heroCard: {
     borderWidth: 1,
     shadowColor: '#000000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8,
@@ -2016,27 +2027,12 @@ const styles = StyleSheet.create({
   },
 
   /* ---- price range ---- */
-  rangeCard: {
-    marginTop: spacing.md,
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    backgroundColor: GasTaColors.creamLight,
-    borderWidth: 1,
-    borderColor: GasTaColors.glassBorderSubtle,
-  },
-  rangeHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-  },
-  rangeTitle: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: GasTaColors.textMuted,
-  },
+  rangeCard: { marginTop: 12, backgroundColor: GasTaColors.cream },
+  rangeToolbar: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  rangeHead: { minHeight: 36, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, backgroundColor: GasTaColors.white, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rangeAction: { flexDirection: 'row', alignItems: 'center' },
+  rangeDetails: { marginTop: 8, padding: 12, borderRadius: 14, backgroundColor: GasTaColors.white, borderWidth: 1, borderColor: GasTaColors.glassBorderSubtle, gap: 8 },
+  rangeTitle: { fontSize: 11, fontWeight: '600', color: GasTaColors.textPrimary },
   rangeCount: {
     fontSize: 10,
     fontWeight: '700',
@@ -2191,27 +2187,8 @@ const styles = StyleSheet.create({
     color: GasTaColors.textSoft,
     marginTop: 3,
   },
-  doeInfoStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    minHeight: 44,
-    marginTop: 16,
-    marginBottom: spacing.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: radii.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GasTaColors.glassBorderSubtle,
-    backgroundColor: GasTaColors.creamLight,
-  },
-  doeInfoBody: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    lineHeight: 16,
-    color: GasTaColors.forestMuted,
-  },
+  doeInfoStrip: { marginTop: 12 },
+  doeInfoBody: { flex: 1, minWidth: 0, color: GasTaColors.textMuted, fontSize: 11, lineHeight: 16 },
   doeInfoLead: { fontWeight: '500' },
   communityFilters: {
     flexDirection: 'row',

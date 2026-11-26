@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const ts = require('../node_modules/typescript');
 const { harness, find } = require('./componentHarness.cjs');
 const root = path.resolve(__dirname, '..');
+const renderedText = node => Array.isArray(node) ? node.map(renderedText).join('') : typeof node === 'string' ? node : node && typeof node === 'object' ? renderedText(node.props?.children) : '';
 function load(file, mocks = {}) {
   const exports = {};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
@@ -44,7 +45,7 @@ function pricesScreen(options = {}) {
     '@/lib/useTheme': { useTheme: () => ({}) },
     '@/lib/supabase': { isSupabaseConfigured: true },
     '@/constants/Theme': load('constants/Theme.ts'),
-    '@/constants/regions': { DOE_REGIONS: [{ code: 'NCR', name: 'NCR' }] },
+    '@/constants/regions': { DOE_REGIONS: [{ code: 'NCR', name: 'NCR' }, { code: 'SOUTH_LUZON', name: 'South Luzon' }] },
     '@/constants/fuelTypes': constants,
     '@/constants/communityReports': { VERIFY_CONFIRMATIONS_REQUIRED: 3 },
     '@/lib/format': { formatCurrency: n => `₱${n}`, formatBulletinRange: () => 'Oct 5', formatDate: () => '', formatShortDate: () => '' },
@@ -59,7 +60,7 @@ function pricesScreen(options = {}) {
     },
     '@/lib/services/fuelPrices': {
       fetchLatestBulletinForRegion: async () => ({ id: 'week', bulletin_date: '2026-10-05' }),
-      fetchBulletinsForRegion: async () => [], fetchBulletinAreas: async () => [],
+      fetchBulletinsForRegion: async () => [], fetchBulletinAreas: async () => options.areas ?? [],
       fetchFuelPricesForBulletin: async (...args) => { queries.push(args); return []; },
       fetchPriceTrend: async (...args) => { trends.push(args); return []; }, getBulletinFreshness: () => ({ label: 'Current', tone: 'fresh' }),
     },
@@ -76,6 +77,36 @@ function pricesScreen(options = {}) {
     setDefaultId: value => { defaultId = value; },
   };
 }
+test('filter summary starts collapsed and preserves the selected fuel, region, area and period when reopened', async () => {
+  const s = pricesScreen({ selected: 'Truck', areas: ['Naga City'] });
+  await s.h.flush({});
+  const toggle = () => find(s.h.tree, n => n.props?.testID === 'prices-filter-toggle');
+  const details = () => find(s.h.tree, n => n.props?.testID === 'prices-filter-options');
+  assert.equal(toggle().props.accessibilityState.expanded, false);
+  assert.equal(details().props.accessibilityElementsHidden, true);
+  assert.equal(details().props.style.at(-1).display, 'none');
+  assert.match(toggle().props.accessibilityLabel, /Fuel: Diesel\. Region: NCR\. Area: Region-wide DOE price\. This week/);
+
+  const before = s.queries.length;
+  toggle().props.onPress(); await s.h.flush();
+  assert.equal(toggle().props.accessibilityState.expanded, true);
+  assert.equal(details().props.accessibilityElementsHidden, false);
+  assert.equal(s.queries.length, before, 'opening controls does not change the price query');
+  s.filter().props.onChange('RON_97'); await s.h.flush();
+  find(s.h.tree, n => n.props?.label === 'Region').props.onChange('SOUTH_LUZON'); await s.h.flush();
+  find(s.h.tree, n => n.props?.label === 'Area').props.onChange('Naga City'); await s.h.flush();
+  const period = find(s.h.tree, n => n.props?.accessibilityLabel === 'Price period');
+  period.props.children[1].props.onPress(); await s.h.flush();
+  find(s.h.tree, n => n.props?.accessibilityLabel === 'Done editing filters').props.onPress(); await s.h.flush();
+  assert.equal(toggle().props.accessibilityState.expanded, false);
+  assert.match(toggle().props.accessibilityLabel, /Fuel: RON 97\. Region: South Luzon\. Area: Naga City\. Past prices/);
+  toggle().props.onPress(); await s.h.flush();
+  assert.equal(s.filter().props.value, 'RON_97');
+  assert.equal(find(s.h.tree, n => n.props?.label === 'Region').props.value, 'SOUTH_LUZON');
+  assert.equal(find(s.h.tree, n => n.props?.label === 'Area').props.value, 'Naga City');
+  assert.equal(s.writes.length, 0); assert.equal(s.defaultWrites.length, 0);
+  s.h.unmount();
+});
 for (const [id, code] of [['City', 'RON_95'], ['Truck', 'DIESEL']]) {
   test(`Fuel Prices defaults selected ${id} to ${code}, labels its source and queries that exact fuel`, async () => {
     const s = pricesScreen({ selected: id }); await s.h.flush({});
@@ -280,7 +311,7 @@ test('selecting More changes exact price/history queries, stays visible, survive
   const s = pricesScreen({ vehicles: [vehicle], defaultId: 'Default' }); await s.h.flush({});
   const filter = renderFuelFilter(s); await filter.sync(); await filter.selectMore('RON_97');
   assert.equal(s.queries.at(-1)[2], 'RON_97'); assert.equal(s.trends.at(-1)[1], 'RON_97');
-  assert.equal(filter.more().props.children[1].props.children, 'More · RON 97');
+  assert.equal(renderedText(filter.more().props.children[1]), 'Premium\nRON 97');
   assert.equal(find(filter.h.tree, n => n.type === 'Modal'), null);
   s.h.focus(); await s.h.flush(); await filter.sync();
   assert.equal(s.filter().props.value, 'RON_97'); assert.equal(vehicle.fuel_type_id, 'gas95');
@@ -293,6 +324,6 @@ test('supported More fuel with no DOE records remains selected and uses the exis
   assert.equal(s.filter().props.value, 'KEROSENE');
   assert.equal(s.queries.at(-1)[2], 'KEROSENE'); assert.equal(s.trends.at(-1)[1], 'KEROSENE');
   assert(find(s.h.tree, n => n.props?.children === 'No DOE prices for these filters. Try another area or fuel type.'));
-  assert.equal(filter.more().props.children[1].props.children, 'More · Kerosene');
+  assert.equal(renderedText(filter.more().props.children[1]), 'Kerosene');
   filter.h.unmount(); s.h.unmount();
 });

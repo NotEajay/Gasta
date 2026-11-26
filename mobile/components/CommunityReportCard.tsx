@@ -4,7 +4,6 @@ import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import BrandMark from '@/components/ui/BrandMark';
 import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
-import { getFuelTypeColor } from '@/constants/fuelTypeColors';
 import { GasTaColors as C, colors, palette, radii, spacing } from '@/constants/Theme';
 import { VERIFY_CONFIRMATIONS_REQUIRED } from '@/constants/communityReports';
 import { formatCurrency, formatDate, formatRelativeReportAge } from '@/lib/format';
@@ -13,7 +12,6 @@ import { isHistoricalCommunityReport, type PendingCommunityReport } from '@/lib/
 export default function CommunityReportCard({ report, own = false, awaiting = false, action }: {
   report: PendingCommunityReport; own?: boolean; awaiting?: boolean; action?: ReactNode;
 }) {
-  const fuelTone = getFuelTypeColor(report.fuel_type?.code);
   const historical = report.status === 'verified' && isHistoricalCommunityReport(report);
   const warning = report.status === 'needs_review' || report.status === 'pending';
   const rejected = report.status === 'rejected';
@@ -22,11 +20,11 @@ export default function CommunityReportCard({ report, own = false, awaiting = fa
     : awaiting ? 'Needs confirmation' : 'Pending';
   const tint = rejected ? palette.dangerSoft : warning ? colors.warningSoft : historical ? C.creamDark : C.forestGlow;
   const ink = rejected ? C.error : warning ? colors.warning : historical ? C.forestMuted : C.forest;
-  return <View testID="fuel-community-card" style={[styles.card, { backgroundColor: fuelTone.soft, borderColor: fuelTone.border, borderLeftColor: fuelTone.strong, borderLeftWidth: 4 }]}>
+  return <View testID="fuel-community-card" style={styles.card}>
     <View style={styles.header}>
       <BrandMark brand={report.station?.brand_label || report.station?.oil_company?.name} slug={report.station?.oil_company?.slug} stationName={report.station?.name} size="sm" />
       <View style={styles.copy}><Text style={styles.name}>{report.station?.name ?? 'Station'}</Text>{report.station?.oil_company?.name ? <Text style={styles.meta}>{report.station.brand_label || report.station.oil_company.name}</Text> : null}</View>
-      <View style={styles.priceColumn}><Text style={[styles.price, { color: fuelTone.text }]}>{formatCurrency(report.reported_price)}</Text><Text style={styles.unit}>/L</Text></View>
+      <View style={styles.priceColumn}><Text style={styles.price}>{formatCurrency(report.reported_price)}</Text><Text style={styles.unit}>/L</Text></View>
     </View>
     <View style={styles.tags}>
       {own ? <Text style={styles.yours}>Your report</Text> : null}

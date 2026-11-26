@@ -9,15 +9,16 @@ interface ScreenHeaderProps {
   subtitle?: string;
   eyebrow?: string;
   action?: ReactNode;
+  compact?: boolean;
 }
 
-export default function ScreenHeader({ title, subtitle, eyebrow, action }: ScreenHeaderProps) {
+export default function ScreenHeader({ title, subtitle, eyebrow, action, compact = false }: ScreenHeaderProps) {
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, compact && styles.compactWrap]}>
       {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
       <View style={styles.row}>
         <View style={styles.copy}>
-          <Text accessibilityRole="header" style={styles.title}>{title}</Text>
+          <Text accessibilityRole="header" style={[styles.title, compact && styles.compactTitle]}>{title}</Text>
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
         </View>
         {action ? <View style={styles.action}>{action}</View> : null}
@@ -28,6 +29,8 @@ export default function ScreenHeader({ title, subtitle, eyebrow, action }: Scree
 
 const styles = StyleSheet.create({
   wrap: { marginBottom: spacing.lg, paddingTop: spacing.sm },
+  compactWrap: { marginBottom: 12, paddingTop: 0 },
+  compactTitle: { fontSize: 24, lineHeight: 30, letterSpacing: -0.6 },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   copy: { flex: 1, minWidth: 0 },
   eyebrow: {

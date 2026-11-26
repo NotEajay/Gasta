@@ -6,6 +6,7 @@ const path = require('node:path');
 const ts = require('../node_modules/typescript');
 const { harness, find } = require('./componentHarness.cjs');
 const root = path.resolve(__dirname, '..');
+const renderedText = node => Array.isArray(node) ? node.map(renderedText).join('') : typeof node === 'string' ? node : node && typeof node === 'object' ? renderedText(node.props?.children) : '';
 function load(file, mocks = {}) {
   const exports = {};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
@@ -56,7 +57,8 @@ for (const code of ['RON_97', 'RON_100', 'DIESEL_PLUS', 'KEROSENE']) test(`selec
   s.option(code).props.onPress(); await s.flush();
       const name = fuels.DOE_FUEL_TYPES.find(f => f.code === code).name;
       assert.deepEqual(s.changes, [code]); assert.equal(find(s.h.tree, n => n.type === 'Modal'), null);
-      assert.equal(s.more().props.children[1].props.children, `More · ${name}`);
+      const display = presentation.getFuelTypePresentation(code);
+      assert.equal(renderedText(s.more().props.children[1]), display.primaryLabel + (display.subtitle ? `\n${display.subtitle}` : ''));
       assert.equal(s.more().props.accessibilityState.selected, true);
       assert.equal(s.more().props.accessibilityLabel, `Fuel: ${name}. Open more fuel types`);
 
@@ -127,21 +129,21 @@ test('More is outside the common-fuel radiogroup and sheet options have their ow
   s.h.unmount();
 });
 
-for (const code of ['RON_91', 'RON_95', 'DIESEL']) test(`${code} primary chip uses the shared solid color, readable text and a non-color selected indicator`, async () => {
+for (const code of ['RON_91', 'RON_95', 'DIESEL']) test(`${code} primary chip uses the shared soft color, readable text and a non-color selected indicator`, async () => {
   const s = selector(code); await s.flush(); const fuel = presentation.getFuelTypePresentation(code);
   const chip = find(s.h.tree, n => n.props?.accessibilityLabel === `Fuel: ${fuel.label}`);
   const style = flatten(chip.props.style({ pressed: false }));
-  assert.equal(style.backgroundColor, fuel.accent); assert.equal(style.borderColor, fuel.accent);
+  assert.equal(style.backgroundColor, fuel.softBackground); assert.equal(style.borderColor, fuel.accent);
   assert.equal(style.borderWidth, 2);
   const text = find(chip, n => n.type === 'Text');
-  assert.equal(flatten(text.props.style).color, '#FFFFFF');
+  assert.equal(flatten(text.props.style).color, require('./componentHarness.cjs').fuelColors.getFuelTypeColor(code).text);
   assert.equal(flatten(text.props.style).fontWeight, '600');
   assert(find(chip, n => n.props?.name === 'check')); s.h.unmount();
 });
 for (const code of ['RON_97', 'RON_100', 'DIESEL_PLUS', 'KEROSENE']) test(`${code} More option and active main chip use the same shared colors`, async () => {
   const s = selector(code); await s.flush(); const fuel = presentation.getFuelTypePresentation(code);
   let style = flatten(s.more().props.style({ pressed: false }));
-  assert.equal(style.backgroundColor, fuel.accent); assert.equal(style.borderColor, fuel.accent);
+  assert.equal(style.backgroundColor, fuel.softBackground); assert.equal(style.borderColor, fuel.accent);
   assert.equal(flatten(s.more().props.children[1].props.style).fontWeight, '600');
   s.more().props.onPress(); await s.flush(); const option = s.option(code);
   style = flatten(option.props.style({ pressed: false }));

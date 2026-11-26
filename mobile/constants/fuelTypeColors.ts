@@ -4,13 +4,13 @@ import type { DoeFuelTypeCode } from './fuelTypes';
 export type FuelTypeColor = { strong: string; soft: string; border: string; text: string; onStrong: string };
 
 export const FUEL_TYPE_COLORS = {
-  RON_91: { strong: '#24724F', soft: '#EDF6F0', border: '#C6DFD0', text: '#225B42', onStrong: '#FFFFFF' },
-  RON_95: { strong: '#3E5FB5', soft: '#EFF2FA', border: '#D0D9EE', text: '#365397', onStrong: '#FFFFFF' },
+  RON_91: { strong: '#36735A', soft: '#EDF3EF', border: '#C8D8CD', text: '#166534', onStrong: '#FFFFFF' },
+  RON_95: { strong: '#3E5FB5', soft: '#EFF2F8', border: '#D5DDEB', text: '#1D4ED8', onStrong: '#FFFFFF' },
   RON_97: { strong: '#7753A2', soft: '#F4F0F8', border: '#DED1EB', text: '#68498B', onStrong: '#FFFFFF' },
   RON_100: { strong: '#9D4160', soft: '#FAEFF3', border: '#EACDD6', text: '#853750', onStrong: '#FFFFFF' },
-  DIESEL: { strong: '#94620F', soft: '#FCF4E5', border: '#E8D6AC', text: '#80530B', onStrong: '#FFFFFF' },
-  DIESEL_PLUS: { strong: '#A14C26', soft: '#FAF0E9', border: '#E7CAB8', text: '#8B4122', onStrong: '#FFFFFF' },
-  KEROSENE: { strong: '#2B6B80', soft: '#EDF5F7', border: '#C4DDE4', text: '#245A6C', onStrong: '#FFFFFF' },
+  DIESEL: { strong: '#EAB308', soft: '#FEFCE8', border: '#FDE68A', text: '#713F12', onStrong: '#192D42' },
+  DIESEL_PLUS: { strong: '#75549B', soft: '#F2EFF6', border: '#D9D0E3', text: '#6D28D9', onStrong: '#FFFFFF' },
+  KEROSENE: { strong: '#52677D', soft: '#EFF2F5', border: '#CDD6DF', text: '#475569', onStrong: '#FFFFFF' },
 } satisfies Record<DoeFuelTypeCode, FuelTypeColor>;
 
 const UNKNOWN_FUEL_COLOR: FuelTypeColor = { strong: '#566679', soft: '#EDF1F4', border: '#D5DDE5', text: '#46566A', onStrong: '#FFFFFF' };
