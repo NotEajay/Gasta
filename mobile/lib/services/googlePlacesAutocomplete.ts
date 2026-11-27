@@ -42,6 +42,8 @@ interface AutocompleteResponse {
   suggestions?: unknown;
 }
 
+interface StationsResponse { stations?: unknown; }
+
 interface DetailsResponse {
   result?: unknown;
 }
@@ -178,12 +180,12 @@ async function errorFromFunction(
 
 async function invokePlaces(
   body: Record<string, unknown>,
-  responseKey: "suggestions" | "result",
+  responseKey: "suggestions" | "result" | "stations",
   signal?: AbortSignal,
 ): Promise<unknown> {
   try {
     const { data, error } = await supabase.functions.invoke<
-      AutocompleteResponse & DetailsResponse
+      AutocompleteResponse & DetailsResponse & StationsResponse
     >("google-places-autocomplete", {
       body,
       signal,
@@ -267,4 +269,44 @@ export async function resolvePlaceSuggestion(
     throw invalidResponse();
   }
   return value;
+}
+
+
+export const STATION_BRANDS = ['all', 'petron', 'shell', 'caltex', 'phoenix', 'total', 'flying-v', 'unioil', 'seaoil', 'ptt', 'jetti', 'clean-fuel', 'my-gas'] as const;
+export type StationBrand = typeof STATION_BRANDS[number];
+export const STATION_BRAND_LABELS: Record<StationBrand, string> = {
+  all: 'All companies', petron: 'Petron', shell: 'Shell', caltex: 'Caltex', phoenix: 'Phoenix',
+  total: 'Total', 'flying-v': 'Flying V', unioil: 'Unioil', seaoil: 'SEAOIL', ptt: 'PTT',
+  jetti: 'Jetti', 'clean-fuel': 'Clean Fuel', 'my-gas': 'My Gas',
+};
+
+
+export interface NearbyFuelStation {
+  placeId: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+  attributions: { name: string; uri: string | null }[];
+}
+
+export function isStationBrand(value: string): value is StationBrand {
+  return (STATION_BRANDS as readonly string[]).includes(value);
+}
+
+export async function searchNearbyFuelStations(brand: StationBrand, latitude: number, longitude: number, signal?: AbortSignal): Promise<NearbyFuelStation[]> {
+  if (!isStationBrand(brand) || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < 4 || latitude > 22.5 || longitude < 116 || longitude > 127) {
+    throw new PlacesAutocompleteError('invalid_request', 'Nearby station search is available within the Philippines.');
+  }
+  const value = await invokePlaces({ stationBrand: brand, latitude, longitude }, 'stations', signal);
+  if (!Array.isArray(value) || !value.every((row) => isRecord(row) && typeof row.placeId === 'string' && row.placeId.length > 0
+    && typeof row.name === 'string' && row.name.length > 0 && typeof row.address === 'string' && row.address.length > 0
+    && typeof row.latitude === 'number' && Number.isFinite(row.latitude) && row.latitude >= 4 && row.latitude <= 22.5
+    && typeof row.longitude === 'number' && Number.isFinite(row.longitude) && row.longitude >= 116 && row.longitude <= 127
+    && typeof row.distanceKm === 'number' && Number.isFinite(row.distanceKm) && row.distanceKm >= 0 && row.distanceKm <= 30
+    && Array.isArray(row.attributions) && row.attributions.every((a) => isRecord(a) && typeof a.name === 'string' && (a.uri === null || typeof a.uri === 'string' && a.uri.startsWith('https://'))))) {
+    throw invalidResponse();
+  }
+  return value as NearbyFuelStation[];
 }

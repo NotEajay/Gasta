@@ -1,4 +1,4 @@
-import type { AreaPriceRow } from '@/components/ui/StationPriceTable';
+import type { AreaPriceRow, StationPriceRow } from '@/components/ui/StationPriceTable';
 import type { FuelPriceRow } from '@/lib/services/fuelPrices';
 
 export type SupportedFuelCompany = { id: string; name: string; slug: string };
@@ -22,4 +22,11 @@ export function buildOfficialDoeRows(
     source: 'doe_area',
     status: scope.area ? 'DOE Area/Brand Estimate' : 'DOE Region-Wide Estimate',
   }));
+}
+
+/** Directory size must not multiply a company's DOE estimate into branch quotes. */
+export function trustedPriceComparisons(stations: StationPriceRow[], doe: AreaPriceRow[]): ((StationPriceRow | AreaPriceRow) & { price: number })[] {
+  return [...stations.filter((row) => row.source === 'community' && row.status === 'Verified'), ...doe]
+    .filter((row): row is (StationPriceRow | AreaPriceRow) & { price: number } =>
+      typeof row.price === 'number' && Number.isFinite(row.price) && row.price > 0);
 }

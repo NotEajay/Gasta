@@ -1,6 +1,8 @@
 # Official fuel station directory ETL
 
-This job stores **branch locations**, independently of DOE price ingestion. It never reads/writes `fuel_prices`, attaches an area price to a branch, geocodes, or calls the DOE pipeline. No scheduled sync or full import is enabled yet. Complete listing audit results are in [FULL_PREVIEW.md](FULL_PREVIEW.md); the complete dataset contains five unresolved pairs. [PAIR_REVIEW.md](PAIR_REVIEW.md) documents the 817 eligible / 10 quarantined partition and evidence; no live import has run.
+**Current status (26 November 2026):** 4,862 stations total, including 4,827 official-directory records across all 12 named catalog brands. [The Phoenix refresh](PHOENIX_2026_11.md) added 38 stations; Phoenix now has 402 official entries and two community entries. The earlier 12 November pass added 592 stations, including Flying V, Total, MyGas, Unioil, and Phoenix Luzon. See [COMPLETION_2026_11.md](COMPLETION_2026_11.md) for source coverage, unresolved gaps, verification, and repeatable commands; [IMPORT_RESULTS.md](IMPORT_RESULTS.md) documents the earlier import. This is not a complete nationwide census. The source investigation and preview instructions below describe the original October SEAOIL work.
+
+This job stores **branch locations**, independently of DOE price ingestion. It never reads/writes `fuel_prices`, attaches an area price to a branch, geocodes, or calls the DOE pipeline. Collection and imports are manual; no recurring sync is configured. Historical SEAOIL listing audit results are in [FULL_PREVIEW.md](FULL_PREVIEW.md), with five unresolved pairs. [PAIR_REVIEW.md](PAIR_REVIEW.md) documents the 817 eligible / 10 quarantined partition and evidence before that source's live import.
 
 ## Source investigation (2026-10-09)
 

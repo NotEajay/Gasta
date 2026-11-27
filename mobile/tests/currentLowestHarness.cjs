@@ -11,7 +11,7 @@ function load(file, mocks = {}) {
 }
 const fuels = load('constants/fuelTypes.ts');
 const theme = load('constants/Theme.ts');
-const presentation = load('constants/fuelTypePresentation.ts', { '@/constants/fuelTypes': fuels });
+const presentation = load('constants/fuelTypePresentation.ts', { '@/constants/fuelTypes': fuels, '@/constants/fuelTypeColors': load('constants/fuelTypeColors.ts') });
 const flatten = style => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style : {};
 function currentLowest(options = {}) {
   let fuelType = options.fuelCode ?? 'RON_91';
@@ -31,7 +31,7 @@ function currentLowest(options = {}) {
     '@/constants/communityReports':{VERIFY_CONFIRMATIONS_REQUIRED:3},
     '@/context/AuthProvider':{useAuth:()=>({user})},
     '@/context/TabBarVisibility':{useTabBarScrollHandler:()=>()=>{}},
-    '@/hooks/useResponsive':{useResponsive:()=>({isCompact:(options.width ?? 390)<360})},
+    '@/hooks/useResponsive':{useResponsive:()=>({width:options.width ?? 390,contentMaxWidth:760,isDesktop:false,isCompact:(options.width ?? 390)<360})},
     '@/hooks/useFuelPriceDefault':{useFuelPriceDefault:()=>({fuelType,selectFuelType:next=>{fuelType=next},vehicleLabel:null})},
     '@/lib/supabase':{isSupabaseConfigured:true}, '@/lib/useTheme':{useTheme:()=>({})},
     '@/lib/format':{formatCurrency:n=>`₱${n.toFixed(2)}`,formatShortDate:()=> 'Oct 6',formatBulletinRange:()=> 'Oct 13–19',formatDate:()=> 'Oct 13'},
@@ -52,7 +52,7 @@ function currentLowest(options = {}) {
     },
   });
   return { h,queries,prices,trend,
-    get card(){return find(h.tree,n=>n.props?.testID==='current-lowest-card')},
+    get card(){return find(h.tree,n=>n.props?.testID==='prices-lowest')},
     async flush(){await h.flush({})},
     async select(code){find(h.tree,n=>n.props?.label==='Fuel').props.onChange(code);await h.flush({})},
     movement(){const node=find(this.card,n=>typeof n.type==='function'&&n.type.name==='HeroDelta');return node ? node.type(node.props) : null},

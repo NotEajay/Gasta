@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
 import ReportStationSelector, { type ReportStationContext } from '@/components/ReportStationSelector';
-import CompanyEstimateCard from '@/components/ui/CompanyEstimateCard';
 import OfficialStationDirectory from '@/components/OfficialStationDirectory';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
-import { designSystem as D, GasTaColors, palette, radii, spacing } from '@/constants/Theme';
+import { GasTaColors, palette, radii, spacing } from '@/constants/Theme';
 import { formatCurrency } from '@/lib/format';
 import BrandMark from '@/components/ui/BrandMark';
 
@@ -116,9 +115,7 @@ export default function StationPriceTable({
       region: region ?? '', fuelType: fuelType ?? '',
       doeContext: row.status ?? 'DOE Area/Brand Estimate',
     });
-    if (row.slug === 'seaoil') {
-      return <OfficialStationDirectory key={row.id}
-        fuelCode={fuelType}
+    return <OfficialStationDirectory key={row.id} company={row.brand} slug={row.slug} fuelCode={fuelType}
         selectedRegion={region}
         selectedArea={selectedArea ?? (row.areaName === region ? '' : row.areaName)}
         doeSummary={{ price: hasPrice(row) ? row.price : null, sourceLabel: row.status ?? 'DOE Area/Brand Estimate' }}
@@ -126,19 +123,6 @@ export default function StationPriceTable({
         expanded={expandedCompany === row.slug}
         onToggle={() => setExpandedCompany((current) => current === row.slug ? null : row.slug)}
         onReport={reportCompany} />;
-    }
-    return <CompanyEstimateCard key={row.id}
-      company={row.brand} slug={row.slug} price={hasPrice(row) ? row.price : null}
-      fuelCode={fuelType}
-      unavailableLabel={`No available price in this ${selectedArea ? 'area' : 'region'}`}
-      sourceLabel={row.status ?? 'DOE Area/Brand Estimate'}
-      expanded={expandedCompany === row.slug}
-      onToggle={() => setExpandedCompany((current) => current === row.slug ? null : row.slug)}
-      onReport={reportCompany}>
-      <Text style={styles.directoryTitle}>Station directory</Text>
-      <Text style={styles.directoryCopy}>Official branch directory not available yet.</Text>
-      <Text style={styles.directoryCopy}>You can still report a price for a known station.</Text>
-    </CompanyEstimateCard>;
 
   };
 
@@ -249,7 +233,7 @@ export default function StationPriceTable({
               onPress={() => { setUnavailableScope(showUnavailable ? null : filterKey); setExpandedCompany(null); }}
               style={({ pressed }) => [styles.disclosure, pressed && { opacity: 0.7 }]}>
               <Text style={styles.disclosureText}>{showUnavailable ? 'Hide companies without available prices' : availableRows.length ? `Show companies without available prices (${unavailableRows.length})` : `View supported companies (${unavailableRows.length})`}</Text>
-              <MaterialCommunityIcons name={showUnavailable ? 'chevron-up' : 'chevron-down'} size={14} color={D.color.textSecondary} />
+              <MaterialCommunityIcons name={showUnavailable ? 'chevron-up' : 'chevron-down'} size={18} color={GasTaColors.forest} />
             </Pressable>
             {showUnavailable ? <View style={styles.companyStack}>{unavailableRows.map(renderCompany)}</View> : null}
           </> : null}
@@ -261,13 +245,13 @@ export default function StationPriceTable({
 }
 
 const styles = StyleSheet.create({
-  companySection: { gap: 8, marginBottom: 12 },
-  companyStack: { overflow: 'hidden', borderRadius: 12, backgroundColor: D.color.surface },
+  companySection: { gap: spacing.sm, marginBottom: spacing.md },
+  companyStack: { gap: spacing.sm },
   noPrices: { color: GasTaColors.forestMuted, fontSize: 13, lineHeight: 19, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  disclosure: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 4, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: D.color.borderSubtle },
-  disclosureText: { flex: 1, ...D.type.supporting, color: D.color.textSecondary },
-  directoryTitle: { ...D.type.bodyDense, fontWeight: '600', color: D.color.textPrimary },
-  directoryCopy: { ...D.type.metadata, fontWeight: '400', color: D.color.textSecondary },
+  disclosure: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 40, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginTop: spacing.xs, borderRadius: radii.md, borderWidth: StyleSheet.hairlineWidth, borderColor: GasTaColors.forestBorder, backgroundColor: GasTaColors.creamLight },
+  disclosureText: { flex: 1, color: GasTaColors.forest, fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  directoryTitle: { fontSize: 14, fontWeight: '600', color: GasTaColors.forestDark },
+  directoryCopy: { fontSize: 12, lineHeight: 18, color: GasTaColors.forestMuted },
   /*
    * A grouped ledger rather than a stack of white cards. The section surface is
    * a warm creamLight so the page keeps its cream identity; white is reserved

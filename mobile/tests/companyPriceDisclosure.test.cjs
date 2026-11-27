@@ -4,7 +4,7 @@ const row=(slug,price)=>({id:slug,slug,brand:slug,areaName:'NCR',price,source:'d
 const props={rows:[],region:'NCR',selectedArea:'',fuelType:'RON_91'};
 function setup(){return harness(path.resolve(__dirname,'../components/ui/StationPriceTable.tsx'),{'@/constants/Theme':theme,'expo-router':{useRouter:()=>({push(){}})},'@/lib/format':{formatCurrency:n=>String(n)}})}
 const disclosure=h=>find(h.tree,n=>n.props?.accessibilityLabel?.includes('companies')&&n.type==='Pressable');
-function cards(n,result=[]){if(Array.isArray(n)){n.forEach(x=>cards(x,result));return result}if(!n||typeof n!=='object')return result;if(n.props?.slug&&n.props?.sourceLabel)result.push(n.props.slug);else if(n.props?.doeSummary)result.push('seaoil');cards(n.props?.children,result);return result}
+function cards(n,result=[]){if(Array.isArray(n)){n.forEach(x=>cards(x,result));return result}if(!n||typeof n!=='object')return result;if(n.props?.slug&&n.props?.sourceLabel)result.push(n.props.slug);else if(n.props?.doeSummary)result.push(n.props.slug);cards(n.props?.children,result);return result}
 const text=n=>Array.isArray(n)?n.map(text).join(''):typeof n==='string'?n:n&&typeof n==='object'?text(n.props?.children):'';
 test('available cards first, unavailable hidden then revealed below with actual count; toggle hides',async()=>{
  const h=setup();await h.flush({...props,areaRows:[row('caltex',80),row('clean-fuel',null),row('jetti',null),row('my-gas',null),row('petron',70),row('seaoil',75),row('shell',90)]});
@@ -18,6 +18,6 @@ for(const [key,value] of [['region','SOUTH_LUZON'],['selectedArea','Calamba'],['
 });
 test('all-price case has no disclosure; zero is a valid numeric price',async()=>{const h=setup();await h.flush({...props,areaRows:[row('caltex',0),row('jetti',70)]});assert.equal(disclosure(h),null);assert.deepEqual(cards(h.tree),['caltex','jetti'])});
 test('null, undefined, NaN, infinity and strings are unavailable; zero-price list has concise region/area state',async()=>{
- const h=setup();const areaRows=[row('a',null),row('b',undefined),row('c',NaN),row('d',Infinity),row('e','70')];await h.flush({...props,areaRows});assert.deepEqual(cards(h.tree),[]);assert(text(h.tree).includes('No DOE prices available for this region'));assert(text(h.tree).includes('View supported companies (5)'));disclosure(h).props.onPress();await h.flush();assert.equal(cards(h.tree).length,5);for(const slug of ['a','b','c','d','e'])assert.equal(find(h.tree,n=>n.props?.slug===slug).props.price,null);
+ const h=setup();const areaRows=[row('a',null),row('b',undefined),row('c',NaN),row('d',Infinity),row('e','70')];await h.flush({...props,areaRows});assert.deepEqual(cards(h.tree),[]);assert(text(h.tree).includes('No DOE prices available for this region'));assert(text(h.tree).includes('View supported companies (5)'));disclosure(h).props.onPress();await h.flush();assert.equal(cards(h.tree).length,5);for(const slug of ['a','b','c','d','e'])assert.equal(find(h.tree,n=>n.props?.slug===slug).props.doeSummary.price,null);
  await h.flush({...props,selectedArea:'Calamba',areaRows});assert(text(h.tree).includes('No DOE prices available for this area'));assert.deepEqual(cards(h.tree),[]);
 });

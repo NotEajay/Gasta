@@ -229,6 +229,7 @@ export interface Database {
       profiles: {
         Row: {
           id: string;
+          role: 'user' | 'developer' | 'admin';
           full_name: string | null;
           email: string | null;
           created_at: string;
@@ -236,6 +237,7 @@ export interface Database {
         };
         Insert: {
           id: string;
+          role?: 'user' | 'developer' | 'admin';
           full_name?: string | null;
           email?: string | null;
           created_at?: string;
@@ -243,6 +245,7 @@ export interface Database {
         };
         Update: {
           id?: string;
+          role?: 'user' | 'developer' | 'admin';
           full_name?: string | null;
           email?: string | null;
           created_at?: string;

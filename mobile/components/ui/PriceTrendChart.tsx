@@ -3,7 +3,6 @@ import { StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/Themed';
 import { designSystem as D, GasTaColors, radii, spacing } from '@/constants/Theme';
-import { getFuelTypePresentation } from '@/constants/fuelTypePresentation';
 import { formatDoeTimelineDate } from '@/lib/doeCoverage';
 import { formatCurrency } from '@/lib/format';
 import { placePriceTrendLabels } from '@/components/prices/priceTrendLabels';
@@ -95,8 +94,7 @@ export default function PriceTrendChart({
   const last = values[values.length - 1];
   const delta = last - first;
   const direction = delta < 0 ? 'down' : delta > 0 ? 'up' : 'flat';
-  const lineColor = fuelCode != null ? getFuelTypePresentation(fuelCode).accent
-    : direction === 'down' ? downColor : direction === 'up' ? upColor : GasTaColors.forestMuted;
+  const lineColor = GasTaColors.forest;
 
   // Subsample long series so segments stay readable at phone widths.
   const MAX_POINTS = 40;

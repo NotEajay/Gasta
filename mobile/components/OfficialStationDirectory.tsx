@@ -7,7 +7,7 @@ import CompanyEstimateCard from '@/components/ui/CompanyEstimateCard';
 import FuelTypeBadge from '@/components/ui/FuelTypeBadge';
 import { DOE_REGIONS } from '@/constants/regions';
 import BrandMark from '@/components/ui/BrandMark';
-import { fetchSeaoilDirectory, filterStationGeography, isSupportedStationRegion, isSupportedStationArea, stationSearchText, type OfficialStation } from '@/lib/services/stationDirectory';
+import { fetchOfficialStationDirectory, filterStationGeography, isSupportedStationRegion, isSupportedStationArea, stationSearchText, type OfficialStation } from '@/lib/services/stationDirectory';
 
 const StationCard = memo(function StationCard({ station }: { station: OfficialStation }) {
   return <View style={styles.card}>
@@ -23,16 +23,18 @@ const StationCard = memo(function StationCard({ station }: { station: OfficialSt
     {station.fuel_types.length ? <View style={styles.chips}>
       {station.fuel_types.map((fuel, index) => <FuelTypeBadge key={`${fuel}-${index}`} fuelCode={fuel} label={fuel} />)}
     </View> : null}
-    <View style={styles.chips}><Text style={styles.badge}>Official directory</Text></View>
+    <View style={styles.chips}><Text style={styles.badge}>{station.source_url?.startsWith('https://doe.gov.ph/') ? 'DOE station register' : 'Official directory'}</Text></View>
   </View>;
 });
 
 export default function OfficialStationDirectory({
-  selectedArea = '', selectedRegion = '', doeSummary, fuelCode, unavailableLabel, onReport, expanded, onToggle,
+  slug = 'seaoil', company = 'SEAOIL', fuelCode, selectedArea = '', selectedRegion = '', doeSummary, unavailableLabel, onReport, expanded, onToggle,
 }: {
+  slug?: string;
+  company?: string;
+  fuelCode?: string;
   selectedArea?: string;
   selectedRegion?: string;
-  fuelCode?: string;
   unavailableLabel?: string;
   doeSummary?: { price: number | null; sourceLabel: string };
   onReport?: () => void;
@@ -40,25 +42,28 @@ export default function OfficialStationDirectory({
   onToggle?: () => void;
 }) {
   const [visible, setVisible] = useState(false);
-  const [stations, setStations] = useState<OfficialStation[]>([]);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [directory, setDirectory] = useState<{ slug: string; stations: OfficialStation[]; status: 'loading' | 'ready' | 'error' }>({ slug: '', stations: [], status: 'loading' });
+  const stations = directory.slug === slug ? directory.stations : [];
+  const status = directory.slug === slug ? directory.status : 'loading';
   const [query, setQuery] = useState('');
+  const [showAllLocations, setShowAllLocations] = useState(false);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    setStatus('loading');
-    fetchSeaoilDirectory().then((rows) => {
+    setDirectory({ slug, stations: [], status: 'loading' });
+    fetchOfficialStationDirectory(slug).then((rows) => {
       if (cancelled) return;
-      setStations(rows); setStatus('ready');
-    }).catch(() => { if (!cancelled) setStatus('error'); });
+      setDirectory({ slug, stations: rows, status: 'ready' });
+    }).catch(() => { if (!cancelled) setDirectory({ slug, stations: [], status: 'error' }); });
     return () => { cancelled = true; };
-  }, [attempt]);
-  useEffect(() => { setQuery(''); }, [selectedArea, selectedRegion]);
+  }, [slug, attempt]);
+  useEffect(() => { setQuery(''); setShowAllLocations(false); }, [selectedArea, selectedRegion, slug]);
   const areaSupported = isSupportedStationArea(selectedArea) && isSupportedStationRegion(selectedRegion);
   const regionLabel = DOE_REGIONS.find((item) => item.code === selectedRegion)?.name ?? '';
   const scopeLabel = areaSupported ? [regionLabel, selectedArea].filter(Boolean).join(' • ') : '';
   const areaStations = useMemo(() => filterStationGeography(stations, selectedRegion, selectedArea), [stations, selectedRegion, selectedArea]);
-  const indexed = useMemo(() => areaStations.map((station) => ({ station, text: stationSearchText(station) })), [areaStations]);
+  const visibleStations = showAllLocations ? stations : areaStations;
+  const indexed = useMemo(() => visibleStations.map((station) => ({ station, text: stationSearchText(station) })), [visibleStations]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return indexed.filter(({ text }) => !needle || text.includes(needle)).map(({ station }) => station);
@@ -69,8 +74,7 @@ export default function OfficialStationDirectory({
       : "Station filtering isn't available for this area yet."
     : status === 'error' ? 'Directory unavailable · Tap View stations to retry' : 'Loading official locations…';
   return <>
-    <CompanyEstimateCard company="SEAOIL" slug="seaoil"
-      fuelCode={fuelCode}
+    <CompanyEstimateCard company={company} slug={slug} fuelCode={fuelCode}
       price={doeSummary?.price} unavailableLabel={unavailableLabel} sourceLabel={doeSummary?.sourceLabel ?? 'Official station directory'}
       subtitle={countLabel} expanded={expanded} onToggle={onToggle} onReport={onReport}
       onViewStations={() => { setVisible(true); if (status === 'error') setAttempt((value) => value + 1); }}>
@@ -81,11 +85,20 @@ export default function OfficialStationDirectory({
     <Modal visible={visible} animationType="slide" onRequestClose={() => setVisible(false)}>
       <SafeAreaView style={styles.screen}>
         <View style={styles.heading}>
-          <BrandMark brand="SEAOIL" slug="seaoil" size="sm" />
-          <View style={{ flex: 1 }}><Text style={styles.title}>SEAOIL Stations</Text>{scopeLabel ? <Text style={styles.name}>{scopeLabel}</Text> : null}<Text style={styles.secondary}>{status === 'ready' ? `${areaStations.length} official locations` : 'Official company directory'}</Text></View>
+          <BrandMark brand={company} slug={slug} size="sm" />
+          <View style={{ flex: 1 }}><Text style={styles.title}>{company} Stations</Text>{scopeLabel && !showAllLocations ? <Text style={styles.name}>{scopeLabel}</Text> : null}<Text style={styles.secondary}>{status === 'ready' ? `${visibleStations.length} official locations` : 'Official station directory'}</Text></View>
           <Pressable accessibilityRole="button" accessibilityLabel="Close station directory" hitSlop={12} onPress={() => setVisible(false)}><Ionicons name="close" size={24} color={C.forest} /></Pressable>
         </View>
-        <Text style={[styles.secondary, styles.explanation]}>Branch locations only. DOE prices are area estimates, not exact station pump prices.{selectedArea || selectedRegion ? ' Matches use official addresses; unconfirmed locations are excluded.' : ''}</Text>
+        <Text style={[styles.secondary, styles.explanation]}>Branch locations only. Lists may cover participating stations, rather than every branch. DOE prices are area estimates, not exact station pump prices.{showAllLocations ? ' All locations includes addresses without a confirmed region match.' : selectedArea || selectedRegion ? ' Matches use official addresses; unconfirmed locations are excluded.' : ''}</Text>
+        {selectedRegion || selectedArea ? <View style={styles.scopeToggle}>
+          {[{ label: 'Selected area', all: false }, { label: 'All locations', all: true }].map((item) => (
+            <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={item.label}
+              accessibilityState={{ selected: showAllLocations === item.all }} onPress={() => { setShowAllLocations(item.all); setQuery(''); }}
+              style={[styles.scopeButton, showAllLocations === item.all && styles.scopeActive]}>
+              <Text style={[styles.scopeLabel, showAllLocations === item.all && styles.scopeActiveLabel]}>{item.label}</Text>
+            </Pressable>
+          ))}
+        </View> : null}
         <View style={styles.search}>
           <Ionicons name="search-outline" size={19} color={C.forestMuted} />
           <TextInput accessibilityLabel="Search station name or address" placeholder="Station name or address" placeholderTextColor={C.forestMuted} value={query} onChangeText={setQuery} autoCorrect={false} autoCapitalize="none" style={styles.input} />
@@ -95,7 +108,7 @@ export default function OfficialStationDirectory({
         {status === 'error' ? <View style={styles.empty}><Text style={styles.name}>Couldn't load stations</Text><Text style={styles.secondary}>Please check your connection and try again.</Text><Pressable accessibilityRole="button" onPress={() => setAttempt((value) => value + 1)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View> : null}
         {status === 'ready' ? <>
           <Text style={styles.count}>{filtered.length} station{filtered.length === 1 ? '' : 's'}</Text>
-          <FlatList data={filtered} keyExtractor={(station) => station.id} renderItem={({ item }) => <StationCard station={item} />} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" initialNumToRender={10} maxToRenderPerBatch={10} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.empty}><Text style={styles.name}>No stations found</Text><Text style={styles.secondary}>{query.trim() ? 'Try a different station name or address.' : selectedArea || selectedRegion ? (areaSupported ? 'No official SEAOIL stations found for this area.' : "Station filtering isn't available for this area yet.") : 'Official stations will appear here when available.'}</Text></View>} />
+          <FlatList data={filtered} keyExtractor={(station) => station.id} renderItem={({ item }) => <StationCard station={item} />} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" initialNumToRender={10} maxToRenderPerBatch={10} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.empty}><Text style={styles.name}>No stations found</Text><Text style={styles.secondary}>{query.trim() ? 'Try a different station name or address.' : selectedArea || selectedRegion ? (areaSupported ? `No official ${company} stations found for this area.` : "Station filtering isn't available for this area yet.") : 'Official stations will appear here when available.'}</Text></View>} />
         </> : null}
       </SafeAreaView>
     </Modal>
@@ -103,6 +116,11 @@ export default function OfficialStationDirectory({
 }
 
 const styles = StyleSheet.create({
+  scopeToggle: { flexDirection: 'row', gap: 8, marginHorizontal: 20, marginBottom: 14 },
+  scopeButton: { paddingHorizontal: 14, minHeight: 40, justifyContent: 'center', borderRadius: 12, backgroundColor: C.cream },
+  scopeActive: { backgroundColor: C.forestDark },
+  scopeLabel: { color: C.textMuted, fontSize: 12, fontWeight: '600' },
+  scopeActiveLabel: { color: C.white },
   screen: { flex: 1, backgroundColor: C.creamLight },
   heading: { flexDirection: 'row', alignItems: 'center', padding: 20, gap: 12 },
   title: { fontSize: 24, fontWeight: '700', color: C.forestDark },
@@ -117,6 +135,7 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 20, paddingBottom: 24 },
   card: { backgroundColor: C.glassFillStrong, borderColor: C.glassBorderSubtle, borderWidth: 1, borderRadius: 18, padding: 14, gap: 10, marginBottom: 12, shadowColor: C.forest, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 5 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  fuel: { backgroundColor: C.cream, color: C.forest, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 4, fontSize: 11 },
   badge: { backgroundColor: palette.primarySoft, color: C.forestMuted, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4, fontSize: 10 },
   empty: { padding: 24, gap: 12, alignItems: 'center' },
   retry: { backgroundColor: C.forest, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12 },

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { ActivityIndicator, FlatList, Modal, Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -49,7 +49,7 @@ export default function SelectField<T extends string>({
   const [open, setOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const [focusedOption, setFocusedOption] = useState<string | null>(null);
-  const sheetRef = useRef<View>(null);
+  const sheetRef = useRef<ComponentRef<typeof View>>(null);
   const id = useId();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();

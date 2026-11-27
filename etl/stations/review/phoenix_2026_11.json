@@ -1,0 +1,70 @@
+{
+  "reviewed_at": "2026-11-26",
+  "groups": [
+    {
+      "branch": "tandag",
+      "selected": "6caad02ca4f01c5702545b5c15d16c48610ffdc5ac59c81f05937153e6ec43e6",
+      "excluded": [
+        "ebf07d97433a26789d57959d0d65d8e03e8d2a0bb8399bd70bf8c55163b78277"
+      ],
+      "reason": "Both official entries identify San Agustin Sur, Tandag City; retain the more recent June 2026 station table."
+    },
+    {
+      "branch": "areah",
+      "selected": "6c517a20aac94898880310b201a4ba21adab7da355433d3192ef0b5398bb52ac",
+      "excluded": [
+        "c2fa5afd11eb1e4de7cdbcc45e063925a700889fefff886297a340ecf6ec70f1"
+      ],
+      "reason": "Both lists publish the same Sapang Palay address; retain the concise published branch name."
+    },
+    {
+      "branch": "bayombong",
+      "selected": "b1f87548dfb64862ffc19729672d0154718b719fe44b4736ea219d91e8fca902",
+      "excluded": [
+        "c86e58759952c2cd1f2e4b959fd0622c300222dbad5490878e1eed3279a29bf4"
+      ],
+      "reason": "The detailed Bonfal West highway address and published pin supplement the promotion list city-only address."
+    },
+    {
+      "branch": "lanang",
+      "selected": "27cf17f22639417deec503a1db5ca098de8c0aeedff0e463d5f694f5a2ec5af6",
+      "excluded": [
+        "4fbd1be030cafd14688a1c4a367280e5da84743b56f0f5fd5fb8febcea9208d8"
+      ],
+      "reason": "Both sources identify Arroyo Street, Lanang, Davao City; retain the dated June 2026 source."
+    },
+    {
+      "branch": "filinvestnorthgate",
+      "selected": "0df0550785958ec23fdbead0b374d9ef4d45f14d82ac1a9dfed1156ff982c03c",
+      "excluded": [
+        "0c32dbfd5aa2246b48496bdba0caaaf384abed6bc3b5daede70c5ccd59164d8d"
+      ],
+      "reason": "Both lists identify Northgate Avenue, Alabang-Zapote Road, Filinvest, Muntinlupa."
+    },
+    {
+      "branch": "soong",
+      "selected": "5b572e8eff54feb9daa71564ba6b5b85067d24534f8788261a2515d27472e6b4",
+      "excluded": [
+        "75fc5418bb84d5e87cb545a7b5f8855e0fb6cebd05ca5c6679a1d1fc6dfa024c",
+        "d85a43ed7731a4e9cfcc1f5e852485cf8fbb814fe88b3127372f7deb651e7111"
+      ],
+      "reason": "All three sources identify ML Quezon at Soong, Lapu-Lapu; retain the published pin and full address."
+    },
+    {
+      "branch": "mintal2",
+      "selected": "7b71875dbe1a376859292f934f9a2798240a49ffd0f5d872a5f46b0de296b935",
+      "excluded": [
+        "93fe5d487c7987e4298e3ff14343ab0c609732165ff51739c7879c717d22f171"
+      ],
+      "reason": "The DITO list distinguishes Mintal 2 at Sto Nino/Tugbok beside Bamboo Estate from Mintal 1 on Mintal National Highway; retain the precise branch address."
+    },
+    {
+      "branch": "circumferential",
+      "selected": "121d38d6770102211937f211797ccc3714bed61aebafdf249cb02b84fef35a5a",
+      "excluded": [
+        "8ad352ed4e38204ff4b3d5e832ad674c3aee3d3cbf6aa46a8ad5435a6460db60"
+      ],
+      "reason": "Two names differ only by Road and publish the identical Circumferential Road, Bacolod address."
+    }
+  ]
+}

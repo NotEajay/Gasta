@@ -10,9 +10,6 @@ type GlassSurfaceProps = ViewProps & {
   variant?: 'default' | 'strong' | 'input';
 };
 
-/** Solid surfaces keep forms and financial data readable on every platform.
- * The public props remain compatible with existing auth and form screens.
- */
 export default function GlassSurface({
   children,
   style,

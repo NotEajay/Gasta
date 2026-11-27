@@ -116,6 +116,7 @@ export default function TripOptimizerScreen() {
    * Stays null when the destination was typed as free text.
    */
   const [destinationPoint, setDestinationPoint] = useState<RouteLocation | null>(null);
+  const pickedRouteActive = useRef(false);
   const [templateName, setTemplateName] = useState('');
   /**
    * Inline validation for the missing-template-name case. This replaces the
@@ -167,25 +168,8 @@ export default function TripOptimizerScreen() {
   const [lastOptimizeElapsedMs, setLastOptimizeElapsedMs] = useState<number | null>(null);
   const [result, setResult] = useState<ReturnType<typeof calculateTripRecommendation> | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      const selection = consumeRouteSelection();
-      if (!selection) return;
-      placeResolveRequestId.current += 1;
-      placeSearchRequestId.current += 1;
-      placeSearchAbort.current?.abort();
-      if (placeSearchTimer.current) clearTimeout(placeSearchTimer.current);
-      setPlaceSearch(EMPTY_PLACE_SEARCH);
-      setResolvingPlaceId(null);
-      setOrigin(selection.origin.displayName);
-      setOriginLocation(selection.origin);
-      setDestination(selection.destination.displayName);
-      setDestinationRouteValue(selection.destination.directionsValue);
-      setDestinationPoint(selection.destination);
-    }, [])
-  );
-
   useEffect(() => {
+    pickedRouteActive.current = false;
     if (params.origin !== undefined) {
       setOrigin(params.origin);
       setOriginLocation(null);
@@ -214,6 +198,25 @@ export default function TripOptimizerScreen() {
     params.travelTimeWeight,
     params.templateName,
   ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const selection = consumeRouteSelection();
+      if (!selection) return;
+      pickedRouteActive.current = true;
+      placeResolveRequestId.current += 1;
+      placeSearchRequestId.current += 1;
+      placeSearchAbort.current?.abort();
+      if (placeSearchTimer.current) clearTimeout(placeSearchTimer.current);
+      setPlaceSearch(EMPTY_PLACE_SEARCH);
+      setResolvingPlaceId(null);
+      setOrigin(selection.origin.displayName);
+      setOriginLocation(selection.origin);
+      setDestination(selection.destination.displayName);
+      setDestinationRouteValue(selection.destination.directionsValue);
+      setDestinationPoint(selection.destination);
+    }, [])
+  );
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -253,7 +256,7 @@ export default function TripOptimizerScreen() {
   // Templates store labels, not coordinates. Resolve their saved origin once
   // so reopening a template can use current prices without inventing geography.
   useEffect(() => {
-    if (!params.origin?.trim()) return;
+    if (!params.origin?.trim() || pickedRouteActive.current) return;
     let cancelled = false;
     const requestId = placeResolveRequestId.current;
     void searchPlaces(params.origin).then((places) => {
