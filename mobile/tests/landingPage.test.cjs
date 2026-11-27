@@ -99,6 +99,16 @@ test('landing renders desktop two-column and mobile stacked hero with copy befor
   assert.equal(all(mobile.tree, node => node.props?.feature?.title).length, 3);
 });
 
+test('the public landing screen scrolls vertically with the footer inside the scroll area', async () => {
+  const h = setup();
+  await h.flush({});
+  const page = find(h.tree, node => node.props?.testID === 'landing-page');
+  assert.equal(page.type, 'ScrollView');
+  assert.notEqual(page.props.horizontal, true);
+  assert(find(page, node => node.props?.testID === 'landing-features'));
+  assert(find(page, node => node.props?.role === 'contentinfo'));
+});
+
 test('landing uses accurate product claims and canonical authentication routes', async () => {
   const h = setup();
   await h.flush({});

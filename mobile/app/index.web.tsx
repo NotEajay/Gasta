@@ -2,7 +2,7 @@ import type { GenerateMetadataFunction } from 'expo-router/server';
 import { Redirect } from 'expo-router';
 import Head from 'expo-router/head';
 import { useSyncExternalStore } from 'react';
-import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
 import BrandWordmark from '@/components/ui/BrandWordmark';
 import LandingFeatureCard, {
@@ -96,7 +96,7 @@ export default function LandingPage() {
   return (
     <>
       <LandingMetadata />
-      <View style={styles.page} testID="landing-page">
+      <ScrollView style={styles.viewport} contentContainerStyle={styles.page} testID="landing-page">
         <View style={styles.topWash} />
         <View style={styles.headerOuter} role="banner">
         <View style={[styles.header, shellStyle, { paddingHorizontal: horizontalPadding }]}>
@@ -246,7 +246,7 @@ export default function LandingPage() {
             </LandingLink>
           </View>
         </View>
-      </View>
+      </ScrollView>
     </>
   );
 }
@@ -277,10 +277,15 @@ function LandingMetadata() {
 }
 
 const styles = StyleSheet.create({
+  viewport: {
+    flex: 1,
+    minHeight: 0,
+    width: '100%',
+  },
   page: {
     alignItems: 'center',
     backgroundColor: GasTaColors.cream,
-    minHeight: '100%' as `${number}%`,
+    flexGrow: 1,
     overflow: 'hidden',
     position: 'relative',
     width: '100%',
