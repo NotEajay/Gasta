@@ -110,6 +110,17 @@ test('only the desktop layout caps the landing video at 640 pixels wide', async 
   }
 });
 
+test('desktop centers the headline and video together without stretching the copy column', async () => {
+  const h = setup({ desktop: true });
+  await h.flush({});
+  const hero = find(h.tree, node => node.props?.testID === 'landing-hero-desktop');
+  const copy = find(hero, node => node.props?.testID === 'landing-hero-copy');
+  const row = Object.assign({}, ...hero.props.style);
+  assert.equal(row.justifyContent, 'center');
+  assert.equal(row.gap, 36);
+  assert.equal(Object.assign({}, ...copy.props.style).maxWidth, 580);
+});
+
 test('desktop content uses the page width with equal five-percent side gutters', async () => {
   const h = setup({ desktop: true });
   await h.flush({});

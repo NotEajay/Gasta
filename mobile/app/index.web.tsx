@@ -353,7 +353,8 @@ const styles = StyleSheet.create({
   },
   heroDesktop: {
     flexDirection: 'row',
-    gap: 54,
+    gap: 36,
+    justifyContent: 'center',
   },
   heroStacked: {
     gap: 48,
@@ -363,6 +364,7 @@ const styles = StyleSheet.create({
   },
   heroCopyDesktop: {
     flex: 0.92,
+    maxWidth: 580,
     minWidth: 0,
   },
   kicker: {
