@@ -94,7 +94,7 @@ export default function AuthCallbackScreen() {
       if (oauthError) {
         clearInterval(closeTimer);
         clearTimeout(stopTrying);
-        router.replace(`/(auth)?error=${encodeURIComponent(oauthError)}` as Href);
+        router.replace(`/login?error=${encodeURIComponent(oauthError)}` as Href);
         return;
       }
 
@@ -136,7 +136,7 @@ export default function AuthCallbackScreen() {
 
       clearInterval(closeTimer);
       clearTimeout(stopTrying);
-      router.replace(`/(auth)?error=${encodeURIComponent(result.error)}` as Href);
+      router.replace(`/login?error=${encodeURIComponent(result.error)}` as Href);
     })();
 
     return () => {

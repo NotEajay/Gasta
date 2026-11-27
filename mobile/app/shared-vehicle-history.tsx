@@ -181,7 +181,7 @@ export default function SharedVehicleHistoryScreen() {
   if (!user) {
     // Session was lost or revoked while the screen was mounted.
     // Hard-redirect to auth — never expose protected content.
-    return <Redirect href="/(auth)" />;
+    return <Redirect href="/login" />;
   }
 
   return (

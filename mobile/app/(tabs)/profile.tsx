@@ -67,7 +67,10 @@ export default function ProfileScreen() {
         // `signOut` resolves to `{ error: string | null }`, so the error is
         // already a message — no `.message` unwrapping.
         setSignOutError(result.error);
+        return;
       }
+
+      router.replace('/');
     } finally {
       setSigningOut(false);
     }

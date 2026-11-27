@@ -106,7 +106,7 @@ export default function ForgotPasswordScreen() {
       return;
     }
 
-    router.replace('/(auth)?mode=signin');
+    router.replace('/login?mode=signin');
   };
 
   return (
@@ -242,7 +242,7 @@ export default function ForgotPasswordScreen() {
                   accessibilityRole="button"
                   hoverScale={1}
                   pressScale={0.98}
-                  onPress={() => router.replace('/(auth)?mode=signin')}>
+                  onPress={() => router.replace('/login?mode=signin')}>
                   <Text style={[styles.footerLink, { fontSize: bodySize }]}>Back to Sign In</Text>
                 </AnimatedPressable>
               </View>

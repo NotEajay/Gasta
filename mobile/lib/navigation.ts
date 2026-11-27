@@ -9,14 +9,14 @@ export function goHome() {
 
 export function goToSignIn() {
   router.replace({
-    pathname: '/(auth)',
+    pathname: '/login',
     params: { mode: 'signin' },
   });
 }
 
 export function goToSignUp() {
   router.replace({
-    pathname: '/(auth)',
+    pathname: '/login',
     params: { mode: 'signup' },
   });
 }

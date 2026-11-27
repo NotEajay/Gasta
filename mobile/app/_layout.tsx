@@ -15,7 +15,7 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-  anchor: '(auth)',
+  anchor: 'index',
 };
 
 SplashScreen.preventAutoHideAsync();
