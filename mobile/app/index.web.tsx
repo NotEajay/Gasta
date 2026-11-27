@@ -89,9 +89,10 @@ export default function LandingPage() {
 
   const isDesktop = width >= 1024;
   const isCompact = width < 360;
-  const contentMaxWidth = Math.min(Math.max(width * 0.92, 320), isDesktop ? 1120 : width >= 768 ? 720 : 400);
-  const horizontalPadding = Math.min(Math.max(width * 0.06, 16), isDesktop ? 48 : 32);
-  const shellStyle: ViewStyle = { maxWidth: contentMaxWidth };
+  const shellStyle: ViewStyle = isDesktop
+    ? {}
+    : { maxWidth: Math.min(Math.max(width * 0.92, 320), width >= 768 ? 720 : 400) };
+  const horizontalPadding = isDesktop ? '5%' : Math.min(Math.max(width * 0.06, 16), 32);
 
   return (
     <>
@@ -462,7 +463,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   heroMedia: {
-    maxWidth: 720,
     position: 'relative',
     width: '100%',
   },

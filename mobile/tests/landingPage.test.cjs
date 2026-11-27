@@ -99,6 +99,16 @@ test('landing renders desktop two-column and mobile stacked hero with copy befor
   assert.equal(all(mobile.tree, node => node.props?.feature?.title).length, 3);
 });
 
+test('desktop content uses the page width with equal five-percent side gutters', async () => {
+  const h = setup({ desktop: true });
+  await h.flush({});
+  const hero = find(h.tree, node => node.props?.testID === 'landing-hero-desktop');
+  const style = Object.assign({}, ...hero.props.style);
+  assert.equal(style.width, '100%');
+  assert.equal(style.maxWidth, undefined);
+  assert.equal(style.paddingHorizontal, '5%');
+});
+
 test('the public landing screen scrolls vertically with the footer inside the scroll area', async () => {
   const h = setup();
   await h.flush({});
