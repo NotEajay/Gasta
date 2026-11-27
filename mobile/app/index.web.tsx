@@ -468,6 +468,7 @@ const styles = StyleSheet.create({
   },
   heroMediaDesktop: {
     flex: 1.18,
+    maxWidth: 640,
     minWidth: 0,
   },
   mediaAccentTop: {

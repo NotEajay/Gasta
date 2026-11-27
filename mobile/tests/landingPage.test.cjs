@@ -99,6 +99,17 @@ test('landing renders desktop two-column and mobile stacked hero with copy befor
   assert.equal(all(mobile.tree, node => node.props?.feature?.title).length, 3);
 });
 
+test('only the desktop layout caps the landing video at 640 pixels wide', async () => {
+  for (const desktop of [true, false]) {
+    const h = setup({ desktop });
+    await h.flush({});
+    const media = find(h.tree, node => node.props?.testID === 'landing-hero-media');
+    const style = Object.assign({}, ...media.props.style);
+    assert.equal(style.width, '100%');
+    assert.equal(style.maxWidth, desktop ? 640 : undefined);
+  }
+});
+
 test('desktop content uses the page width with equal five-percent side gutters', async () => {
   const h = setup({ desktop: true });
   await h.flush({});
